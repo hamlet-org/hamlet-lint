@@ -39,8 +39,10 @@ arms*: it needs each pattern and each action. A data-flow pass
 reconnects call sites to their `Texp_function` and hands the arms
 back to the same classifier; it widens what can be analysed, it does
 not replace the rule. Residual unresolvable sites (runtime-selected
-handlers, opaque closure chains) will always remain, and will always
-be skipped in the safe direction.
+handlers, opaque closure chains, arm bodies whose effect is produced
+by constructs outside the syntactic introducer grammar of
+`ARCHITECTURE.md` §6.2) will always remain, and will always be
+skipped in the safe direction.
 
 ---
 
