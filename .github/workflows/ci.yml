@@ -29,7 +29,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        ocaml-compiler: ["5.4"]
+        # Pinned to the exact patch: extract/compat.cppo.ml asserts
+        # OCAML_VERSION = 5.4.1 via #error. Bump here and in
+        # dune-project together when the bound widens.
+        ocaml-compiler: ["5.4.1"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
