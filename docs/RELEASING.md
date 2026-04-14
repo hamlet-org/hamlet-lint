@@ -189,6 +189,24 @@ steps:
    `packages/hamlet-lint/hamlet-lint.<hamlet>-<ocaml>/opam`,
    committing, pushing, opening the PR.
 
+### 5.1 Option: pre-preprocess the cppo file per target
+
+Because each published package is already bound to exactly one OCaml
+minor (Decision 4), the release workflow could run
+`cppo -V OCAML:<ocaml_target>.x extract/compat.cppo.ml -o extract/compat.ml`,
+drop the `(rule …)` stanza from `extract/dune`, remove `cppo` from the
+opam template, and ship a plain `compat.ml` already specialised for
+its target. End users would then install without `cppo` as a build dep.
+
+Pros: one fewer build dep on the user side; no cppo version skew; the
+shipped `compat.ml` is literally the code that runs. Cons: the tarball
+stops being a `git archive` (must be built then packed, reproducibility
+becomes a procedure rather than a command); the shipped sources diverge
+from `main`, making bug reports harder to trace back; the release
+workflow grows two extra mutation steps. Today it's not worth the
+complication — revisit if `cppo` ever becomes a supply-chain concern
+downstream.
+
 ---
 
 ## 6. Why not `dune-release`

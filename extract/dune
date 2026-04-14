@@ -13,6 +13,7 @@
 ; OCaml version threaded in as -V OCAML:<version>. This is the only file
 ; in the project that gates on ocaml_version — the rest of extract/ is
 ; pure OCaml linking against compiler-libs.common.
+
 (rule
  (targets compat.ml)
  (deps compat.cppo.ml)

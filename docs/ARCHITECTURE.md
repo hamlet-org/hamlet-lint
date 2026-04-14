@@ -57,6 +57,53 @@ your code that use a dependency's services or errors (those live in
 your own `.cmt`s); you do not catch stale forwards inside the
 dependency itself.
 
+### 1.3 Two couplings, two firewalls
+
+The walker is coupled to two moving targets — `compiler-libs` and
+hamlet's surface API — but only one needs a compile-time firewall.
+
+**`compiler-libs` (hard coupling).** The walker destructures
+`Types.type_expr`, `Typedtree.expression`, `Types.row_desc`, etc. These
+shapes drift across OCaml minors without semver, and two incompatible
+shapes **cannot coexist** in a single `.ml` file — the typechecker
+rejects one or the other. Fix: `cppo` preprocesses
+`extract/compat.cppo.ml` with `-V OCAML:%{ocaml_version}`, selecting a
+version-specific branch at build time. The preprocessed `compat.ml`
+lands in `_build/default/extract/`; the source tarball on opam ships
+only `compat.cppo.ml` and the rule, so cppo re-runs on the end user's
+machine against their switch. Every `dune build` — local, CI, release,
+or user install — triggers it.
+
+**hamlet (soft coupling).** The walker doesn't link hamlet. It reads
+`.cmt` files of projects that use hamlet and matches on string-shaped
+data: dotted paths like `Hamlet.Combinators.catch`, handler argument
+positions, the three type parameters of `('a, 'e, 'r) Hamlet.t`. Two
+hamlet vocabularies can coexist in the same walker — just extend the
+pattern list (`| "catch" | "recover" -> Catch`). No `#if` needed; this
+is runtime-soft matching, not compile-time-hard type destructuring.
+
+**When the soft coupling isn't enough.** "One more pattern" suffices
+for additive changes and renames. A **structural** hamlet change
+breaks the walker and requires code surgery, not a new pattern:
+
+- `Hamlet.t` gains a fourth type parameter →
+  `compat.cppo.ml:effect_type_row_lbs` destructures `[_a; e; r]` and
+  goes non-exhaustive. Migration.
+- Combinator argument order changes (`catch eff ~f:h` →
+  `catch ~f:h eff`, positional ↔ labelled swap) →
+  `walker.ml:concrete_of_apply` rewritten, per combinator.
+- Effect representation changes (rows → GADTs, first-class modules,
+  etc.) → `row_lower_bound` premise collapses. Walker redesign.
+- Combinator semantics change (e.g. a new `catch` variant that
+  legitimately re-raises its matched tag) → rule itself rewritten,
+  not just the walker.
+
+For (1)–(4), supporting both the old and the new hamlet simultaneously
+means dispatching inside the walker on which hamlet produced the
+`.cmt` (readable from `cmt_imports`). Feasible but costly. The
+pragmatic path is to drop old hamlet support at the walker's next
+major and move on.
+
 ---
 
 ## 2. Concrete vs latent sites
