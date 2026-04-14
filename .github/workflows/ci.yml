@@ -56,6 +56,12 @@ jobs:
       - name: Install linter deps
         run: opam install . --deps-only --with-test --with-doc -y
 
+      # ocamlformat is a dev-only tool: not in dune-project depends
+      # (it would leak into the opam package's runtime deps). Pin to
+      # the version in .ocamlformat so CI matches local dev.
+      - name: Install ocamlformat
+        run: opam install -y ocamlformat.0.29.0
+
       - name: Build
         run: opam exec -- dune build
 
