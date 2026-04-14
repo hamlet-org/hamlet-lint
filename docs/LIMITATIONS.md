@@ -32,6 +32,16 @@ it cannot read the arms. The site is skipped silently, with a
 never get a false positive; you may get a false negative if one of
 those handlers contains a stale forward.
 
+Note that unified row types are not a substitute. The `.cmt` already
+tells us `grew = out_lb \ in_lb`, but the classification into (a)
+stale forward / (b) legitimate body introducer is *structural on the
+arms*: it needs each pattern and each action. A data-flow pass
+reconnects call sites to their `Texp_function` and hands the arms
+back to the same classifier; it widens what can be analysed, it does
+not replace the rule. Residual unresolvable sites (runtime-selected
+handlers, opaque closure chains) will always remain, and will always
+be skipped in the safe direction.
+
 ---
 
 ## 2. Pre-installed opam libraries are invisible
