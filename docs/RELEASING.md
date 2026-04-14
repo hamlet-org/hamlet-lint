@@ -120,8 +120,10 @@ A new OCaml minor (say 5.5) has just become supported. You want every
 past hamlet release to be installable on 5.5.
 
 1. **Pull `main` and verify green** against OCaml 5.5 locally. Fix
-   any `compiler-libs` drift in `extract/compat.ml` on `main`. Add a
-   5.5 row to the CI matrix in `.github/workflows/ci.yml`.
+   any `compiler-libs` drift in `extract/compat.cppo.ml` on `main`,
+   widening the `#error` guard and adding `#if OCAML_VERSION >= (5, 5, 0)`
+   branches as needed. Loosen the `(ocaml …)` bound in `dune-project`.
+   Add a 5.5 row to the CI matrix in `.github/workflows/ci.yml`.
 
 2. **Add a single `CHANGELOG.md` entry** for the new OCaml target,
    titled `## YYYY-MM-DD — OCaml 5.5 target added [5.5 only]`,
@@ -248,6 +250,7 @@ Then: **Actions → release → Run workflow → fill inputs → go**.
   shipped, never edited by hand.
 - `CHANGELOG.md` — single chronological walker/analyzer history.
   Decoupled from release events.
-- `extract/compat.ml` — compiler-libs firewall; edit here when a new
-  OCaml minor breaks the walker.
+- `extract/compat.cppo.ml` — compiler-libs firewall, cppo-preprocessed;
+  edit here (and widen the `#error` guard) when a new OCaml minor
+  breaks the walker.
 - `README.md` §9 — the versioning model rationale.

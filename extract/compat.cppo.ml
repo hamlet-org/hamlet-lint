@@ -2,11 +2,12 @@
 
     Every access to [Types.*] / [Typedtree.*] shapes that can drift across OCaml
     minors lives here. When a 5.x → 5.(x+1) transition breaks something, patch
-    this single file (or add a cppo branch).
+    this single file: add a [#if OCAML_VERSION >= (5, 5, 0)] branch around the
+    affected body.
 
-    v0.1 supports OCaml 5.4.x only. [cppo] is wired into the dune file as an
-    architectural placeholder; when a second version is added, wrap the
-    version-sensitive bodies below in [#if OCAML_VERSION >= (5,5,0)] etc.
+    This file is preprocessed by [cppo] (see [extract/dune]) with
+    [-V OCAML:%{ocaml_version}], producing [compat.ml] in the build dir. v0.1
+    supports OCaml 5.4.1 exactly; the guard below is the enforcement.
 
     API surface intentionally tiny:
     - [row_lower_bound]: given a [type_expr], if it resolves to a [Tvariant]
@@ -17,6 +18,10 @@
       (errors) and 'r (services) parameters.
     - [path_name]: alias for [Path.name] — kept here so future drift in [Path]
       is localised too. *)
+
+#if OCAML_VERSION < (5, 4, 1) || OCAML_VERSION >= (5, 5, 0)
+#error "hamlet-lint currently supports only OCaml 5.4.1"
+#endif
 
 (* ------------------------------------------------------------------ *)
 (*  Row extraction                                                    *)

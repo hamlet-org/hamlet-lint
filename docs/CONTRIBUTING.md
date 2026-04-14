@@ -42,3 +42,21 @@ this:
 5. Add a rule test to `test_rule.ml` and an e2e fixture under
    `test/cases/<new_combinator>/` covering stale and clean cases.
 6. Update the `README.md` §3 table with the new row.
+
+---
+
+## 3. How to add a new OCaml target
+
+When a new OCaml minor (say 5.5) starts being supported:
+
+1. Widen the top-of-file `#error` guard in `extract/compat.cppo.ml`
+   to admit the new version.
+2. Wrap any `compiler-libs`-facing body that drifted in
+   `#if OCAML_VERSION >= (5, 5, 0) … #else … #endif`. `compat.cppo.ml`
+   is the only file in the repo that cppo touches — everything else is
+   plain OCaml.
+3. Loosen the `(ocaml …)` bound in `dune-project` to cover the new
+   minor.
+4. Add a row to the CI matrix in `.github/workflows/ci.yml` so both
+   minors are exercised on every push.
+5. Follow `RELEASING.md` §4 for the backfill release pass.

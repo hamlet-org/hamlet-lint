@@ -179,9 +179,14 @@ Implementation in `analyzer/rule.ml`.
 
 `hamlet-lint-extract` (directory `extract/`) is the only part of the
 project that touches `compiler-libs`. Everything that might drift
-across OCaml minors is isolated in `extract/compat.ml`: row
+across OCaml minors is isolated in `extract/compat.cppo.ml`: row
 lower-bound extraction, `Path.t` printing, location conversion, and
-the effect-type parameter splitter. When a future OCaml release breaks
+the effect-type parameter splitter. The file is preprocessed by `cppo`
+with `-V OCAML:%{ocaml_version}`, producing `compat.ml` in the build
+dir; version-sensitive bodies go behind `#if OCAML_VERSION >= (5, 5, 0)`
+branches. A top-of-file `#error` guard asserts the supported versions
+— v0.1 pins OCaml 5.4.1 exactly, so a wrong switch fails the
+preprocess, not the typechecker. When a future OCaml release breaks
 something, exactly one file is expected to change.
 
 `hamlet-lint` (directory `analyzer/`) is pure OCaml. It reads ND-JSON

@@ -10,8 +10,9 @@ homepage: "https://github.com/hamlet-org/hamlet-lint"
 bug-reports: "https://github.com/hamlet-org/hamlet-lint/issues"
 depends: [
   "dune" {>= "3.14"}
-  "ocaml" {>= "5.4.0" & < "5.5.0"}
+  "ocaml" {>= "5.4.1" & < "5.4.2"}
   "hamlet"
+  "cppo" {>= "1.6.9" & build}
   "yojson" {>= "2.0.0"}
   "cmdliner" {>= "1.1.0"}
   "parsexp" {>= "0.17.0"}

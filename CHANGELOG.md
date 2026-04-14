@@ -14,6 +14,19 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-15 — cppo wired into extract, OCaml bound tightened to 5.4.1
+
+`extract/compat.ml` renamed to `extract/compat.cppo.ml` and preprocessed
+by `cppo` through a per-file rule in `extract/dune`
+(`-V OCAML:%{ocaml_version}`). A top-of-file
+`#if OCAML_VERSION < (5, 4, 1) || OCAML_VERSION >= (5, 5, 0)` / `#error`
+guard asserts the exact supported version at preprocess time.
+`dune-project` `(ocaml …)` bound tightened from `>= 5.4.0 < 5.5.0` to
+`>= 5.4.1 < 5.4.2`; `cppo` added as a `:build` dep in `dune-project`
+and as `"cppo" {>= "1.6.9" & build}` in the opam template. Future
+OCaml minors add branches inside `compat.cppo.ml` — no other file in
+the repo is cppo-aware.
+
 ## 2026-04-15 — repo split and simplifications
 
 hamlet-lint moved to its own repository (`hamlet-org/hamlet-lint`);

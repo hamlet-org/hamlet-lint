@@ -15,7 +15,8 @@ opam install hamlet-lint
 opam picks the right package for your active switch automatically.
 Packages are versioned `<hamlet_version>-<ocaml_minor>` — e.g.
 `hamlet-lint.0.1.0-5.4` is the linter for users of `hamlet.0.1.0` on
-OCaml 5.4.x. Each package pins its matching hamlet version exactly.
+OCaml 5.4 (v0.1 supports 5.4.1 exactly). Each package pins its matching
+hamlet version exactly.
 Installs `hamlet-lint-extract` and `hamlet-lint` on `PATH`.
 
 As a **project dev dependency**, pin the exact version matching the

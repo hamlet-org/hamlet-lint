@@ -153,7 +153,9 @@ OCaml minor (compat firewall, since the extractor links
 `compiler-libs`) triggers a release pass from the current `main`. New
 hamlet → publish one package per supported OCaml. New OCaml → backfill
 one package per past hamlet. The walker code is always whatever `main`
-ships today; `main` only moves forward.
+ships today; `main` only moves forward. The firewall lives in a single
+`cppo`-preprocessed file (`extract/compat.cppo.ml`) with a top-level
+`#error` guard — v0.1 pins OCaml 5.4.1 exactly.
 
 See `docs/RELEASING.md` for the operational procedure and
 `docs/ARCHITECTURE.md` for why `compiler-libs` forces the OCaml axis.
