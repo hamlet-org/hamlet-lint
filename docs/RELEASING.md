@@ -164,7 +164,8 @@ with two inputs: `hamlet_version` and `ocaml_target`. High-level
 steps:
 
 1. **Checkout `main`.** The workflow never releases from other
-   branches — trunk is the only source of truth (Decision 3).
+   branches — trunk is the only source of truth (see the versioning
+   model in `README.md` §5).
 2. **Set up OCaml** at `ocaml_target`.
 3. **Install `hamlet.<hamlet_version>`** from opam-repository. This
    is the steady-state install path; the bootstrap `git` mode in
@@ -192,7 +193,8 @@ steps:
 ### 5.1 Option: pre-preprocess the cppo file per target
 
 Because each published package is already bound to exactly one OCaml
-minor (Decision 4), the release workflow could run
+minor (the `-<ocaml>` suffix in the package name), the release workflow
+could run
 `cppo -V OCAML:<ocaml_target>.x extract/compat.cppo.ml -o extract/compat.ml`,
 drop the `(rule …)` stanza from `extract/dune`, remove `cppo` from the
 opam template, and ship a plain `compat.ml` already specialised for
