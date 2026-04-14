@@ -33,16 +33,11 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Set up OCaml ${{ inputs.ocaml_target }}
-        uses: ocaml/setup-ocaml@v3
+      - uses: ./.github/actions/setup
         with:
           ocaml-compiler: ${{ inputs.ocaml_target }}
-
-      - name: Install hamlet from opam
-        run: opam install -y "hamlet.${HAMLET_VERSION}" "ppx_hamlet.${HAMLET_VERSION}"
-
-      - name: Install deps
-        run: opam install . --deps-only --with-test --with-doc -y
+          hamlet-source: opam
+          hamlet-version: ${{ env.HAMLET_VERSION }}
 
       - name: Build & test
         run: |

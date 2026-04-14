@@ -15,7 +15,7 @@ typed AST the compiler emits under `_build/default/**/*.cmt`;
 `compiler-libs` provides `Cmt_format.read_cmt` to parse them back. The
 tool is therefore version-locked against `compiler-libs` (`Typedtree`,
 `Types`, and friends drift across OCaml minors without semver);
-`README.md` §3 covers the version-support policy.
+`README.md` §2 covers the version-support policy.
 
 ### 1.1 `.cmt` vs `.cmti`
 

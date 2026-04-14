@@ -44,22 +44,7 @@ formally and lists the eight combinators where it applies.
 
 ---
 
-## 2. Quick start
-
-```sh
-dune build
-hamlet-lint-extract _build/default | hamlet-lint
-```
-
-Clean runs print `no findings` and exit 0. Findings print
-`file:line:col: stale forwarding arm …` and exit 1 (exit 2 on input
-error, typically a `schema_version` mismatch between the two
-binaries). For install, config, flags, and CI integration see
-`docs/USAGE.md`.
-
----
-
-## 3. Versioning model
+## 2. Versioning model
 
 hamlet-lint is published as one opam package per
 `(hamlet, ocaml-minor)` pair. Package names look like
@@ -84,6 +69,21 @@ pins OCaml 5.4.1 exactly.
 
 See `docs/RELEASING.md` for the operational procedure and
 `docs/ARCHITECTURE.md` for why `compiler-libs` forces the OCaml axis.
+
+---
+
+## 3. Quick start
+
+```sh
+dune build
+hamlet-lint-extract _build/default | hamlet-lint
+```
+
+Clean runs print `no findings` and exit 0. Findings print
+`file:line:col: stale forwarding arm …` and exit 1 (exit 2 on input
+error, typically a `schema_version` mismatch between the two
+binaries). For install, config, flags, and CI integration see
+`docs/USAGE.md`.
 
 ---
 

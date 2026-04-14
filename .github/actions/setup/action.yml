@@ -1,0 +1,49 @@
+name: Set up hamlet-lint toolchain
+description: >
+  Sets up OCaml, installs hamlet (via git pin or opam), and installs the
+  linter's opam deps. Checkout is caller-owned because ci and release
+  want different refs and fetch depths.
+
+inputs:
+  ocaml-compiler:
+    description: OCaml compiler version passed to ocaml/setup-ocaml
+    required: true
+  hamlet-source:
+    description: "How to obtain hamlet: 'git' (bootstrap pin) or 'opam' (steady state)"
+    required: true
+  hamlet-version:
+    description: Hamlet version for the opam branch; ignored when hamlet-source=git
+    required: false
+    default: ""
+  hamlet-git-url:
+    description: Git URL for the git branch; ignored when hamlet-source=opam
+    required: false
+    default: https://github.com/hamlet-org/hamlet.git
+  hamlet-git-ref:
+    description: Git ref for the git branch; ignored when hamlet-source=opam
+    required: false
+    default: main
+
+runs:
+  using: composite
+  steps:
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: ${{ inputs.ocaml-compiler }}
+
+    - name: Install hamlet (bootstrap / git pin)
+      if: inputs.hamlet-source == 'git'
+      shell: bash
+      run: |
+        opam pin add -y --no-action hamlet "${{ inputs.hamlet-git-url }}#${{ inputs.hamlet-git-ref }}"
+        opam pin add -y --no-action ppx_hamlet "${{ inputs.hamlet-git-url }}#${{ inputs.hamlet-git-ref }}"
+        opam install -y hamlet ppx_hamlet
+
+    - name: Install hamlet (steady state / opam)
+      if: inputs.hamlet-source == 'opam'
+      shell: bash
+      run: opam install -y "hamlet.${{ inputs.hamlet-version }}" "ppx_hamlet.${{ inputs.hamlet-version }}"
+
+    - name: Install linter deps
+      shell: bash
+      run: opam install . --deps-only --with-test --with-doc -y

@@ -37,24 +37,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ./.github/actions/setup
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
-
-      - name: Install hamlet (bootstrap / git pin)
-        if: env.HAMLET_SOURCE == 'git'
-        run: |
-          opam pin add -y --no-action hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_REF}"
-          opam pin add -y --no-action ppx_hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_REF}"
-          opam install -y hamlet ppx_hamlet
-
-      - name: Install hamlet (steady state / opam)
-        if: env.HAMLET_SOURCE == 'opam'
-        run: |
-          opam install -y "hamlet.${HAMLET_VERSION}" "ppx_hamlet.${HAMLET_VERSION}"
-
-      - name: Install linter deps
-        run: opam install . --deps-only --with-test --with-doc -y
+          hamlet-source: ${{ env.HAMLET_SOURCE }}
+          hamlet-version: ${{ env.HAMLET_VERSION }}
+          hamlet-git-url: ${{ env.HAMLET_GIT_URL }}
+          hamlet-git-ref: ${{ env.HAMLET_GIT_REF }}
 
       # ocamlformat is a dev-only tool: not in dune-project depends
       # (it would leak into the opam package's runtime deps). Pin to
