@@ -50,7 +50,7 @@ hamlet-lint-extract _build/default | hamlet-lint
 ```
 
 Clean runs print `no findings` and exit 0. Findings print
-`file:line:col: stale forwarding arm …` and exit 1 (exit 2 on input error —
+`file:line:col: stale forwarding arm …` and exit 1 (exit 2 on input error,
 typically a `schema_version` mismatch between the two binaries).
 For install, config, flags, and CI integration see `docs/USAGE.md`.
 
@@ -59,22 +59,22 @@ For install, config, flags, and CI integration see `docs/USAGE.md`.
 ## 3. The eight combinators
 
 hamlet-lint reasons about eight handler-style combinators from
-`lib/hamlet.mli` — the only places where a row is narrowed. Everything else
+`lib/hamlet.mli` (the only places where a row is narrowed). Everything else
 (`chain`, `map`, `return`, `summon`, `failure`, `or_die`, `give`, `need`, …)
 is a pass-through, introducer, or wipe and is out of scope.
 
 | # | Combinator                     | Row       | Handler shape                                                                        | What "stale" means                                                                    |
 |---|--------------------------------|-----------|---------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
 | 1 | `Combinators.provide`          | services  | `'r_in -> 'r_out provide_result` via inline `function`                                | An arm's pattern tag is not in the input services lb and the body is `need r`         |
-| 2 | `<Mod>.Tag.provide` (PPX)      | services  | one-arm `#r as w -> give w impl` — always pure, never reportable, row-tracker only   | Never stale by construction; present in the table only so the tracker drops its tag  |
+| 2 | `<Mod>.Tag.provide` (PPX)      | services  | one-arm `#r as w -> give w impl` (always pure, never reportable, row-tracker only)   | Never stale by construction; present in the table only so the tracker drops its tag  |
 | 3 | `Layer.provide`                | services  | `'svc -> 'r_in -> 'r_out provide_result`                                              | Same as row 1 after peeling the leading `svc ->` lambda                                |
 | 4 | `Layer.provide_layer`          | services  | `'svc_dep -> 'r_in -> 'r_out provide_result`; subject is a **layer**, not an effect   | Same as row 1; rows are read off the layer type's third parameter                     |
 | 5 | `Layer.provide_all`            | services  | `'env -> 'r_in -> 'r_out provide_result`                                              | Same as row 1 after peeling the leading `env ->` lambda                                |
 | 6 | `Combinators.catch`            | errors    | `~f:('e -> ('a, 'f, 'r) t)`                                                           | Arm body is `failure tag'` / helper raising a tag not in the input errors lb          |
-| 7 | `Combinators.map_error`        | errors    | `~f:('e -> 'f)` — pure, not an effect                                                 | Arm body is a poly variant value whose head tag is not in the input errors lb         |
+| 7 | `Combinators.map_error`        | errors    | `~f:('e -> 'f)` (pure, not an effect)                                                 | Arm body is a poly variant value whose head tag is not in the input errors lb         |
 | 8 | `Layer.catch`                  | errors    | `~f:('e -> ('svc, 'f, 'r) layer)`                                                     | Same as row 6; row diff is on the layer's second type parameter                       |
 
-Rows 1 and 3–8 are instrumented. Row 2 is recognised but emits no site
+Rows 1 and 3 through 8 are instrumented. Row 2 is recognised but emits no site
 (never stale by construction). Handlers may be a literal `function | … | …`
 or a `Texp_ident` referring to a `let`-bound function; the walker resolves
 the four reference shapes listed in §12 up to depth 5, silently skipping
@@ -111,7 +111,7 @@ For each tag `T ∈ grew` there must exist a *source* that introduced it:
   error: the arm body computes the new tag legitimately. Stay silent.
 
 - **(c) Unattributable.** `T` is in `grew` but the walker cannot find any arm
-  explaining it — it flowed through from an inner sub-expression, or the
+  explaining it: it flowed through from an inner sub-expression, or the
   handler uses a shape the walker doesn't understand. Stay silent.
 
 ### 4.2 Wildcard suppression
@@ -119,14 +119,14 @@ For each tag `T ∈ grew` there must exist a *source* that introduced it:
 A wildcard forwarding arm (`_ -> need r`, `_ -> failure e`, etc.) makes the
 inferencer unify `out_lb = in_lb`, so `grew` is always empty. The extractor
 records `has_wildcard_forward: true` on the handler and the analyzer
-shortcuts the diff — explicit documentation that a genuine forward-all
+shortcuts the diff. This is explicit documentation that a genuine forward-all
 handler is intentional.
 
 ### 4.3 Latent sites
 
 When the handler lives in a wrapper function whose subject effect is a
 free row-variable parameter, the walker cannot compute `grew` at the
-definition — it depends on which effect the caller passes in. The
+definition, because it depends on which effect the caller passes in. The
 extractor records a **latent site** keyed by the wrapper's `Path.t`
 and every `Texp_apply` of that wrapper as a **call site**; the
 analyzer joins the two at report time, so findings always land at the
@@ -155,7 +155,7 @@ hamlet → publish one package per supported OCaml. New OCaml → backfill
 one package per past hamlet. The walker code is always whatever `main`
 ships today; `main` only moves forward. The firewall lives in a single
 `cppo`-preprocessed file (`extract/compat.cppo.ml`) with a top-level
-`#error` guard — v0.1 pins OCaml 5.4.1 exactly.
+`#error` guard: v0.1 pins OCaml 5.4.1 exactly.
 
 See `docs/RELEASING.md` for the operational procedure and
 `docs/ARCHITECTURE.md` for why `compiler-libs` forces the OCaml axis.
@@ -167,7 +167,7 @@ See `docs/RELEASING.md` for the operational procedure and
 ### Instrumented
 
 - Seven combinators from §3 (all except row 2 `<Mod>.Tag.provide`, which
-  is recognised but emits no site — it is never stale by construction).
+  is recognised but emits no site, being never stale by construction).
   Handlers may be inline `function`, let-bound, alias chains, nested
   `let … in` RHS, or cross-module `Pdot`; resolution depth 5, global
   table pre-built from every cmt in the load set. Aliasing a combinator
@@ -182,7 +182,7 @@ See `docs/RELEASING.md` for the operational procedure and
 - §4.1 case (b) legitimate-body-introducer suppression on errors arms,
   driven by a syntactic scan for direct ``Combinators.failure (`Tag …)``,
   the PPX `<Mod>.Errors.make_<name>` constructor form (mapped by
-  strip-prefix-and-capitalise: `make_foo_error` → `` `Foo_error ``), and
+  strip-prefix-and-capitalise: `make_foo_error` becomes `` `Foo_error ``), and
   inline ``Combinators.try_catch f (fun _ -> `Tag)`` exn handlers. The
   scanner also follows transitive helper calls (same-module top-level,
   nested `let`, and cross-module), capped at depth 5 with a per-scan

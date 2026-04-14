@@ -13,7 +13,7 @@ opam install hamlet-lint
 ```
 
 opam picks the right package for your active switch automatically.
-Packages are versioned `<hamlet_version>-<ocaml_minor>` — e.g.
+Packages are versioned `<hamlet_version>-<ocaml_minor>`, e.g.
 `hamlet-lint.0.1.0-5.4` is the linter for users of `hamlet.0.1.0` on
 OCaml 5.4 (v0.1 supports 5.4.1 exactly). Each package pins its matching
 hamlet version exactly.
@@ -61,7 +61,7 @@ Schema of the config:
 
 | Key       | Type            | Required | Default  | Meaning                                |
 |-----------|-----------------|----------|----------|----------------------------------------|
-| `targets` | list of paths   | yes      | —        | Directories or `.cmt` files to walk    |
+| `targets` | list of paths   | yes      | (none)   | Directories or `.cmt` files to walk    |
 | `exclude` | list of paths   | no       | `()`     | Path prefixes to skip                  |
 | `mode`    | `fail` / `warn` | no       | `fail`   | `warn` forces analyzer exit 0          |
 | `format`  | `pretty`        | no       | `pretty` | Reserved for future reporters          |
@@ -112,17 +112,17 @@ lint:
 
 **`hamlet-lint-extract`**
 
-- `[FILES|DIRS]` — positional. Paths to walk.
-- `--exclude PATH` — skip cmts whose absolute path starts with PATH.
+- `[FILES|DIRS]`: positional. Paths to walk.
+- `--exclude PATH`: skip cmts whose absolute path starts with PATH.
   Repeatable.
-- `--config FILE` — explicit config path; overrides auto-discovery.
-- `--canonical` — sort records for stable snapshots.
-- `HAMLET_LINT_DEBUG=1` (env) — stderr diagnostics for skipped sites.
+- `--config FILE`: explicit config path; overrides auto-discovery.
+- `--canonical`: sort records for stable snapshots.
+- `HAMLET_LINT_DEBUG=1` (env): stderr diagnostics for skipped sites.
 
 **`hamlet-lint`**
 
-- `-i`, `--input FILE` — read ND-JSON from FILE instead of stdin.
-- `-w`, `--warn-only` — always exit 0. Overrides config's `mode`.
+- `-i`, `--input FILE`: read ND-JSON from FILE instead of stdin.
+- `-w`, `--warn-only`: always exit 0. Overrides config's `mode`.
 
 Full help: `hamlet-lint --help`, `hamlet-lint-extract --help`.
 
@@ -165,27 +165,27 @@ src/foo.ml:42:14: stale forwarding arm for tag `Logger in services row:
 
 Three typical fixes:
 
-1. The arm is dead — remove it (wrong copy-paste).
-2. The input is missing a `summon` for the forwarded tag — add the
+1. The arm is dead; remove it (wrong copy-paste).
+2. The input is missing a `summon` for the forwarded tag; add the
    real dependency.
 3. The arm legitimately raises the tag via a helper the walker
-   could not see — file a bug and use `--warn-only` as a workaround.
+   could not see; file a bug and use `--warn-only` as a workaround.
 
 ---
 
 ## 7. Troubleshooting
 
-**`missing header record`** — the extractor produced empty output
+**`missing header record`**: the extractor produced empty output
 (no `.cmt` files at the given paths) or you piped the wrong thing
 to `hamlet-lint`. Check with
 `hamlet-lint-extract _build/default/lib | head -1`: it should start
 with `{"kind":"header"`.
 
-**`no available version`** on `opam install` — your OCaml minor has
+**`no available version`** on `opam install`: your OCaml minor has
 no hamlet-lint release yet. Check `opam list -A hamlet-lint` and
 file an issue if you need your minor supported.
 
-**Finding you expected is silent** — try `HAMLET_LINT_DEBUG=1
+**Finding you expected is silent**: try `HAMLET_LINT_DEBUG=1
 hamlet-lint-extract …` on stderr to see which sites the walker
 skipped. The walker always fails in the safe direction: false
 negatives on shapes it cannot analyse, zero false positives on the

@@ -20,10 +20,10 @@ tool is therefore version-locked against `compiler-libs` (`Typedtree`,
 ### 1.1 `.cmt` vs `.cmti`
 
 The extractor walks `.cmt` only, never `.cmti`:
-`Filename.check_suffix f ".cmt"` in `extract/main.ml` — a `.cmti` file
+`Filename.check_suffix f ".cmt"` in `extract/main.ml` (a `.cmti` file
 does not satisfy that check because the suffix comparison is
-length-strict. Consequence: **the linter sees through signature
-abstraction** — an opaque `.mli` that hides or narrows a row does not
+length-strict). Consequence: **the linter sees through signature
+abstraction**. An opaque `.mli` that hides or narrows a row does not
 hide the implementation's raw `provide` / `catch` / `map_error` calls
 from hamlet-lint.
 
@@ -32,11 +32,11 @@ adds:
 
 - **No `.mli`.** The compiler infers the general type with the phantom
   tag. The code type-checks, the bug is silent, the linter is the
-  only thing that catches it — the common case.
+  only thing that catches it. This is the common case.
 - **`.mli` with a free row variable.** Signature coercion admits the
   contaminated row; the linter catches it, the compiler does not.
 - **`.mli` with a tight concrete row.** Signature coercion itself
-  rejects the impl — compiler error before the linter runs. Good
+  rejects the impl, a compiler error before the linter runs. Good
   defence-in-depth, nothing for the linter to add.
 
 ### 1.2 Pre-installed libraries are invisible
@@ -59,26 +59,26 @@ dependency itself.
 
 ### 1.3 Two couplings, two firewalls
 
-The walker is coupled to two moving targets — `compiler-libs` and
-hamlet's surface API — but only one needs a compile-time firewall.
+The walker is coupled to two moving targets (`compiler-libs` and
+hamlet's surface API), but only one needs a compile-time firewall.
 
 **`compiler-libs` (hard coupling).** The walker destructures
 `Types.type_expr`, `Typedtree.expression`, `Types.row_desc`, etc. These
 shapes drift across OCaml minors without semver, and two incompatible
-shapes **cannot coexist** in a single `.ml` file — the typechecker
+shapes **cannot coexist** in a single `.ml` file: the typechecker
 rejects one or the other. Fix: `cppo` preprocesses
 `extract/compat.cppo.ml` with `-V OCAML:%{ocaml_version}`, selecting a
 version-specific branch at build time. The preprocessed `compat.ml`
 lands in `_build/default/extract/`; the source tarball on opam ships
 only `compat.cppo.ml` and the rule, so cppo re-runs on the end user's
-machine against their switch. Every `dune build` — local, CI, release,
-or user install — triggers it.
+machine against their switch. Every `dune build` triggers it, whether
+local, CI, release, or user install.
 
 **hamlet (soft coupling).** The walker doesn't link hamlet. It reads
 `.cmt` files of projects that use hamlet and matches on string-shaped
 data: dotted paths like `Hamlet.Combinators.catch`, handler argument
 positions, the three type parameters of `('a, 'e, 'r) Hamlet.t`. Two
-hamlet vocabularies can coexist in the same walker — just extend the
+hamlet vocabularies can coexist in the same walker; just extend the
 pattern list (`| "catch" | "recover" -> Catch`). No `#if` needed; this
 is runtime-soft matching, not compile-time-hard type destructuring.
 
@@ -98,7 +98,7 @@ breaks the walker and requires code surgery, not a new pattern:
   legitimately re-raises its matched tag) → rule itself rewritten,
   not just the walker.
 
-For (1)–(4), supporting both the old and the new hamlet simultaneously
+For cases (1) through (4), supporting both the old and the new hamlet simultaneously
 means dispatching inside the walker on which hamlet produced the
 `.cmt` (readable from `cmt_imports`). Feasible but costly. The
 pragmatic path is to drop old hamlet support at the walker's next
@@ -123,7 +123,7 @@ let wrap eff = catch eff ~f:(function ...)
 
 the handler is syntactically present at `wrap`'s definition but the
 input effect is a free row variable parameter. The walker cannot
-compute `grew` at the definition site — it depends on which `eff` the
+compute `grew` at the definition site, because it depends on which `eff` the
 caller passes in. So the extractor records a **latent site** keyed by
 the enclosing function's `Path.t`, and every `Texp_apply` of that
 function as a **call site**. The analyzer joins latent arms against
@@ -231,8 +231,8 @@ lower-bound extraction, `Path.t` printing, location conversion, and
 the effect-type parameter splitter. The file is preprocessed by `cppo`
 with `-V OCAML:%{ocaml_version}`, producing `compat.ml` in the build
 dir; version-sensitive bodies go behind `#if OCAML_VERSION >= (5, 5, 0)`
-branches. A top-of-file `#error` guard asserts the supported versions
-— v0.1 pins OCaml 5.4.1 exactly, so a wrong switch fails the
+branches. A top-of-file `#error` guard asserts the supported versions;
+v0.1 pins OCaml 5.4.1 exactly, so a wrong switch fails the
 preprocess, not the typechecker. When a future OCaml release breaks
 something, exactly one file is expected to change.
 
@@ -255,7 +255,7 @@ analyzer picks up `mode`). No process spawning between them.
 
 ## 5. The ND-JSON contract
 
-Output is **newline-delimited JSON** — one self-contained object per
+Output is **newline-delimited JSON**: one self-contained object per
 line with a `"kind"` discriminator. ND-JSON streams, concatenates
 trivially across parallel `.cmt` processing, and lets the analyzer
 process records incrementally.
@@ -299,26 +299,26 @@ Subsequent records are **concrete_site**, **latent_site**, or
 }
 ```
 
-- `loc` — the application site, where the finding will land.
-- `combinator` — exactly one of the strings from the `README.md` §3
+- `loc`: the application site, where the finding will land.
+- `combinator`: exactly one of the strings from the `README.md` §3
   table, or the PPX form `"<Mod>.Tag.provide"`.
-- `services` / `errors` — row records. Exactly one is populated on any
+- `services` / `errors`: row records. Exactly one is populated on any
   given call; the other is `null`. A future combinator touching both
   rows would populate both and the analyzer would run the rule
   independently on each.
-- `in_lower_bound` — the `Rpresent` tags of the row at the input, read
+- `in_lower_bound`: the `Rpresent` tags of the row at the input, read
   through `Types.row_repr`. Absent and `Reither` tags are deliberately
   not part of the lower bound.
-- `out_lower_bound` — same, at the output.
-- `handler.has_wildcard_forward` — set when the handler has a `_ ->`
+- `out_lower_bound`: same, at the output.
+- `handler.has_wildcard_forward`: set when the handler has a `_ ->`
   forwarding arm. When true, the analyzer shortcuts the diff (the
   wildcard unifies `out_lb = in_lb`, so `grew` is empty by
-  construction — explicit documentation that a forward-all is
+  construction, explicit documentation that a forward-all is
   intentional).
-- `handler.arms[*].tag` — the polymorphic variant label, without the
+- `handler.arms[*].tag`: the polymorphic variant label, without the
   leading backtick.
-- `handler.arms[*].action` — `"Discharge"` or `"Forward"`.
-- `handler.arms[*].body_introduces` — the lower bound of `'e` read
+- `handler.arms[*].action`: `"Discharge"` or `"Forward"`.
+- `handler.arms[*].body_introduces`: the lower bound of `'e` read
   off the arm body's inferred `exp_type`. Used for legitimate-body
   suppression. Always `[]` for services arms (the body is a
   `provide_result`, which is not an effect).

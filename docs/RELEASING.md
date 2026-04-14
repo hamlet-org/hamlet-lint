@@ -13,7 +13,7 @@ Two kinds of release event exist:
   starts being supported. Publishes `X.Y.Z-<new-ocaml>` for every past
   hamlet release, from the current `main` commit.
 
-Both paths use the same release workflow — they differ only in which
+Both paths use the same release workflow; they differ only in which
 axis you enumerate.
 
 ---
@@ -32,7 +32,7 @@ A single published package consists of:
 
 One workflow run produces exactly one of each. Shipping for multiple
 `(hamlet, ocaml)` pairs means triggering the workflow multiple times
-(or running a loop — see §4.2 and §5.2).
+(or running a loop, see §4.2 and §5.2).
 
 Trigger: **Actions → release → Run workflow** on
 `.github/workflows/release.yml`, with `hamlet_version=X.Y.Z` and
@@ -47,7 +47,7 @@ are chronological, keyed by *what changed in the walker*, not by
 release events. Heading format:
 
 ```markdown
-## YYYY-MM-DD — short title describing the change
+## YYYY-MM-DD: short title describing the change
 
 Free-form body. [5.4 only] tag in the title if the change affects
 only one OCaml target (typically compat-firewall work).
@@ -82,7 +82,7 @@ entries can accumulate between releases.
 The release workflow does not grep `CHANGELOG.md`. There is no
 "per-release heading" to validate because packages and entries are
 decoupled (see §3 below). Changelog curation is a manual
-responsibility of the maintainer running the release — check it's up
+responsibility of the maintainer running the release. Check it's up
 to date before triggering.
 
 ---
@@ -100,7 +100,7 @@ Hamlet has just published `X.Y.Z` to opam-repository. Do this.
 2. **Update `CHANGELOG.md` if the walker changed.** If the release
    pass required a walker / analyzer / compat fix, you already
    landed an entry for it on `main` when you fixed the code. If no
-   walker changes were needed, add nothing — the release event is
+   walker changes were needed, add nothing: the release event is
    recorded by GitHub Releases, not by `CHANGELOG.md` (see §2).
 
 3. **Bump `HAMLET_VERSION` in `.github/workflows/ci.yml`** to
@@ -126,15 +126,15 @@ past hamlet release to be installable on 5.5.
    Add a 5.5 row to the CI matrix in `.github/workflows/ci.yml`.
 
 2. **Add a single `CHANGELOG.md` entry** for the new OCaml target,
-   titled `## YYYY-MM-DD — OCaml 5.5 target added [5.5 only]`,
+   titled `## YYYY-MM-DD: OCaml 5.5 target added [5.5 only]`,
    summarising the compat-firewall work. This is one entry, not
-   N — it describes the walker work once, regardless of how many
+   N; it describes the walker work once, regardless of how many
    past hamlet releases you then backfill.
 
 3. **Trigger the release workflow for every past hamlet release**
    with `hamlet_version=X.Y.Z` and `ocaml_target=5.5`. This is the
-   backfill loop — mechanical: N past hamlet versions = N workflow
-   runs, all from the same `main` commit.
+   backfill loop, and it is mechanical: N past hamlet versions = N
+   workflow runs, all from the same `main` commit.
 
    You can script this with `gh workflow run` in a shell loop:
 
@@ -164,13 +164,13 @@ with two inputs: `hamlet_version` and `ocaml_target`. High-level
 steps:
 
 1. **Checkout `main`.** The workflow never releases from other
-   branches — trunk is the only source of truth (see the versioning
+   branches, because trunk is the only source of truth (see the versioning
    model in `README.md` §5).
 2. **Set up OCaml** at `ocaml_target`.
 3. **Install `hamlet.<hamlet_version>`** from opam-repository. This
    is the steady-state install path; the bootstrap `git` mode in
    `ci.yml` is not used at release time. If the version does not
-   exist on opam-repository yet, the workflow fails fast — you
+   exist on opam-repository yet, the workflow fails fast: you
    cannot release hamlet-lint for a hamlet that is not yet on opam.
 4. **Build + test.** `dune build && dune runtest`. Any failure
    aborts the release: a package that cannot build for its own
@@ -206,7 +206,7 @@ stops being a `git archive` (must be built then packed, reproducibility
 becomes a procedure rather than a command); the shipped sources diverge
 from `main`, making bug reports harder to trace back; the release
 workflow grows two extra mutation steps. Today it's not worth the
-complication — revisit if `cppo` ever becomes a supply-chain concern
+complication. Revisit if `cppo` ever becomes a supply-chain concern
 downstream.
 
 ---
@@ -232,7 +232,7 @@ and sidesteps all three.
 
 CI's `build` job in `ci.yml` matrix-tests every supported OCaml
 minor on every push. Each matrix row spins up a fresh switch, pins
-hamlet via `HAMLET_SOURCE`, and runs the full suite — the same code
+hamlet via `HAMLET_SOURCE`, and runs the full suite, the same code
 path that will later be exercised at release time. A PR that breaks
 a minor fails CI before it lands on `main`, which means `main` is
 always releasable for every supported minor.
@@ -262,15 +262,15 @@ Then: **Actions → release → Run workflow → fill inputs → go**.
 
 ## 9. Related files
 
-- `.github/workflows/ci.yml` — CI matrix, bootstrap hamlet install.
-- `.github/workflows/release.yml` — the parameterised release job.
-- `release/hamlet-lint.opam.tmpl` — opam template with
+- `.github/workflows/ci.yml`: CI matrix, bootstrap hamlet install.
+- `.github/workflows/release.yml`: the parameterised release job.
+- `release/hamlet-lint.opam.tmpl`: opam template with
   `%%…%%` placeholders.
-- `hamlet-lint.opam` — dev-time opam file generated by dune; not
+- `hamlet-lint.opam`: dev-time opam file generated by dune; not
   shipped, never edited by hand.
-- `CHANGELOG.md` — single chronological walker/analyzer history.
+- `CHANGELOG.md`: single chronological walker/analyzer history.
   Decoupled from release events.
-- `extract/compat.cppo.ml` — compiler-libs firewall, cppo-preprocessed;
+- `extract/compat.cppo.ml`: compiler-libs firewall, cppo-preprocessed;
   edit here (and widen the `#error` guard) when a new OCaml minor
   breaks the walker.
-- `README.md` §9 — the versioning model rationale.
+- `README.md` §9: the versioning model rationale.

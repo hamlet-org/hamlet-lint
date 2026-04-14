@@ -32,8 +32,8 @@ Two layers:
 
 - **Rule tests** in `test/test_rule.ml` drive `Rule.check_*` directly
   with hand-built schema records. The right place for rule semantics
-  (wildcard suppression, body-introducer case, latent join) — no
-  compiler-libs, no fixtures. Use `mk_services_site` /
+  (wildcard suppression, body-introducer case, latent join), with no
+  compiler-libs and no fixtures. Use `mk_services_site` /
   `mk_errors_site` / `mk_arm` helpers and assert via `check_tags`.
 - **End-to-end fixtures** in `test/cases/<name>/`, exercised by
   `test/test_e2e.ml`. See `test/cases/README.md` for the fixture
@@ -73,7 +73,7 @@ When a new OCaml minor (say 5.5) starts being supported:
    to admit the new version.
 2. Wrap any `compiler-libs`-facing body that drifted in
    `#if OCAML_VERSION >= (5, 5, 0) … #else … #endif`. `compat.cppo.ml`
-   is the only file in the repo that cppo touches — everything else is
+   is the only file in the repo that cppo touches. Everything else is
    plain OCaml.
 3. Loosen the `(ocaml …)` bound in `dune-project` to cover the new
    minor.

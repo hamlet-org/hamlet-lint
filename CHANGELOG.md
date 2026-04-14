@@ -2,7 +2,7 @@
 
 Chronological walker / analyzer / compat changes on `main`. Each entry
 is dated and titled by *what changed in the code*, not by a release
-event — there is only one codebase (see `README.md` §9) so version
+event. There is only one codebase (see `README.md` §9), so version
 numbers like `0.1.0-5.4` are packaging labels, not lines of development.
 
 Release events (the opam package for a given `(hamlet, ocaml)` pair)
@@ -14,7 +14,7 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
-## 2026-04-15 — cppo wired into extract, OCaml bound tightened to 5.4.1
+## 2026-04-15: cppo wired into extract, OCaml bound tightened to 5.4.1
 
 `extract/compat.ml` renamed to `extract/compat.cppo.ml` and preprocessed
 by `cppo` through a per-file rule in `extract/dune`
@@ -24,10 +24,10 @@ guard asserts the exact supported version at preprocess time.
 `dune-project` `(ocaml …)` bound tightened from `>= 5.4.0 < 5.5.0` to
 `>= 5.4.1 < 5.4.2`; `cppo` added as a `:build` dep in `dune-project`
 and as `"cppo" {>= "1.6.9" & build}` in the opam template. Future
-OCaml minors add branches inside `compat.cppo.ml` — no other file in
+OCaml minors add branches inside `compat.cppo.ml`; no other file in
 the repo is cppo-aware.
 
-## 2026-04-15 — repo split and simplifications
+## 2026-04-15: repo split and simplifications
 
 hamlet-lint moved to its own repository (`hamlet-org/hamlet-lint`);
 the previous `lint/` subtree in `hamlet-org/hamlet` was abandoned
@@ -46,7 +46,7 @@ Everything else is refactoring: dead code removal (`effect_loc`,
 (`test_e2e.ml` 586 → 331 lines, zero coverage change), docs concision,
 infra cleanup. Walker semantics unchanged.
 
-## 2026-04-14 — cross-module wrappers, transitive introducers, multi-level fixed-point
+## 2026-04-14: cross-module wrappers, transitive introducers, multi-level fixed-point
 
 This entry closes the three TODOs left at the bottom of the previous
 milestone's known-limits list. The contract is unchanged
@@ -54,8 +54,8 @@ milestone's known-limits list. The contract is unchanged
 The analyzer (`rule.ml`) and the schema (`schema.ml`) are untouched.
 
 **Cross-module wrapper resolution (P1).** Latent sites are now keyed by
-the canonical dotted path of the enclosing function — e.g.
-`Hamlet_lint_fixture_foo.Bar.wrap` — built from `cmt_modname` via
+the canonical dotted path of the enclosing function (e.g.
+`Hamlet_lint_fixture_foo.Bar.wrap`), built from `cmt_modname` via
 `Compat.split_mangled` plus the binder name. Call sites in any cmt of
 the load set canonicalise the called `Path.t` the same way before
 joining. The v0.1.1 "last path component only" shortcut is gone; two
@@ -88,7 +88,7 @@ are promoted with the inner wrapper's row shape and re-enter the
 table. Iteration terminates by monotonicity (no entries ever
 disappear, only synthesized records are added). A hard cap of
 `|fns_in_load_set| + 10` passes guards against a non-monotonic merge
-bug — on cap the binary exits with code 3 and a clear stderr message.
+bug. On cap the binary exits with code 3 and a clear stderr message.
 Cycles in `let rec` wrappers converge by the same monotone merge
 without special-casing. A function promoted via two distinct upstream
 exemplars produces two `latent_site` records (one per exemplar's row
@@ -98,7 +98,7 @@ shape); the analyzer iterates both joins independently, so the
 
 **Walker hardening.** `scan_call_sites` now skips emitting a
 `call_site` when the call's argument is itself a parameter of the
-enclosing function — that case is the *trigger* for fixed-point
+enclosing function: that case is the *trigger* for fixed-point
 promotion, not a concrete call. Without this guard the analyzer
 would observe an unhelpful empty row lower bound (the parameter has
 a free row variable) and report a false stale-forward at every
@@ -107,29 +107,29 @@ intermediate wrapper definition.
 **Tests.** 12 new e2e fixtures and tests. End-to-end suite is now
 33 cases (was 21):
 
-- `wrapper_cross_module_stale` — basic cross-module join.
-- `wrapper_cross_module_namespace_collision` — two modules with a
+- `wrapper_cross_module_stale`: basic cross-module join.
+- `wrapper_cross_module_namespace_collision`: two modules with a
   `wrap` each, only the stale one reports.
-- `errors_body_introducer_local_helper` — helper defined as nested
+- `errors_body_introducer_local_helper`: helper defined as nested
   `let`-in inside the enclosing function.
-- `errors_body_introducer_module_helper` — helper as top-level
+- `errors_body_introducer_module_helper`: helper as top-level
   `let` taking an argument.
-- `errors_body_introducer_cross_module_helper` — helper resolved via
+- `errors_body_introducer_cross_module_helper`: helper resolved via
   cross-module global env.
-- `errors_body_introducer_deep_chain` — four-level helper chain.
-- `errors_body_introducer_runaway` — mutually-recursive helpers,
+- `errors_body_introducer_deep_chain`: four-level helper chain.
+- `errors_body_introducer_runaway`: mutually-recursive helpers,
   pins termination via the visited-set short-circuit.
-- `wrapper_two_level_stale` — direct two-level chain.
-- `wrapper_three_level_stale` — four-level chain, multiple
+- `wrapper_two_level_stale`: direct two-level chain.
+- `wrapper_three_level_stale`: four-level chain, multiple
   fixed-point passes.
-- `wrapper_mutual_recursion` — `let rec`-defined wrappers.
-- `wrapper_two_level_clean` — two-level chain whose top-level call
+- `wrapper_mutual_recursion`: `let rec`-defined wrappers.
+- `wrapper_two_level_clean`: two-level chain whose top-level call
   is legitimate.
-- `wrapper_two_level_mixed` — two distinct wrapper chains in one
+- `wrapper_two_level_mixed`: two distinct wrapper chains in one
   cmt, only the stale one reports.
 
 The `errors_body_introducer_transitive` fixture's e2e snapshot was
-flipped from `"body_introduces":[]` to `"body_introduces":["Bar"]` —
+flipped from `"body_introduces":[]` to `"body_introduces":["Bar"]`:
 the v0.1.1 documented-limit pin is now a v0.1.2 success.
 
 **`compat.ml` additions:** none. P1 reuses `split_mangled` (added in
@@ -149,16 +149,16 @@ is feature-complete against the `prompts/lint.md` spec for the
 inline-and-named-binding handler vocabulary; the data-structure case
 is the only remaining gap and is explicitly out of v0.1's scope.
 
-## 2026-04-14 — Layer combinators, latent sites, Texp_ident handler resolution
+## 2026-04-14: Layer combinators, latent sites, Texp_ident handler resolution
 
 **New recognised combinators (inline handlers):**
 
-- `Hamlet.Layer.provide` — services row
-- `Hamlet.Layer.provide_layer` — services row (peels the curried
+- `Hamlet.Layer.provide`: services row
+- `Hamlet.Layer.provide_layer`: services row (peels the curried
   `svc_dep -> r_in -> r_out` handler)
-- `Hamlet.Layer.provide_all` — services row (peels the `env ->` lambda)
-- `Hamlet.Layer.catch` — errors row
-- PPX `<Mod>.Tag.provide` — silently recognised (never stale by
+- `Hamlet.Layer.provide_all`: services row (peels the `env ->` lambda)
+- `Hamlet.Layer.catch`: errors row
+- PPX `<Mod>.Tag.provide`: silently recognised (never stale by
   construction) so the linter stops emitting a non-inline-handler
   diagnostic for every PPX-using module
 
@@ -183,8 +183,8 @@ is now gated behind `HAMLET_LINT_DEBUG=1`. PPX-generated calls and
 unresolvable `Texp_ident` handler references are silent by default on
 normal runs.
 
-**`Texp_ident` handler resolution.** Handlers passed by name — rather
-than as a literal `function ... | ...` body — are now chased to their
+**`Texp_ident` handler resolution.** Handlers passed by name (rather
+than as a literal `function ... | ...` body) are now chased to their
 underlying `Texp_function`. Four reference shapes are supported:
 
 - same-module `let`-bound handlers, keyed by `Ident.t`;
@@ -208,7 +208,7 @@ reading the type-inference-unified `'e` lower bound of the whole
 function. The walker recognises:
 
 - direct `Combinators.failure (`Tag …)`,
-- direct `Combinators.failure (<Mod>.Errors.make_<name> …)` — the PPX
+- direct `Combinators.failure (<Mod>.Errors.make_<name> …)`, the PPX
   constructor, mapped to its tag by a strip-prefix-and-capitalise
   heuristic,
 - direct `Combinators.try_catch _ (fun _ -> `Tag)` with an inline exn
@@ -252,15 +252,15 @@ path.
 - Handlers flowing through data structures (record fields, functor
   arguments, closures returned from other functions)
 
-## 2026-04-14 — initial walker implementation
+## 2026-04-14: initial walker implementation
 
 First working walker + analyzer.
 
 **Recognised combinators (inline `function` handlers only):**
 
-- `Combinators.provide` — services row
-- `Combinators.catch` — errors row
-- `Combinators.map_error` — errors row
+- `Combinators.provide`: services row
+- `Combinators.catch`: errors row
+- `Combinators.map_error`: errors row
 
 **Rule implementation:**
 
@@ -293,5 +293,5 @@ First working walker + analyzer.
   are skipped with a stderr diagnostic
 - Latent sites (wrapper functions whose argument is a free row variable) are
   walked as if concrete with `in_lb = ∅`, producing silent false negatives
-  rather than any report — the schema and analyzer join logic already support
+  rather than any report. The schema and analyzer join logic already support
   latent records, the gap is only in the extractor emission

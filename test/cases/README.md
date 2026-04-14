@@ -49,8 +49,8 @@ expected output, regenerate snapshots with `dune promote`.
 
 ## Running the linter on a single fixture
 
-For interactive exploration — iterating on the walker, debugging a
-new rule, inspecting what the extractor emits — use the targets in
+For interactive exploration (iterating on the walker, debugging a
+new rule, inspecting what the extractor emits), use the targets in
 the top-level `Makefile`:
 
 ```bash
