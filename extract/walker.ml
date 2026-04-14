@@ -1,30 +1,31 @@
 (** Typedtree walker.
 
-    v0.1.1 scope:
+    Scope:
 
-    - All eight combinators from §2.0 of the spec: [Combinators.provide],
+    - All eight combinators from [docs/RULE.md] §1: [Combinators.provide],
       [Combinators.catch], [Combinators.map_error], [Layer.provide],
       [Layer.provide_layer], [Layer.provide_all], [Layer.catch], and the
       PPX-generated [<Mod>.Tag.provide].
     - Latent sites (wrapper functions whose subject effect has a free row
-      variable of the enclosing function's parameter). Reports for these are
-      deferred to the outer call site via a [latent_site]/[call_site] join
-      handled by the analyzer.
-    - [Texp_ident] handler resolution: same-module let-bindings (with
-      alias-chain and nested [let]-in chasing up to depth 5) and cross-module
-      references via a global table pre-built from every cmt in the load set.
+      variable of the enclosing function's parameter) with multi-level chains,
+      mutual recursion, and cross-module joining. Reports are deferred to the
+      outer call site via a [latent_site]/[call_site] join handled by the
+      analyzer.
+    - [Texp_ident] handler resolution: same-module let-bindings (alias chains
+      and nested [let]-in chasing up to depth 5) and cross-module references via
+      a global table pre-built from every cmt in the load set.
     - Per-arm [body_introduces] on errors arms for direct [failure], direct
-      [try_catch] with inline exn-handler, and PPX [<Mod>.Errors.make_*]
-      constructors.
+      [try_catch] with inline exn-handler, PPX [<Mod>.Errors.make_*]
+      constructors, and transitive helper calls (same-module top-level, nested
+      [let], cross-module) capped at depth 5 with a visited set.
 
-    Out of scope for v0.1.1 (explicit known limits — see [lint/README.md] §12):
-    - Multi-level wrapper chains (wrapper calls wrapper). Only one level of
-      indirection is joined.
+    Out of scope (see [docs/LIMITATIONS.md]):
+
+    - Handlers flowing through data structures (record fields, hashmaps, functor
+      arguments, closures returned from functions). Requires a small data-flow
+      pass, deferred to v0.2.
     - Handlers defined in a module not present in the cmt load set. Silently
-      skipped (with a [HAMLET_LINT_DEBUG=1] diagnostic).
-    - Transitive helper introducers in errors arm bodies (a helper function that
-      itself calls [failure]). Body-introducer scanning only sees direct
-      [failure] / [try_catch] / PPX-[make_*] shapes. *)
+      skipped, with a [HAMLET_LINT_DEBUG=1] diagnostic. *)
 
 open Typedtree
 open Hamlet_lint_schema.Schema
@@ -539,8 +540,7 @@ let handler_site_of_apply
                      Printf.eprintf
                        "hamlet-lint-extract: skipping non-inline handler for \
                         %s at %s:%d:%d (handler could not be resolved to a \
-                        Texp_function within depth 5 — v0.1.1 limitation, see \
-                        README §12)\n"
+                        Texp_function within depth 5; see docs/LIMITATIONS.md)\n"
                        (combinator_kind_to_string entry.CT.kind)
                        l.file l.line l.col);
                   None

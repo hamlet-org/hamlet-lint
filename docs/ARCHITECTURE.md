@@ -15,7 +15,7 @@ typed AST the compiler emits under `_build/default/**/*.cmt`;
 `compiler-libs` provides `Cmt_format.read_cmt` to parse them back. The
 tool is therefore version-locked against `compiler-libs` (`Typedtree`,
 `Types`, and friends drift across OCaml minors without semver);
-`README.md` §5 covers the version-support policy.
+`README.md` §3 covers the version-support policy.
 
 ### 1.1 `.cmt` vs `.cmti`
 
@@ -300,7 +300,7 @@ Subsequent records are **concrete_site**, **latent_site**, or
 ```
 
 - `loc`: the application site, where the finding will land.
-- `combinator`: exactly one of the strings from the `README.md` §3
+- `combinator`: exactly one of the strings from the `RULE.md` §1
   table, or the PPX form `"<Mod>.Tag.provide"`.
 - `services` / `errors`: row records. Exactly one is populated on any
   given call; the other is `null`. A future combinator touching both
@@ -362,7 +362,7 @@ preserves the traversal order and embeds a real timestamp.
 
 ### 6.1 What the walker recognises
 
-Seven of the eight combinators from `README.md` §3 are fully
+Seven of the eight combinators from `RULE.md` §1 are fully
 instrumented (all except row 2 `<Mod>.Tag.provide`, which is
 recognised but emits no site, being never stale by construction).
 
@@ -389,7 +389,7 @@ by the canonical dotted path of the enclosing function, so two modules
 that each define a `wrap` stay distinct.
 
 **Legitimate body-introducer suppression** on errors arms (see
-`README.md` §4.1 case (b)) is driven by a syntactic scan for:
+`RULE.md` §2 case (b)) is driven by a syntactic scan for:
 
 - direct ``Combinators.failure (`Tag …)``;
 - the PPX `<Mod>.Errors.make_<name>` constructor form, mapped by

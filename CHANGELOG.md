@@ -2,7 +2,7 @@
 
 Chronological walker / analyzer / compat changes on `main`. Each entry
 is dated and titled by *what changed in the code*, not by a release
-event. There is only one codebase (see `README.md` §9), so version
+event. There is only one codebase (see `README.md` §3), so version
 numbers like `0.1.0-5.4` are packaging labels, not lines of development.
 
 Release events (the opam package for a given `(hamlet, ocaml)` pair)

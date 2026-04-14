@@ -201,5 +201,5 @@ shapes it understands.
 - Pre-installed opam libraries are invisible: the linter walks
   `.cmt` files, and opam ships only `.cmti`. Library authors should
   run hamlet-lint in their own CI before releasing. See
-  `ARCHITECTURE.md` §1.2 for the mechanism and `README.md` §6 for
-  the full coverage summary.
+  `ARCHITECTURE.md` §1.2 for the mechanism and `LIMITATIONS.md` for
+  the full list of what hamlet-lint does not catch.

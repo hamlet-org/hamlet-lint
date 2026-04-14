@@ -1,4 +1,4 @@
-(** Implementation of §2.3 of the normative spec (see lint/README.md).
+(** Implementation of the rule described in [docs/RULE.md] §2.
 
     Pure OCaml, no compiler-libs. Takes fully-populated schema records produced
     by [hamlet-lint-extract] and emits a list of findings. *)

@@ -61,7 +61,8 @@ this:
    `classify_<new>_arm` and wire it into `arms_of_cases`.
 5. Add a rule test to `test_rule.ml` and an e2e fixture under
    `test/cases/<new_combinator>/` covering stale and clean cases.
-6. Update the `README.md` §3 table with the new row.
+6. Update the combinators table in `docs/RULE.md` §1 with the new
+   row.
 
 ---
 
