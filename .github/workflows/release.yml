@@ -1,0 +1,120 @@
+name: release
+
+# Parameterised release job. One run = one published opam package
+# (hamlet, ocaml) pair. See docs/RELEASING.md for the full procedure.
+on:
+  workflow_dispatch:
+    inputs:
+      hamlet_version:
+        description: "The hamlet version to target, e.g. 0.1.0"
+        required: true
+        type: string
+      ocaml_target:
+        description: "The OCaml minor to build against, e.g. 5.4"
+        required: true
+        type: choice
+        options: ["5.4"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HAMLET_VERSION: ${{ inputs.hamlet_version }}
+      OCAML_TARGET: ${{ inputs.ocaml_target }}
+      PKG_VERSION: ${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}
+      TAG_NAME: v${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up OCaml ${{ inputs.ocaml_target }}
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ inputs.ocaml_target }}
+
+      - name: Install hamlet from opam
+        run: opam install -y "hamlet.${HAMLET_VERSION}" "ppx_hamlet.${HAMLET_VERSION}"
+
+      - name: Install deps
+        run: opam install . --deps-only --with-test --with-doc -y
+
+      - name: Build & test
+        run: |
+          opam exec -- dune build
+          opam exec -- dune runtest
+
+      - name: Compute OCaml bounds
+        id: bounds
+        run: |
+          MIN="${OCAML_TARGET}.0"
+          MAJOR="${OCAML_TARGET%.*}"
+          MINOR="${OCAML_TARGET#*.}"
+          MAX="${MAJOR}.$((MINOR + 1)).0"
+          echo "min=$MIN" >> "$GITHUB_OUTPUT"
+          echo "max=$MAX" >> "$GITHUB_OUTPUT"
+
+      - name: Create git archive
+        id: archive
+        run: |
+          mkdir -p dist
+          TARBALL="dist/hamlet-lint-${PKG_VERSION}.tar.gz"
+          git archive --format=tar.gz --prefix="hamlet-lint-${PKG_VERSION}/" \
+            -o "$TARBALL" HEAD
+          SHA=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create annotated tag
+        run: |
+          git tag -a "$TAG_NAME" -m "hamlet-lint ${PKG_VERSION}"
+          git push origin "$TAG_NAME"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG_NAME" "${{ steps.archive.outputs.tarball }}" \
+            --title "hamlet-lint ${PKG_VERSION}" \
+            --notes "Packaging release for hamlet ${HAMLET_VERSION} on OCaml ${OCAML_TARGET}. See CHANGELOG.md for walker-level changes."
+          TARBALL_URL=$(gh release view "$TAG_NAME" --json assets -q '.assets[0].url')
+          echo "TARBALL_URL=$TARBALL_URL" >> "$GITHUB_ENV"
+
+      - name: Render opam file
+        run: |
+          mkdir -p rendered
+          OPAM_OUT="rendered/opam"
+          sed \
+            -e "s|%%VERSION%%|${PKG_VERSION}|g" \
+            -e "s|%%HAMLET_VERSION%%|${HAMLET_VERSION}|g" \
+            -e "s|%%OCAML_MIN%%|${{ steps.bounds.outputs.min }}|g" \
+            -e "s|%%OCAML_MAX%%|${{ steps.bounds.outputs.max }}|g" \
+            -e "s|%%TARBALL_URL%%|${TARBALL_URL}|g" \
+            -e "s|%%CHECKSUM_SHA256%%|${{ steps.archive.outputs.sha256 }}|g" \
+            release/hamlet-lint.opam.tmpl > "$OPAM_OUT"
+          opam lint "$OPAM_OUT"
+
+      - name: Open opam-repository PR
+        env:
+          GH_TOKEN: ${{ secrets.OPAM_REPO_PAT }}
+        run: |
+          WORKDIR=$(mktemp -d)
+          gh repo clone ocaml/opam-repository "$WORKDIR" -- --depth=1
+          cd "$WORKDIR"
+          git checkout -b "hamlet-lint-${PKG_VERSION}"
+          PKG_DIR="packages/hamlet-lint/hamlet-lint.${PKG_VERSION}"
+          mkdir -p "$PKG_DIR"
+          cp "${GITHUB_WORKSPACE}/rendered/opam" "$PKG_DIR/opam"
+          git add "$PKG_DIR/opam"
+          git -c user.name="hamlet-lint release bot" \
+              -c user.email="release@hamlet-lint" \
+              commit -m "hamlet-lint ${PKG_VERSION}"
+          gh pr create \
+            --repo ocaml/opam-repository \
+            --title "hamlet-lint ${PKG_VERSION}" \
+            --body "Automated release of hamlet-lint ${PKG_VERSION} (hamlet ${HAMLET_VERSION}, OCaml ${OCAML_TARGET})."

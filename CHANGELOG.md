@@ -1,21 +1,44 @@
-# hamlet-lint changelog — OCaml 5.4 target
+# hamlet-lint changelog
 
-Each entry documents a release for the OCaml 5.4 compiler target. When a new
-OCaml minor version becomes supported (5.5, 5.6, ...), a sibling
-`CHANGES-lint-<minor>.md` file is created for that target's independent
-release history.
+Chronological walker / analyzer / compat changes on `main`. Each entry
+is dated and titled by *what changed in the code*, not by a release
+event — there is only one codebase (see `README.md` §9) so version
+numbers like `0.1.0-5.4` are packaging labels, not lines of development.
 
-The full opam-repository version string for an entry here is
-`<feature_version>-5.4`, so the `v0.1.0` heading below is released as
-`hamlet-lint.0.1.0-5.4` in opam-repository. See
-`README.md#supported-ocaml-versions` for the full rationale.
+Release events (the opam package for a given `(hamlet, ocaml)` pair)
+live on GitHub Releases and point at the `main` commit they shipped
+from. This file is where you look to understand how the walker
+evolved between two commits.
 
-## v0.1.2 (2026-04-14)
+Entries that affect only a specific OCaml target are tagged
+`[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
+supported target.
 
-This entry closes the three v0.1.2 TODOs left at the bottom of the v0.1.1
-known-limits list. The contract is unchanged (`schema_version = 1`); all
-changes are additive on the extractor side. The analyzer (`rule.ml`) and
-the schema (`schema.ml`) are untouched.
+## 2026-04-15 — repo split and simplifications
+
+hamlet-lint moved to its own repository (`hamlet-org/hamlet-lint`);
+the previous `lint/` subtree in `hamlet-org/hamlet` was abandoned
+without merging. Layout flattened to top-level libraries: `schema/`,
+`config/`, `analyzer/`, `extract/`, `test/`.
+
+Single semantic fix: the `Tag_provide` arm of
+`combinator_kind_of_string` in `schema.ml` compared the last 13 bytes
+of the input against a 12-byte literal, making that arm unreachable.
+The in-process `tag_provide_stale` fixture exercised the kind
+end-to-end so tests stayed green, but any ND-JSON round-trip through
+the wire format silently dropped `Tag_provide`. Fixed.
+
+Everything else is refactoring: dead code removal (`effect_loc`,
+`Config.format`, `Subject_layer`), test-driver table-drivification
+(`test_e2e.ml` 586 → 331 lines, zero coverage change), docs concision,
+infra cleanup. Walker semantics unchanged.
+
+## 2026-04-14 — cross-module wrappers, transitive introducers, multi-level fixed-point
+
+This entry closes the three TODOs left at the bottom of the previous
+milestone's known-limits list. The contract is unchanged
+(`schema_version = 1`); all changes are additive on the extractor side.
+The analyzer (`rule.ml`) and the schema (`schema.ml`) are untouched.
 
 **Cross-module wrapper resolution (P1).** Latent sites are now keyed by
 the canonical dotted path of the enclosing function — e.g.
@@ -113,7 +136,7 @@ is feature-complete against the `prompts/lint.md` spec for the
 inline-and-named-binding handler vocabulary; the data-structure case
 is the only remaining gap and is explicitly out of v0.1's scope.
 
-## v0.1.1 (2026-04-14)
+## 2026-04-14 — Layer combinators, latent sites, Texp_ident handler resolution
 
 **New recognised combinators (inline handlers):**
 
@@ -216,9 +239,9 @@ path.
 - Handlers flowing through data structures (record fields, functor
   arguments, closures returned from other functions)
 
-## v0.1.0 (2026-04-14)
+## 2026-04-14 — initial walker implementation
 
-Initial release.
+First working walker + analyzer.
 
 **Recognised combinators (inline `function` handlers only):**
 

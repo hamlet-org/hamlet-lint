@@ -12,15 +12,18 @@ rule semantics see `README.md`.
 opam install hamlet-lint
 ```
 
-opam picks the right build for your active switch via per-compiler
-versioning (e.g. `hamlet-lint.0.1.3-5.4` for OCaml 5.4.x). Installs
-`hamlet-lint-extract` and `hamlet-lint` on `PATH`.
+opam picks the right package for your active switch automatically.
+Packages are versioned `<hamlet_version>-<ocaml_minor>` — e.g.
+`hamlet-lint.0.1.0-5.4` is the linter for users of `hamlet.0.1.0` on
+OCaml 5.4.x. Each package pins its matching hamlet version exactly.
+Installs `hamlet-lint-extract` and `hamlet-lint` on `PATH`.
 
-As a **project dev dependency**, add it under `with-dev-setup`:
+As a **project dev dependency**, pin the exact version matching the
+hamlet release you depend on:
 
 ```
 depends: [
-  "hamlet-lint" {with-dev-setup & >= "0.1.3-5.4"}
+  "hamlet-lint" {with-dev-setup & = "0.1.0-5.4"}
 ]
 ```
 

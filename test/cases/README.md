@@ -39,32 +39,30 @@ refactor.
    ```
    Add `(preprocess (pps ppx_hamlet))` if the fixture uses PPX
    extensions.
-3. Extend `test/test_e2e.ml` with a new test function following
-   the pattern of the existing cases. The function reads the
-   fixture's `.cmt` path, runs the pipeline, and asserts on expected
-   findings.
+3. Add a row to the `e2e_cases` table in `test/test_e2e.ml` specifying
+   the fixture name, how to resolve its subject (single `.cmt` or whole
+   directory), the expected exit code, and the substrings that must
+   (or must not) appear in the output.
 
-Run only the linter's tests with `dune runtest`. When a
-deliberate change shifts expected output, regenerate snapshots with
-`dune promote`.
+Run the suite with `dune runtest`. When a deliberate change shifts
+expected output, regenerate snapshots with `dune promote`.
 
 ## Running the linter on a single fixture
 
 For interactive exploration — iterating on the walker, debugging a
 new rule, inspecting what the extractor emits — use the targets in
-`Makefile`:
+the top-level `Makefile`:
 
 ```bash
-make -C lint list                          # show available fixtures
-make -C lint run     FIXTURE=wrapper_stale # pipe through extractor | analyzer, pretty report
-make -C lint ndjson  FIXTURE=wrapper_stale # raw canonical ND-JSON from the extractor
-make -C lint debug   FIXTURE=wrapper_stale # same as run but with HAMLET_LINT_DEBUG=1
-make -C lint test                          # run the whole linter test suite
-make -C lint dogfood                       # run the linter on Hamlet's own lib + ppx
-make -C lint help                          # show all available targets
+make list                          # show available fixtures
+make run     FIXTURE=wrapper_stale # pipe extractor | analyzer, pretty report
+make ndjson  FIXTURE=wrapper_stale # raw canonical ND-JSON
+make debug   FIXTURE=wrapper_stale # same as run but with HAMLET_LINT_DEBUG=1
+make test                          # run the whole test suite
+make help                          # show all targets
 ```
 
 Each target ensures `make build` has run first, then invokes the
 binaries directly from `_build/default/{extract,analyzer}/main.exe`
-with the fixture's `.cmt` as input. No need to remember long paths
-or chain commands by hand.
+with the fixture's `.cmt` as input. No need to remember long paths or
+chain commands by hand.
