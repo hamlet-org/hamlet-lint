@@ -197,7 +197,9 @@ shapes it understands.
 
 - Handlers flowing through data structures (record fields, hashmaps,
   closures returned from functions) are not analysed. Deferred to
-  v0.2 which will add data-flow analysis. See `README.md` §12.
+  v0.2, which will add data-flow analysis.
 - Pre-installed opam libraries are invisible: the linter walks
-  `.cmt` files, opam ships only `.cmti`. Library authors should run
-  hamlet-lint in their own CI before releasing. See `README.md` §5.2.
+  `.cmt` files, and opam ships only `.cmti`. Library authors should
+  run hamlet-lint in their own CI before releasing. See
+  `ARCHITECTURE.md` §1.2 for the mechanism and `README.md` §6 for
+  the full coverage summary.

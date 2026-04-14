@@ -2,7 +2,7 @@
 
 Operational reference for cutting a hamlet-lint release. The *why* of
 the lockstep-with-hamlet, single-trunk packaging model lives in
-`README.md` §9; this file is the *how*.
+`README.md` §5; this file is the *how*.
 
 Two kinds of release event exist:
 
@@ -273,4 +273,4 @@ Then: **Actions → release → Run workflow → fill inputs → go**.
 - `extract/compat.cppo.ml`: compiler-libs firewall, cppo-preprocessed;
   edit here (and widen the `#error` guard) when a new OCaml minor
   breaks the walker.
-- `README.md` §9: the versioning model rationale.
+- `README.md` §5: the versioning model rationale.

@@ -15,7 +15,7 @@ typed AST the compiler emits under `_build/default/**/*.cmt`;
 `compiler-libs` provides `Cmt_format.read_cmt` to parse them back. The
 tool is therefore version-locked against `compiler-libs` (`Typedtree`,
 `Types`, and friends drift across OCaml minors without semver);
-`README.md` §9 covers the version-support policy.
+`README.md` §5 covers the version-support policy.
 
 ### 1.1 `.cmt` vs `.cmti`
 
@@ -355,3 +355,64 @@ argument's row lbs from this record.
 `(file, line, col)` and sets `generated_at="canonical"`, making the
 output stable across runs. Use it for snapshot tests. The normal mode
 preserves the traversal order and embeds a real timestamp.
+
+---
+
+## 6. Walker coverage and limits
+
+### 6.1 What the walker recognises
+
+Seven of the eight combinators from `README.md` §3 are fully
+instrumented (all except row 2 `<Mod>.Tag.provide`, which is
+recognised but emits no site, being never stale by construction).
+
+**Handler reference shapes.** A combinator's handler argument can be:
+
+- an inline `function | … | …`;
+- a `Texp_ident` referring to a `let`-bound function in the same
+  module;
+- the same via an alias chain (`let h = h0 and h0 = …`);
+- a nested `let … in` RHS;
+- a cross-module `Pdot` reference resolved through a global table
+  pre-built from every cmt in the load set.
+
+Alias chains and nested `let`-in chasing are capped at resolution
+depth 5. Aliasing a combinator itself (e.g.
+`let my_provide = Combinators.provide`) is handled via a
+structure pre-scan, not via the chase.
+
+**Latent wrapper sites** are supported with multi-level chains,
+mutual recursion, and cross-module joining. Chains are resolved by a
+monotone fixed-point capped at `|fns_in_load_set| + 10` passes; the
+process exits non-zero if the cap is ever hit. Latent sites are keyed
+by the canonical dotted path of the enclosing function, so two modules
+that each define a `wrap` stay distinct.
+
+**Legitimate body-introducer suppression** on errors arms (see
+`README.md` §4.1 case (b)) is driven by a syntactic scan for:
+
+- direct ``Combinators.failure (`Tag …)``;
+- the PPX `<Mod>.Errors.make_<name>` constructor form, mapped by
+  strip-prefix-and-capitalise (`make_foo_error` becomes
+  `` `Foo_error ``);
+- inline ``Combinators.try_catch f (fun _ -> `Tag)`` exn handlers.
+
+The scanner follows transitive helper calls (same-module top-level,
+nested `let`, and cross-module), capped at depth 5 with a per-scan
+visited set so mutually recursive helpers terminate. On truncation
+the scanner contributes nothing for that path. Each arm's own
+pattern tags are subtracted from its `body_introduces`, so
+`` `T -> failure `T`` remains reportable as case (a).
+
+### 6.2 Not instrumented (deferred to v0.2)
+
+Handlers flowing through data structures (record fields, hashmaps,
+functor arguments, closures returned from functions) are not
+analysed. Adding them requires a small data-flow pass that the
+current walker doesn't have.
+
+### 6.3 Failure mode
+
+The walker always fails in the safe direction: unrecognised shapes
+are skipped silently, with a `HAMLET_LINT_DEBUG=1` stderr diagnostic
+for investigation. False negatives only; never false positives.

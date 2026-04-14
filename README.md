@@ -76,9 +76,10 @@ is a pass-through, introducer, or wipe and is out of scope.
 
 Rows 1 and 3 through 8 are instrumented. Row 2 is recognised but emits no site
 (never stale by construction). Handlers may be a literal `function | … | …`
-or a `Texp_ident` referring to a `let`-bound function; the walker resolves
-the four reference shapes listed in §12 up to depth 5, silently skipping
-anything else (`HAMLET_LINT_DEBUG=1` for stderr diagnostics).
+or a `Texp_ident` referring to a `let`-bound function; see §6 and
+`docs/ARCHITECTURE.md` §6 for the full list of supported reference shapes.
+Unrecognised shapes are skipped silently (`HAMLET_LINT_DEBUG=1` for stderr
+diagnostics).
 
 ---
 
@@ -162,45 +163,22 @@ See `docs/RELEASING.md` for the operational procedure and
 
 ---
 
-## 6. Known limits (v0.1)
+## 6. Coverage and limits (v0.1)
 
-### Instrumented
+hamlet-lint instruments seven of the eight combinators from §3 (all
+except `<Mod>.Tag.provide`, which is recognised but never stale by
+construction). Handlers can be inline `function`, let-bound in the
+same module or across modules, alias chains, or nested `let … in` RHS.
+Latent wrapper sites are joined at the outer call across multi-level
+chains and mutual recursion. Not yet analysed: handlers flowing
+through data structures (record fields, hashmaps, functor arguments,
+closures returned from functions), deferred to v0.2.
 
-- Seven combinators from §3 (all except row 2 `<Mod>.Tag.provide`, which
-  is recognised but emits no site, being never stale by construction).
-  Handlers may be inline `function`, let-bound, alias chains, nested
-  `let … in` RHS, or cross-module `Pdot`; resolution depth 5, global
-  table pre-built from every cmt in the load set. Aliasing a combinator
-  itself (`let my_provide = Combinators.provide`) is handled via a
-  structure pre-scan.
-- Latent wrapper sites with multi-level chains, mutual recursion, and
-  cross-module joining. Chains are resolved by a monotone fixed-point
-  capped at `|fns_in_load_set| + 10` passes (the process exits non-zero
-  if the cap is ever hit). Latent sites are keyed by the canonical
-  dotted path of the enclosing function; two modules that each define a
-  `wrap` stay distinct.
-- §4.1 case (b) legitimate-body-introducer suppression on errors arms,
-  driven by a syntactic scan for direct ``Combinators.failure (`Tag …)``,
-  the PPX `<Mod>.Errors.make_<name>` constructor form (mapped by
-  strip-prefix-and-capitalise: `make_foo_error` becomes `` `Foo_error ``), and
-  inline ``Combinators.try_catch f (fun _ -> `Tag)`` exn handlers. The
-  scanner also follows transitive helper calls (same-module top-level,
-  nested `let`, and cross-module), capped at depth 5 with a per-scan
-  visited set so mutually recursive helpers terminate. On truncation the
-  scanner contributes nothing for that path. Each arm's own pattern tags
-  are subtracted from its `body_introduces` so `` `T -> failure `T``
-  remains reportable as case (a).
-
-### Not instrumented (deferred to v0.2)
-
-- Handlers flowing through data structures (record fields, hashmaps,
-  functor arguments, closures returned from functions). Requires a
-  small data-flow analysis.
-
-The walker always fails in the safe direction: unrecognised shapes are
-skipped silently (`HAMLET_LINT_DEBUG=1` for stderr diagnostics). False
-negatives only; no false positives. See `CHANGELOG.md` for walker
-history.
+The walker always fails in the safe direction: unrecognised shapes
+are skipped silently (`HAMLET_LINT_DEBUG=1` for stderr diagnostics).
+False negatives only; never false positives. See `docs/ARCHITECTURE.md`
+§6 for implementation details of the walker's coverage, and
+`CHANGELOG.md` for walker history.
 
 ---
 
