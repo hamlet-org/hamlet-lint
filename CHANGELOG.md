@@ -234,8 +234,8 @@ path.
 
 - Multi-level wrapper chains (a wrapper calling another wrapper)
 - Cross-module wrapper resolution for latent/call-site joining
-- Transitive helper introducers in errors arm bodies (`let raise_bar
-  () = failure \`Bar` called from an arm)
+- Transitive helper introducers in errors arm bodies (``let raise_bar
+  () = failure `Bar`` called from an arm)
 - Handlers flowing through data structures (record fields, functor
   arguments, closures returned from other functions)
 

@@ -178,10 +178,10 @@ See `docs/RELEASING.md` for the operational procedure and
   dotted path of the enclosing function; two modules that each define a
   `wrap` stay distinct.
 - §4.1 case (b) legitimate-body-introducer suppression on errors arms,
-  driven by a syntactic scan for direct `Combinators.failure (\`Tag …)`,
+  driven by a syntactic scan for direct ``Combinators.failure (`Tag …)``,
   the PPX `<Mod>.Errors.make_<name>` constructor form (mapped by
   strip-prefix-and-capitalise: `make_foo_error` → `` `Foo_error ``), and
-  inline `Combinators.try_catch f (fun _ -> \`Tag)` exn handlers. The
+  inline ``Combinators.try_catch f (fun _ -> `Tag)`` exn handlers. The
   scanner also follows transitive helper calls (same-module top-level,
   nested `let`, and cross-module), capped at depth 5 with a per-scan
   visited set so mutually recursive helpers terminate. On truncation the
