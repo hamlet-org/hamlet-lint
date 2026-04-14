@@ -6,6 +6,26 @@ the wire contract see `ARCHITECTURE.md`; for the release model see
 
 ---
 
+## 0. Setup
+
+After cloning, enable the repo's git hooks (one-time, per clone):
+
+```bash
+make hooks
+# or, equivalently:
+git config core.hooksPath .githooks
+```
+
+This installs a pre-commit hook that runs `dune fmt --auto-promote`
+on staged `.ml` / `.mli` / `dune` / `dune-project` files and re-stages
+the formatted versions, so CI's `@fmt` check never trips you up.
+
+`make help` lists every other dev target (build, test, fmt, doc,
+opam, promote, plus the fixture-scoped `run` / `ndjson` / `debug`
+helpers).
+
+---
+
 ## 1. How to add a new test case
 
 Two layers:

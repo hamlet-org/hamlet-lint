@@ -1,16 +1,33 @@
-# hamlet-lint dev Makefile — shortcuts for running the linter on
-# individual fixtures, inspecting raw ND-JSON, and iterating on the
-# walker without having to remember long paths.
+# hamlet-lint dev workflow. Wraps dune so local and CI runs share the
+# same entry point, plus shortcuts for running the linter on individual
+# fixtures without having to remember long paths.
 #
 # Usage:
-#   make <target> [FIXTURE=<name>]
+#   make <target>              # run one target
+#   make <target> PROMOTE=1    # run and then `dune promote` any diffs
+#   make <target> FIXTURE=<n>  # fixture-scoped targets below
+#   make all                   # everything CI runs: build + test + fmt + doc + opam
 #
-# Examples:
-#   make run     FIXTURE=wrapper_stale
-#   make ndjson  FIXTURE=wrapper_stale
-#   make debug   FIXTURE=wrapper_stale
-#   make test
+# Targets:
+#   build      plain `dune build`
+#   test       `dune runtest` (alcotest suites + e2e fixtures)
+#   fmt        dune fmt check (use PROMOTE=1 to rewrite files)
+#   doc        `dune build @doc` (odoc warnings become errors via dune)
+#   opam       opam lint on hamlet-lint.opam
+#   promote    run `dune promote` on its own
+#   all        build + test + fmt + doc + opam
+#   hooks      enable the repo's pre-commit hook in your local clone
+#   list       list available fixture names under test/cases/
+#   paths      print resolved paths (debugging Makefile vars)
+#
+# Fixture-scoped targets (require FIXTURE=<name>):
+#   run        run linter on one fixture, pretty report (exit 1 on findings)
+#   warn       same as run but always exits 0 (analyzer --warn-only)
+#   ndjson     show the canonical ND-JSON the extractor emits
+#   debug      run with HAMLET_LINT_DEBUG=1 to see walker skips
 
+DUNE       := opam exec -- dune
+PROMOTE    ?= 0
 FIXTURE    ?=
 
 # Anchor every path to the directory containing THIS Makefile, so that
@@ -32,32 +49,43 @@ FIXTURE_TAIL = $(shell echo "$(FIXTURE)" | cut -c2-)
 FIXTURE_CAP  = $(FIXTURE_HEAD)$(FIXTURE_TAIL)
 CASE_CMT     = $(BUILD_DIR)/test/cases/$(FIXTURE)/.hamlet_lint_fixture_$(FIXTURE).objs/byte/hamlet_lint_fixture_$(FIXTURE)__$(FIXTURE_CAP).cmt
 
-.PHONY: help build test run warn ndjson debug all list paths _require_fixture
+.PHONY: help build test fmt doc opam promote all hooks list paths \
+        run warn ndjson debug _require_fixture _maybe_promote
 
 .DEFAULT_GOAL := help
 
 help:
-	@echo "hamlet-lint dev targets"
-	@echo ""
-	@echo "  build                          Build the linter binaries"
-	@echo "  test                           Run the linter's alcotest + e2e suite"
-	@echo "  all                            build + test + fmt + doc + opam lint"
-	@echo "  list                           List available fixture names under test/cases/"
-	@echo ""
-	@echo "  run     FIXTURE=<name>         Run linter on a single fixture, pretty report (exit 1 on findings)"
-	@echo "  warn    FIXTURE=<name>         Same as run but always exits 0 (analyzer --warn-only)"
-	@echo "  ndjson  FIXTURE=<name>         Show the canonical ND-JSON the extractor emits"
-	@echo "  debug   FIXTURE=<name>         Run with HAMLET_LINT_DEBUG=1 to see walker skips"
+	@sed -n '2,27p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
 
 build:
-	opam exec -- dune build
+	$(DUNE) build
+	@$(MAKE) --no-print-directory _maybe_promote
 
 test: build
-	opam exec -- dune runtest
+	$(DUNE) runtest --force
+	@$(MAKE) --no-print-directory _maybe_promote
 
-all: build test
-	opam exec -- dune build @fmt @doc
+fmt:
+	$(DUNE) build @fmt
+	@$(MAKE) --no-print-directory _maybe_promote
+
+doc:
+	$(DUNE) build @doc
+
+opam:
 	opam lint hamlet-lint.opam
+
+promote:
+	$(DUNE) promote
+
+all: build test fmt doc opam
+
+# One-time setup in a fresh clone. Enables the pre-commit hook that
+# runs `dune fmt --auto-promote` on staged .ml/.mli/dune files so CI
+# never trips on a missed format pass.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "pre-commit hook enabled (.githooks/pre-commit)"
 
 # Print the resolved paths so you can debug "where is make looking"
 # without having to guess.
@@ -109,3 +137,8 @@ ndjson: build _require_fixture
 
 debug: build _require_fixture
 	@HAMLET_LINT_DEBUG=1 $(EXTRACT) $(CASE_CMT) | $(ANALYZE)
+
+# Internal: promote if PROMOTE=1 was passed on the command line. Silent
+# no-op otherwise. Never fails (dune promote exits 0 when nothing to do).
+_maybe_promote:
+	@if [ "$(PROMOTE)" = "1" ]; then $(DUNE) promote || true; fi
