@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR \
+  | grep -E '\.(ml|mli)$|(^|/)dune$|(^|/)dune-project$' || true)
+
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+if ! opam exec -- dune build @fmt --auto-promote 2>/dev/null; then
+  echo "dune fmt failed — fix the errors above and retry the commit." >&2
+  exit 1
+fi
+
+echo "$staged" | xargs git add
