@@ -1,0 +1,3 @@
+(library
+ (name hamlet_lint_fixture_wrapper_cross_module_stale)
+ (libraries hamlet))

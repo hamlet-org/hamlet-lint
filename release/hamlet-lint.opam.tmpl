@@ -1,0 +1,70 @@
+# hamlet-lint opam file TEMPLATE for opam-repository submissions.
+#
+# This file is NOT the file used by `opam install .` or `dune build`
+# locally — that is `hamlet-lint.opam`, auto-generated from dune-project
+# with whatever constraints the developer's current OCaml switch
+# requires. This template is only consumed by the release workflow
+# (.github/workflows/release.yml), which substitutes the placeholders
+# below and produces a target-specific opam file named like
+# `hamlet-lint.<hamlet_version>-<ocaml_target>.opam` (e.g.
+# `hamlet-lint.0.1.0-5.4.opam`) to push into opam-repository.
+#
+# It lives under `release/` instead of the repo root so dune does NOT
+# pick it up as a `.opam.template` source for its own opam-file
+# generation.
+#
+# Placeholder reference:
+#   %%VERSION%%         e.g. 0.1.0-5.4   — the full opam version string
+#   %%HAMLET_VERSION%%  e.g. 0.1.0       — matching hamlet release
+#   %%OCAML_MIN%%       e.g. 5.4.0       — lower bound (inclusive)
+#   %%OCAML_MAX%%       e.g. 5.5.0       — upper bound (exclusive)
+#   %%CHECKSUM_SHA256%% the sha256 of the tarball, computed at release
+#                       time by the workflow after `git archive`
+#   %%TARBALL_URL%%     the GitHub Release asset URL for the tarball
+#
+# When editing: keep the body in sync with the auto-generated
+# hamlet-lint.opam except for the version field, the ocaml/hamlet
+# constraints, and the url/checksum stanza. Everything else (deps,
+# maintainer, description) must match, or a release will ship
+# metadata that contradicts the development opam file.
+opam-version: "2.0"
+version: "%%VERSION%%"
+synopsis: "Semantic linter for Hamlet"
+description:
+  "hamlet-lint is a semantic linter for projects using hamlet. It reads .cmt files produced by the OCaml typechecker and flags stale forwarding arms in row-handler combinators — cases where a handler advertises it can produce a tag the input effect never carries, silently growing the effect's row."
+maintainer: ["Andrea Simone Costa <andreasimonecosta@gmail.com>"]
+authors: ["Andrea Simone Costa <andreasimonecosta@gmail.com>"]
+license: "MIT"
+homepage: "https://github.com/hamlet-org/hamlet-lint"
+bug-reports: "https://github.com/hamlet-org/hamlet-lint/issues"
+depends: [
+  "ocaml" {>= "%%OCAML_MIN%%" & < "%%OCAML_MAX%%"}
+  "dune" {>= "3.14"}
+  "hamlet" {= "%%HAMLET_VERSION%%"}
+  "yojson" {>= "2.0.0"}
+  "cmdliner" {>= "1.1.0"}
+  "parsexp" {>= "0.17.0"}
+  "sexplib0" {>= "0.17.0"}
+  "alcotest" {>= "1.7.0" & with-test}
+  "odoc" {with-doc}
+]
+build: [
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@runtest" {with-test}
+    "@doc" {with-doc}
+  ]
+]
+dev-repo: "git+https://github.com/hamlet-org/hamlet-lint.git"
+url {
+  src: "%%TARBALL_URL%%"
+  checksum: [
+    "sha256=%%CHECKSUM_SHA256%%"
+  ]
+}

@@ -1,0 +1,17 @@
+(library
+ (name hamlet_lint_analyzer)
+ (public_name hamlet-lint.analyzer)
+ (libraries hamlet_lint_schema yojson)
+ (modules rule report))
+
+(executable
+ (name main)
+ (public_name hamlet-lint)
+ (package hamlet-lint)
+ (libraries
+  hamlet_lint_schema
+  hamlet_lint_config
+  hamlet_lint_analyzer
+  yojson
+  cmdliner)
+ (modules main))

@@ -1,0 +1,12 @@
+version = 0.29.0
+profile = conventional
+margin = 80
+parse-docstrings = true
+wrap-comments = false
+comment-check = false
+break-infix = wrap-or-vertical
+break-fun-decl = fit-or-vertical
+break-fun-sig = fit-or-vertical
+exp-grouping = preserve
+module-item-spacing = preserve
+doc-comments = before

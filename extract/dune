@@ -1,0 +1,10 @@
+(executable
+ (name main)
+ (public_name hamlet-lint-extract)
+ (package hamlet-lint)
+ (libraries
+  hamlet_lint_schema
+  hamlet_lint_config
+  compiler-libs.common
+  yojson
+  unix))

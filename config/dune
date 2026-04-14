@@ -1,0 +1,4 @@
+(library
+ (name hamlet_lint_config)
+ (public_name hamlet-lint.config)
+ (libraries parsexp sexplib0 unix))

@@ -1,0 +1,6 @@
+; Fixture compiled to produce a .cmt, then consumed by the e2e test.
+; We use (library) so dune preserves the .cmt under .objs/.
+
+(library
+ (name hamlet_lint_fixture_stale_inline)
+ (libraries hamlet))

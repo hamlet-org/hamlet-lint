@@ -1,0 +1,4 @@
+(library
+ (name hamlet_lint_schema)
+ (public_name hamlet-lint.schema)
+ (libraries yojson))

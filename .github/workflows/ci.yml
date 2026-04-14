@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# How the linter obtains hamlet for fixture compilation.
+#
+#   git  — bootstrap mode: pin hamlet via `opam pin add` from git.
+#          Used until hamlet has had its first opam-repository release.
+#          See SWITCH-TO-OPAM.md at repo root.
+#   opam — steady state: install the matching hamlet version from opam.
+#          Flip the default here, delete SWITCH-TO-OPAM.md, and remove
+#          the HAMLET_GIT_* inputs below once hamlet is on opam.
+env:
+  HAMLET_SOURCE: git
+  HAMLET_GIT_URL: https://github.com/hamlet-org/hamlet.git
+  HAMLET_GIT_REF: main
+  # The exact hamlet version this repo currently targets. Used by the
+  # `opam` branch below and by release-time metadata. Bump in lockstep
+  # with each hamlet release.
+  HAMLET_VERSION: 0.1.0
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        ocaml-compiler: ["5.4"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-compiler }}
+
+      - name: Install hamlet (bootstrap / git pin)
+        if: env.HAMLET_SOURCE == 'git'
+        run: |
+          opam pin add -y --no-action hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_REF}"
+          opam pin add -y --no-action ppx_hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_REF}"
+          opam install -y hamlet ppx_hamlet
+
+      - name: Install hamlet (steady state / opam)
+        if: env.HAMLET_SOURCE == 'opam'
+        run: |
+          opam install -y "hamlet.${HAMLET_VERSION}" "ppx_hamlet.${HAMLET_VERSION}"
+
+      - name: Install linter deps
+        run: opam install . --deps-only --with-test --with-doc -y
+
+      - name: Build
+        run: opam exec -- dune build
+
+      - name: Test
+        run: opam exec -- dune runtest
+
+      - name: Format & docs
+        run: opam exec -- dune build @fmt @doc
+
+      - name: opam lint
+        run: opam lint hamlet-lint.opam
