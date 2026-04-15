@@ -1,3 +1,3 @@
 (library
- (name hamlet_lint_fixture_cross_module_handler)
+ (name hamlet_lint_fixture_cross_module_handler_stale)
  (libraries hamlet))

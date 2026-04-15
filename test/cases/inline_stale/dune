@@ -2,5 +2,5 @@
 ; We use (library) so dune preserves the .cmt under .objs/.
 
 (library
- (name hamlet_lint_fixture_stale_inline)
+ (name hamlet_lint_fixture_inline_stale)
  (libraries hamlet))

@@ -155,10 +155,10 @@ let mk ?name ~group ?subject case expect =
 
 let e2e_cases : case list =
   [
-    (* stale_inline *)
-    mk ~group:"stale_inline" "stale_inline" (stale [ "Forbidden"; "Timeout" ]);
-    (* aliased_provide *)
-    mk ~group:"aliased_provide" "aliased_provide" (stale [ "Logger" ]);
+    (* inline_stale *)
+    mk ~group:"inline" "inline_stale" (stale [ "Forbidden"; "Timeout" ]);
+    (* aliased_provide_stale *)
+    mk ~group:"aliased_provide" "aliased_provide_stale" (stale [ "Logger" ]);
     (* layer *)
     mk ~group:"layer" "layer_provide_stale"
       (stale ~extra:[ "Hamlet.Layer.provide" ] [ "Logger" ]);
@@ -169,32 +169,32 @@ let e2e_cases : case list =
     mk ~group:"layer" "layer_catch_stale"
       (stale ~extra:[ "Hamlet.Layer.catch" ] [ "Forbidden"; "Timeout" ]);
     (* tag_provide (clean by construction) *)
-    mk ~group:"tag_provide" "tag_provide_stale" ok_clean;
+    mk ~group:"tag_provide" "tag_provide_clean" ok_clean;
     (* latent wrappers *)
     mk ~group:"latent" "wrapper_stale" (stale [ "Logger" ]);
     mk ~group:"latent" "wrapper_clean" ok_clean;
-    mk ~group:"latent" "wrapper_no_callers" ok_clean;
+    mk ~group:"latent" "wrapper_no_callers_clean" ok_clean;
     (* ident_handler *)
-    mk ~group:"ident_handler" "let_bound_handler" (stale [ "Logger" ]);
-    mk ~group:"ident_handler" "aliased_handler" (stale [ "Logger" ]);
-    mk ~group:"ident_handler" "nested_let_handler" (stale [ "Logger" ]);
-    mk ~group:"ident_handler" "cross_module_handler"
-      ~subject:(Dir "cross_module_handler")
+    mk ~group:"ident_handler" "let_bound_handler_stale" (stale [ "Logger" ]);
+    mk ~group:"ident_handler" "aliased_handler_stale" (stale [ "Logger" ]);
+    mk ~group:"ident_handler" "nested_let_handler_stale" (stale [ "Logger" ]);
+    mk ~group:"ident_handler" "cross_module_handler_stale"
+      ~subject:(Dir "cross_module_handler_stale")
       {
         exit_code = 1;
         out_contains = [ "cross_module_handler.ml"; "tag `Logger" ];
         out_absent = [];
         ndjson_contains = [];
       };
-    mk ~group:"ident_handler" "unresolvable_handler" ok_clean;
+    mk ~group:"ident_handler" "unresolvable_handler_clean" ok_clean;
     (* body_introducers (v0.1.1 set) *)
-    mk ~group:"body_introducers" "errors_body_introducer_direct"
+    mk ~group:"body_introducers" "errors_body_introducer_direct_clean"
       (body_introduces "Bar");
-    mk ~group:"body_introducers" "errors_body_introducer_try_catch"
+    mk ~group:"body_introducers" "errors_body_introducer_try_catch_clean"
       (body_introduces "Bar");
-    mk ~group:"body_introducers" "errors_body_introducer_ppx"
+    mk ~group:"body_introducers" "errors_body_introducer_ppx_clean"
       (body_introduces "Foo_error");
-    mk ~group:"body_introducers" "errors_multiple_arms_distinct"
+    mk ~group:"body_introducers" "errors_multiple_arms_distinct_clean"
       (body_introduces "Quux");
     (* wrapper_cross_module (v0.1.2 P1) *)
     mk ~group:"wrapper_cross_module (v0.1.2 P1)" "wrapper_cross_module_stale"
@@ -206,8 +206,8 @@ let e2e_cases : case list =
         ndjson_contains = [];
       };
     mk ~group:"wrapper_cross_module (v0.1.2 P1)"
-      "wrapper_cross_module_namespace_collision"
-      ~subject:(Dir "wrapper_cross_module_namespace_collision")
+      "wrapper_cross_module_namespace_collision_stale"
+      ~subject:(Dir "wrapper_cross_module_namespace_collision_stale")
       {
         exit_code = 1;
         out_contains = [ "tag `Logger"; "stale_mod.ml" ];
@@ -216,16 +216,16 @@ let e2e_cases : case list =
       };
     (* transitive_introducers (v0.1.2 P2) *)
     mk ~group:"transitive_introducers (v0.1.2 P2)"
-      "errors_body_introducer_local_helper" (body_introduces "Bar");
+      "errors_body_introducer_local_helper_clean" (body_introduces "Bar");
     mk ~group:"transitive_introducers (v0.1.2 P2)"
-      "errors_body_introducer_module_helper" (body_introduces "Bar");
+      "errors_body_introducer_module_helper_clean" (body_introduces "Bar");
     mk ~group:"transitive_introducers (v0.1.2 P2)"
-      "errors_body_introducer_cross_module_helper"
-      ~subject:(Dir "errors_body_introducer_cross_module_helper") ok_clean;
+      "errors_body_introducer_cross_module_helper_clean"
+      ~subject:(Dir "errors_body_introducer_cross_module_helper_clean") ok_clean;
     mk ~group:"transitive_introducers (v0.1.2 P2)"
-      "errors_body_introducer_deep_chain" (body_introduces "Bar");
+      "errors_body_introducer_deep_chain_clean" (body_introduces "Bar");
     mk ~group:"transitive_introducers (v0.1.2 P2)"
-      "errors_body_introducer_runaway"
+      "errors_body_introducer_runaway_clean"
       {
         exit_code = 0;
         out_contains = [];
@@ -237,11 +237,11 @@ let e2e_cases : case list =
       (stale [ "Logger" ]);
     mk ~group:"wrapper_multi_level (v0.1.2 P3)" "wrapper_three_level_stale"
       (stale [ "Logger" ]);
-    mk ~group:"wrapper_multi_level (v0.1.2 P3)" "wrapper_mutual_recursion"
+    mk ~group:"wrapper_multi_level (v0.1.2 P3)" "wrapper_mutual_recursion_stale"
       (stale [ "Logger" ]);
     mk ~group:"wrapper_multi_level (v0.1.2 P3)" "wrapper_two_level_clean"
       ok_clean;
-    mk ~group:"wrapper_multi_level (v0.1.2 P3)" "wrapper_two_level_mixed"
+    mk ~group:"wrapper_multi_level (v0.1.2 P3)" "wrapper_two_level_mixed_stale"
       (stale [ "Logger" ]);
   ]
 
@@ -283,7 +283,7 @@ let check_case case () =
 let test_unresolvable_handler_debug () =
   match
     run ~env:"HAMLET_LINT_DEBUG=1" ~capture_stderr:false
-      (cmt_of "unresolvable_handler")
+      (cmt_of "unresolvable_handler_clean")
   with
   | `Skipped -> Alcotest.skip ()
   | `Ran (_code, stderr_out) ->

@@ -1,5 +1,5 @@
 (library
- (name hamlet_lint_fixture_tag_provide_stale)
+ (name hamlet_lint_fixture_tag_provide_clean)
  (libraries hamlet)
  (preprocess
   (pps ppx_hamlet)))
