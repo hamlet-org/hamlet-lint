@@ -1,30 +1,29 @@
 #!/usr/bin/env bash
-# release/run.sh — dispatch the release workflow for every (hamlet,
-# ocaml) pair not yet on opam-repository.
+# release/run.sh — dispatch ONE release workflow run that publishes
+# every (hamlet, ocaml) pair not yet on opam-repository, bundled into
+# a single PR upstream. Tags and GitHub Releases stay 1-per-pair on
+# this repo.
 #
 # Usage:
 #   ./release/run.sh 0.1.0           # one hamlet version
 #   ./release/run.sh 0.1.0 0.2.0     # backfill several hamlet versions
 #   ./release/run.sh --all           # backfill every hamlet ever
 #                                    # published on opam-repository.
-#                                    # Use this AFTER a new OCaml
-#                                    # patch has been released AND
-#                                    # added to OCAML_PATCHES in
-#                                    # release/versions.sh: the new
-#                                    # patch is the only column that
-#                                    # produces non-skipped pairs,
-#                                    # everything else is already out.
+#                                    # Use this AFTER a new OCaml patch
+#                                    # has been added to OCAML_PATCHES
+#                                    # in release/versions.sh.
 #
 # At least one hamlet version is required: a release always names an
 # explicit hamlet, no "current main" default. The OCaml axis comes
 # entirely from OCAML_PATCHES in release/versions.sh.
 #
-# Idempotency: a pair is skipped if its package directory already
-# exists on ocaml/opam-repository, or if an open PR titled
-# "[new release] hamlet-lint (<pair>)" is already up. Local git state
-# is not consulted — a stale tag from a failed run is a separate
-# cleanup (`git push origin :v<hamlet>-<ocaml>`, the tag uses `-`
-# because git refs forbid `~`).
+# Idempotency. A pair is skipped if its package directory already
+# exists on ocaml/opam-repository, or if it is part of any open PR
+# touching packages/hamlet-lint/. The workflow's `plan` job repeats
+# the merged-state check upstream, so a stale dispatch self-corrects.
+# Stale tags from a failed run are a separate cleanup
+# (`git push origin :v<hamlet>-<ocaml>`, the tag uses `-` because
+# git refs forbid `~`).
 #
 # Requires: gh (authenticated, with read on ocaml/opam-repository and
 # workflow-dispatch on hamlet-org/hamlet-lint) and jq.
@@ -81,24 +80,38 @@ is_published() {
       >/dev/null 2>&1
 }
 
-# Open PR on opam-repository titled "[new release] hamlet-lint (<pair>)"?
-has_open_pr() {
-  local pkg="$1"
-  local count
-  count=$(gh pr list --repo ocaml/opam-repository --state open \
-            --search "hamlet-lint (${pkg}) in:title" \
-            --json number | jq 'length')
-  [ "$count" -gt 0 ]
+# Set of pkg labels currently being introduced by an open PR on
+# opam-repository. Bundled PRs may carry several pairs, so we cannot
+# search by title; we look at the file paths each open PR touches.
+collect_in_flight_pkgs() {
+  local prs pr
+  prs=$(gh pr list --repo ocaml/opam-repository --state open \
+          --search "hamlet-lint in:title" \
+          --json number --jq '.[].number')
+  for pr in $prs; do
+    gh pr view "$pr" --repo ocaml/opam-repository --json files \
+      --jq '.files[].path' \
+      | sed -nE 's|^packages/hamlet-lint/hamlet-lint\.([^/]+)/opam$|\1|p'
+  done | sort -u
 }
 
-dispatched=0
+mapfile -t in_flight < <(collect_in_flight_pkgs)
+is_in_flight() {
+  local pkg="$1" p
+  for p in "${in_flight[@]}"; do
+    [ "$p" = "$pkg" ] && return 0
+  done
+  return 1
+}
+
+# Build the JSON pairs list to hand to the workflow. Skip anything
+# already merged or in flight; the workflow's `plan` job will re-check
+# merged state but cannot see in-flight PRs (no opam-repo PAT in plan).
+pairs_json='[]'
+queued=0
 skipped=0
 for hamlet in "${hamlets[@]}"; do
   for ocaml in "${patches[@]}"; do
-    # Package directory on opam-repository uses the tilde convention
-    # (matches release.yml's PKG_VERSION). Git tags / branches use a
-    # hyphen because git refs forbid `~`; that asymmetry only matters
-    # to release.yml, which derives both forms from the same inputs.
     pkg="${hamlet}~${ocaml}"
 
     if is_published "${pkg}"; then
@@ -107,19 +120,24 @@ for hamlet in "${hamlets[@]}"; do
       continue
     fi
 
-    if has_open_pr "${pkg}"; then
-      echo "skip  ${pkg}: open PR already on ocaml/opam-repository"
+    if is_in_flight "${pkg}"; then
+      echo "skip  ${pkg}: in an open opam-repository PR"
       skipped=$((skipped + 1))
       continue
     fi
 
-    echo "run   ${pkg}"
-    gh workflow run release.yml \
-      -f "hamlet_version=${hamlet}" \
-      -f "ocaml_target=${ocaml}"
-    dispatched=$((dispatched + 1))
+    pairs_json=$(jq -c --arg h "$hamlet" --arg o "$ocaml" \
+                   '. + [{"hamlet":$h,"ocaml":$o}]' <<< "$pairs_json")
+    queued=$((queued + 1))
+    echo "queue ${pkg}"
   done
 done
 
 echo ""
-echo "dispatched: ${dispatched}; skipped: ${skipped}"
+if [ "$queued" -eq 0 ]; then
+  echo "nothing to dispatch (queued: 0; skipped: ${skipped})"
+  exit 0
+fi
+
+echo "dispatching one workflow run for ${queued} pair(s); skipped: ${skipped}"
+gh workflow run release.yml -f "pairs=${pairs_json}"

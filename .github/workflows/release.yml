@@ -1,69 +1,86 @@
 name: release
 
-# Parameterised release job. One run = one published opam package for
-# one (hamlet, ocaml) pair. Typically invoked via release/run.sh, which
-# loops over missing pairs and skips anything already merged upstream.
-# Manual Run Workflow from the Actions UI is still supported for
-# one-offs, and is safe thanks to the guard job below.
+# Release workflow. One run = one release pass for N (hamlet, ocaml)
+# pairs at once. Each pair still gets its own git tag and GitHub
+# Release on this repo (lifecycle unchanged), but the opam-repository
+# submission is bundled: one PR with N package directories, the shape
+# the maintainers prefer (cf. dune.3.22.2's 18-package PR).
+#
+# Typically dispatched by release/run.sh, which builds the JSON pairs
+# input from missing pairs (skipping anything already merged or in an
+# open PR upstream). Manual Run Workflow from the Actions UI works too:
+# paste a JSON array as the `pairs` input.
 on:
   workflow_dispatch:
     inputs:
-      hamlet_version:
-        description: "The hamlet version to target, e.g. 0.1.0"
+      pairs:
+        description: 'JSON array of pairs, e.g. [{"hamlet":"0.1.0","ocaml":"5.4.1"}]'
         required: true
         type: string
-      ocaml_target:
-        description: "The exact OCaml patch, e.g. 5.4.1 (must be in OCAML_PATCHES in release/versions.sh)"
-        required: true
-        type: choice
-        options: ["5.4.1"]
 
 permissions:
   contents: write
 
 jobs:
-  # Second layer of idempotency on top of release/run.sh. If the package
-  # is already merged on ocaml/opam-repository, skip the release job
-  # entirely. This covers the case where someone triggers Run Workflow
-  # from the UI bypassing the script, or where two invocations race.
-  guard:
+  # Re-filter the input list against the current state of opam-repository
+  # so a stale dispatch (manual UI typo, racing run.sh, etc.) self-corrects.
+  # Outputs the filtered JSON as `pairs`, plus a count for the gating
+  # `if:` on downstream jobs (matrix cannot be empty).
+  plan:
     runs-on: ubuntu-latest
     outputs:
-      already: ${{ steps.check.outputs.already }}
+      pairs: ${{ steps.filter.outputs.pairs }}
+      count: ${{ steps.filter.outputs.count }}
     steps:
-      - name: Check opam-repository for existing package
-        id: check
+      - name: Filter out already-published pairs
+        id: filter
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAIRS_IN: ${{ inputs.pairs }}
         run: |
-          pkg="${{ inputs.hamlet_version }}~${{ inputs.ocaml_target }}"
-          if gh api \
-               -H "Accept: application/vnd.github+json" \
-               "repos/ocaml/opam-repository/contents/packages/hamlet-lint/hamlet-lint.${pkg}" \
-               >/dev/null 2>&1; then
-            echo "hamlet-lint.${pkg} is already merged on ocaml/opam-repository; skipping release."
-            echo "already=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "already=false" >> "$GITHUB_OUTPUT"
-          fi
+          out='[]'
+          while read -r pair; do
+            hamlet=$(jq -r '.hamlet' <<< "$pair")
+            ocaml=$(jq -r '.ocaml' <<< "$pair")
+            pkg="${hamlet}~${ocaml}"
+            if gh api \
+                 -H "Accept: application/vnd.github+json" \
+                 "repos/ocaml/opam-repository/contents/packages/hamlet-lint/hamlet-lint.${pkg}" \
+                 >/dev/null 2>&1; then
+              echo "skip ${pkg}: already merged on ocaml/opam-repository"
+            else
+              echo "keep ${pkg}"
+              out=$(jq -c --arg h "$hamlet" --arg o "$ocaml" \
+                      '. + [{"hamlet":$h,"ocaml":$o}]' <<< "$out")
+            fi
+          done < <(jq -c '.[]' <<< "$PAIRS_IN")
+          count=$(jq 'length' <<< "$out")
+          echo "pairs=$out" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
 
-  release:
-    needs: guard
-    if: needs.guard.outputs.already != 'true'
+  # Per-pair build/test/tag/GitHub Release. Each matrix job mirrors the
+  # old single-pair release job exactly, except the rendered opam file
+  # is uploaded as an artifact instead of being PR'd inline. Tags and
+  # Releases stay 1-per-pair (matches what we had before the bundling).
+  build:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        pair: ${{ fromJSON(needs.plan.outputs.pairs) }}
     runs-on: ubuntu-latest
     env:
-      HAMLET_VERSION: ${{ inputs.hamlet_version }}
-      OCAML_TARGET: ${{ inputs.ocaml_target }}
+      HAMLET_VERSION: ${{ matrix.pair.hamlet }}
+      OCAML_TARGET: ${{ matrix.pair.ocaml }}
       # Opam package version uses the tilde convention for the
       # OCaml-target suffix (idiomatic on opam-repository, see
-      # ppxlib.0.38.0~5.5preview for a precedent). The git tag and
-      # PR branch name MUST use a hyphen instead, because git refs
-      # forbid `~` (see git-check-ref-format(1)). The two namespaces
-      # are kept consistent by always deriving them from the same
-      # two inputs.
-      PKG_VERSION: ${{ inputs.hamlet_version }}~${{ inputs.ocaml_target }}
-      TAG_NAME: v${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}
-      BRANCH_NAME: hamlet-lint-${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}
+      # ppxlib.0.38.0~5.5preview for a precedent). The git tag MUST
+      # use a hyphen instead, because git refs forbid `~` (see
+      # git-check-ref-format(1)). Both forms derive from the same
+      # two matrix fields.
+      PKG_VERSION: ${{ matrix.pair.hamlet }}~${{ matrix.pair.ocaml }}
+      TAG_NAME: v${{ matrix.pair.hamlet }}-${{ matrix.pair.ocaml }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -73,7 +90,7 @@ jobs:
 
       - uses: ./.github/actions/setup
         with:
-          ocaml-compiler: ${{ inputs.ocaml_target }}
+          ocaml-compiler: ${{ matrix.pair.ocaml }}
           hamlet-source: opam
           hamlet-version: ${{ env.HAMLET_VERSION }}
 
@@ -110,8 +127,8 @@ jobs:
 
       - name: Render opam file
         run: |
-          mkdir -p rendered
-          OPAM_OUT="rendered/opam"
+          mkdir -p "rendered/${PKG_VERSION}"
+          OPAM_OUT="rendered/${PKG_VERSION}/opam"
           sed \
             -e "s|%%VERSION%%|${PKG_VERSION}|g" \
             -e "s|%%HAMLET_VERSION%%|${HAMLET_VERSION}|g" \
@@ -121,22 +138,77 @@ jobs:
             release/hamlet-lint.opam.tmpl > "$OPAM_OUT"
           opam lint "$OPAM_OUT"
 
+      # Artifact name encodes the pair so bundle-pr can pattern-download
+      # all of them at once. `~` is allowed in artifact names.
+      - name: Upload rendered opam
+        uses: actions/upload-artifact@v4
+        with:
+          name: opam-${{ env.PKG_VERSION }}
+          path: rendered/${{ env.PKG_VERSION }}/opam
+          if-no-files-found: error
+
+  # Bundle every rendered opam into a single PR against opam-repository.
+  # Matches the house style for multi-package releases (one PR carrying
+  # all the new package directories) and halves the reviewer click count
+  # vs. the old one-PR-per-pair shape.
+  bundle-pr:
+    needs: [plan, build]
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all rendered opam files
+        uses: actions/download-artifact@v4
+        with:
+          pattern: opam-*
+          path: rendered
+          merge-multiple: false
+
       - name: Open opam-repository PR
         env:
           GH_TOKEN: ${{ secrets.OPAM_REPO_PAT }}
+          PAIRS: ${{ needs.plan.outputs.pairs }}
+          COUNT: ${{ needs.plan.outputs.count }}
         run: |
           WORKDIR=$(mktemp -d)
           gh repo clone ocaml/opam-repository "$WORKDIR" -- --depth=1
           cd "$WORKDIR"
-          git checkout -b "${BRANCH_NAME}"
-          PKG_DIR="packages/hamlet-lint/hamlet-lint.${PKG_VERSION}"
-          mkdir -p "$PKG_DIR"
-          cp "${GITHUB_WORKSPACE}/rendered/opam" "$PKG_DIR/opam"
-          git add "$PKG_DIR/opam"
+
+          # Branch name is derived from the run id so two release passes
+          # never clash on the fork. Hyphen only (git refs forbid ~).
+          BRANCH_NAME="hamlet-lint-release-${{ github.run_id }}"
+          git checkout -b "$BRANCH_NAME"
+
+          # Drop every rendered opam under its target package directory.
+          # Each artifact landed at rendered/opam-<pair>/opam.
+          versions=()
+          for d in "${GITHUB_WORKSPACE}"/rendered/opam-*; do
+            pkg="${d##*/opam-}"
+            PKG_DIR="packages/hamlet-lint/hamlet-lint.${pkg}"
+            mkdir -p "$PKG_DIR"
+            cp "${d}/opam" "$PKG_DIR/opam"
+            git add "$PKG_DIR/opam"
+            versions+=("$pkg")
+          done
+
+          # Single-pair PRs keep the explicit form; multi-pair PRs use
+          # the "(N packages)" form, matching dune/atd/ocurrent style.
+          if [ "$COUNT" -eq 1 ]; then
+            TITLE="[new release] hamlet-lint (${versions[0]})"
+          else
+            TITLE="[new release] hamlet-lint (${COUNT} packages)"
+          fi
+
+          # Body lists every pair so reviewers can see the full set
+          # without expanding the diff.
+          BODY="Automated release of hamlet-lint:"$'\n'
+          for v in "${versions[@]}"; do
+            BODY+="- hamlet-lint.${v}"$'\n'
+          done
+
           git -c user.name="hamlet-lint release bot" \
               -c user.email="release@hamlet-lint" \
-              commit -m "[new release] hamlet-lint (${PKG_VERSION})"
+              commit -m "$TITLE"
           gh pr create \
             --repo ocaml/opam-repository \
-            --title "[new release] hamlet-lint (${PKG_VERSION})" \
-            --body "Automated release of hamlet-lint ${PKG_VERSION} (hamlet ${HAMLET_VERSION}, OCaml ${OCAML_TARGET})."
+            --title "$TITLE" \
+            --body "$BODY"

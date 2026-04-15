@@ -20,7 +20,8 @@ axis you enumerate.
 
 ## 1. The release pieces at a glance
 
-A single published package consists of:
+A release pass publishes N pairs in one workflow run. Per pair, the
+workflow produces:
 
 - A **git tag** `v<hamlet>-<ocaml>` (e.g. `v0.1.0-5.4.1`), annotated,
   pushed to `origin`. The OCaml part is the full `major.minor.patch`:
@@ -29,19 +30,22 @@ A single published package consists of:
   git refs forbid `~`; see `git-check-ref-format(1)`.
 - A **GitHub Release** with the same name and a `git archive` tarball
   asset.
-- An **opam-repository PR** adding one directory under
-  `packages/hamlet-lint/`, named `hamlet-lint.<hamlet>~<ocaml>` (e.g.
-  `hamlet-lint.0.1.0~5.4.1`), with an `opam` file rendered from
-  `release/hamlet-lint.opam.tmpl`. The rendered `ocaml` constraint
-  is an exact pin `{= "<patch>"}`: `extract/compat.cppo.ml`'s
-  `#error` guard accepts exactly that patch, so the build artifact
-  is patch-specific and the package metadata says so. The PR title
-  is `[new release] hamlet-lint (<hamlet>~<ocaml>)`, matching the
-  opam-repository convention.
 
-One workflow run produces exactly one of each. Shipping for multiple
-`(hamlet, ocaml)` pairs means triggering the workflow multiple times.
-Use `./release/run.sh` (see §3) instead of typing them in by hand.
+For the whole pass, the workflow opens **one** opam-repository PR
+that adds every package directory at once, named
+`hamlet-lint.<hamlet>~<ocaml>` (e.g. `hamlet-lint.0.1.0~5.4.1`), each
+with an `opam` file rendered from `release/hamlet-lint.opam.tmpl`.
+The rendered `ocaml` constraint is an exact pin `{= "<patch>"}`:
+`extract/compat.cppo.ml`'s `#error` guard accepts exactly that patch,
+so the build artifact is patch-specific and the package metadata
+says so. PR title is `[new release] hamlet-lint (<pair>)` for a
+single pair, `[new release] hamlet-lint (<N> packages)` for several.
+This matches the multi-package PR style maintainers expect (cf.
+`dune.3.22.2`'s 18-package PR), keeps reviewer click count low, and
+shares one upstream CI run across the whole pass.
+
+Use `./release/run.sh` (see §3) to trigger a pass; do not paste JSON
+into the Actions UI by hand unless you have to.
 
 ---
 
@@ -100,13 +104,15 @@ every `(hamlet, ocaml)` pair:
 
 1. Checks `packages/hamlet-lint/hamlet-lint.<hamlet>~<ocaml>/` on
    `ocaml/opam-repository`. Present = merged, skip.
-2. Checks for an open PR titled
-   `[new release] hamlet-lint (<hamlet>~<ocaml>)` on the same repo.
-   Present = in flight, skip.
-3. Otherwise invokes `gh workflow run release.yml` with the pair.
+2. Checks every open PR on opam-repository whose title contains
+   `hamlet-lint`, looking at the file paths it touches. Pair already
+   carried by an open PR = in flight, skip. (Bundled PRs may carry
+   several pairs, so we cannot match by title.)
+3. Bundles every surviving pair into one JSON array and dispatches
+   **one** `gh workflow run release.yml` with it as the `pairs` input.
 
-The release workflow itself repeats check 1 in a `guard` job so that a
-direct Run Workflow from the Actions UI is equally safe.
+The release workflow itself repeats check 1 in its `plan` job so that
+a direct Run Workflow from the Actions UI is equally safe.
 
 `release/versions.sh` defines `OCAML_PATCHES`, the supported OCaml
 patches, grouped by `major.minor` line for readability. Each entry is
@@ -219,39 +225,52 @@ not busywork.
 ## 5. Anatomy of the release workflow
 
 `.github/workflows/release.yml` is triggered via `workflow_dispatch`
-with two inputs: `hamlet_version` and `ocaml_target`. High-level
-steps:
+with one input, `pairs`, a JSON array of `{hamlet, ocaml}` objects.
+Three jobs:
+
+**`plan`** (one job, runs first). Re-filters the input list against
+`ocaml/opam-repository` so a stale dispatch self-corrects, and emits
+the surviving list as a JSON output plus a count. Downstream jobs are
+gated on `count != '0'`.
+
+**`build`** (matrix over the surviving pairs, runs in parallel).
+Each matrix entry mirrors the old single-pair release job exactly:
 
 1. **Checkout `main`.** The workflow never releases from other
-   branches, because trunk is the only source of truth (see the versioning
-   model in `README.md` §2).
-2. **Set up OCaml** at `ocaml_target`.
-3. **Install `hamlet.<hamlet_version>`** from opam-repository. This
-   is the steady-state install path; the bootstrap `git` mode in
-   `ci.yml` is not used at release time. If the version does not
-   exist on opam-repository yet, the workflow fails fast: you
-   cannot release hamlet-lint for a hamlet that is not yet on opam.
-4. **Build + test.** `dune build && dune runtest`. Any failure
-   aborts the release: a package that cannot build for its own
-   declared `(hamlet, ocaml)` pair must not ship.
-5. **Render opam file** from `release/hamlet-lint.opam.tmpl` by
+   branches, because trunk is the only source of truth (see the
+   versioning model in `README.md` §2).
+2. **Set up OCaml** at the pair's `ocaml` patch.
+3. **Install `hamlet.<hamlet>`** from opam-repository. Steady-state
+   install path; if the version is not on opam yet the workflow
+   fails fast.
+4. **Build + test.** Any failure aborts the matrix entry; with
+   `fail-fast: false` the other pairs still get a chance.
+5. **Create git archive**, **annotated tag**
+   `v<hamlet>-<ocaml>` (hyphen, ref-safe), and **GitHub Release**
+   with the tarball as the asset. Tags and Releases stay 1-per-pair.
+6. **Render opam file** from `release/hamlet-lint.opam.tmpl` by
    substituting:
-   - `%%VERSION%%` → `<hamlet_version>~<ocaml_target>`
-   - `%%HAMLET_VERSION%%` → `<hamlet_version>`
-   - `%%OCAML_TARGET%%` → `<ocaml_target>` (the exact patch)
+   - `%%VERSION%%` → `<hamlet>~<ocaml>`
+   - `%%HAMLET_VERSION%%` → `<hamlet>`
+   - `%%OCAML_TARGET%%` → `<ocaml>`
    - `%%TARBALL_URL%%` + `%%CHECKSUM_SHA256%%` after uploading the
      archive to the GitHub Release.
-6. **Create git tag** `v<hamlet_version>-<ocaml_target>`, push it.
-7. **Create GitHub Release** with the tag, upload the `git archive`
-   tarball as an asset.
-8. **Open opam-repository PR** via `gh`, forking if needed, creating
-   `packages/hamlet-lint/hamlet-lint.<hamlet>~<ocaml>/opam`,
-   committing, pushing, opening the PR.
+7. **Upload** the rendered opam as an artifact named
+   `opam-<hamlet>~<ocaml>` so `bundle-pr` can collect it.
+
+**`bundle-pr`** (one job, runs after `build`). Downloads every
+artifact, drops each into its target
+`packages/hamlet-lint/hamlet-lint.<hamlet>~<ocaml>/opam` slot on a
+fresh branch of `ocaml/opam-repository`, commits, and opens **one**
+PR titled `[new release] hamlet-lint (<pair>)` (single pair) or
+`[new release] hamlet-lint (<N> packages)` (many). The branch name
+on the fork is `hamlet-lint-release-<run-id>` to avoid clashes
+between consecutive passes.
 
 ### 5.1 Option: pre-preprocess the cppo file per target
 
 Because each published package is already bound to exactly one OCaml
-minor (the `-<ocaml>` suffix in the package name), the release workflow
+patch (the `~<ocaml>` suffix in the package name), the release workflow
 could run
 `cppo -V OCAML:<ocaml_target>.x extract/compat.cppo.ml -o extract/compat.ml`,
 drop the `(rule …)` stanza from `extract/dune`, remove `cppo` from the
