@@ -12,10 +12,12 @@
 #   build      plain `dune build`
 #   test       `dune runtest` (alcotest suites + e2e fixtures)
 #   fmt        dune fmt check (use PROMOTE=1 to rewrite files)
+#   fmt-fix    auto-format the whole project in place
 #   doc        `dune build @doc` (odoc warnings become errors via dune)
 #   opam       opam lint on hamlet-lint.opam
 #   promote    run `dune promote` on its own
 #   all        build + test + fmt + doc + opam
+#   setup      one-time dev setup: install deps + enable git hooks
 #   hooks      enable the repo's pre-commit hook in your local clone
 #   list       list available fixture names under test/cases/
 #   paths      print resolved paths (debugging Makefile vars)
@@ -49,13 +51,13 @@ FIXTURE_TAIL = $(shell echo "$(FIXTURE)" | cut -c2-)
 FIXTURE_CAP  = $(FIXTURE_HEAD)$(FIXTURE_TAIL)
 CASE_CMT     = $(BUILD_DIR)/test/cases/$(FIXTURE)/.hamlet_lint_fixture_$(FIXTURE).objs/byte/hamlet_lint_fixture_$(FIXTURE)__$(FIXTURE_CAP).cmt
 
-.PHONY: help build test fmt doc opam promote all hooks list paths \
+.PHONY: help build test fmt fmt-fix doc opam promote all setup hooks list paths \
         run warn ndjson debug _require_fixture _maybe_promote
 
 .DEFAULT_GOAL := help
 
 help:
-	@sed -n '2,27p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
+	@sed -n '2,29p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
 
 build:
 	$(DUNE) build
@@ -69,6 +71,9 @@ fmt:
 	$(DUNE) build @fmt
 	@$(MAKE) --no-print-directory _maybe_promote
 
+fmt-fix:
+	$(DUNE) build @fmt --auto-promote
+
 doc:
 	$(DUNE) build @doc
 
@@ -80,9 +85,14 @@ promote:
 
 all: build test fmt doc opam
 
-# One-time setup in a fresh clone. Enables the pre-commit hook that
-# runs `dune fmt --auto-promote` on staged .ml/.mli/dune files so CI
-# never trips on a missed format pass.
+# One-time dev environment setup. Installs dependencies and enables
+# the pre-commit hook. Run this once after cloning.
+setup: hooks
+	opam install . --deps-only --with-dev-setup --with-test --with-doc -y
+	@echo "setup complete — deps installed, hooks enabled"
+
+# Enable the pre-commit hook that runs `dune fmt --auto-promote` on
+# staged .ml/.mli/dune files so CI never trips on a missed format pass.
 hooks:
 	git config core.hooksPath .githooks
 	@echo "pre-commit hook enabled (.githooks/pre-commit)"

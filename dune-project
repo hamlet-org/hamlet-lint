@@ -59,4 +59,8 @@
    (and
     (>= 1.7.0)
     :with-test))
-  (odoc :with-doc)))
+  (odoc :with-doc)
+  (ocamlformat
+   (and
+    (= 0.29.0)
+    :with-dev-setup))))

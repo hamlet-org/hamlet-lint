@@ -19,6 +19,7 @@ depends: [
   "sexplib0" {>= "0.17.0"}
   "alcotest" {>= "1.7.0" & with-test}
   "odoc" {with-doc}
+  "ocamlformat" {= "0.29.0" & with-dev-setup}
 ]
 build: [
   ["dune" "subst"] {dev}

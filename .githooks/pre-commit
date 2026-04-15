@@ -8,8 +8,14 @@ if [ -z "$staged" ]; then
   exit 0
 fi
 
-if ! opam exec -- dune build @fmt --auto-promote 2>/dev/null; then
-  echo "dune fmt failed — fix the errors above and retry the commit." >&2
+# two-pass approach: first pass auto-fixes what it can (exit code
+# ignored), second pass verifies everything is clean. Without this,
+# a successful auto-promote still exits non-zero on the first run.
+opam exec -- dune build @fmt --auto-promote 2>/dev/null || true
+
+if ! opam exec -- dune build @fmt 2>/dev/null; then
+  echo "dune fmt found issues that --auto-promote could not fix." >&2
+  echo "run 'make fmt-fix' to see what changed, fix manually, then retry." >&2
   exit 1
 fi
 

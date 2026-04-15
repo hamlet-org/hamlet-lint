@@ -99,10 +99,52 @@ jobs:
           opam exec -- dune build
           opam exec -- dune runtest
 
+      - name: Check tag state
+        id: tag
+        run: |
+          git fetch --tags origin
+          head_sha=$(git rev-parse HEAD)
+          # dereference annotated tags (^{}) to get the underlying commit
+          tag_commit=$(git ls-remote origin "refs/tags/${TAG_NAME}^{}" | awk '{print $1}')
+          if [ -z "$tag_commit" ]; then
+            tag_commit=$(git ls-remote origin "refs/tags/${TAG_NAME}" | awk '{print $1}')
+          fi
+          if [ -z "$tag_commit" ]; then
+            echo "tag ${TAG_NAME} does not exist on origin, will create it"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          elif [ "$tag_commit" = "$head_sha" ]; then
+            echo "tag ${TAG_NAME} already points to HEAD (${head_sha}), skipping creation"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            cat >&2 <<DIAG
+
+          *** TAG CONFLICT ***
+
+          The tag ${TAG_NAME} already exists on origin, but it points to
+          a different commit than the one this workflow is running on.
+
+            tag   → ${tag_commit}
+            HEAD  → ${head_sha}
+
+          Git tags are immutable once published. Moving a tag would break
+          anyone who has already fetched the tarball, and opam lockfiles
+          or CI caches that recorded the old checksum would silently get
+          the wrong source.
+
+          If you are re-running the same release:
+            Delete the tag and its GitHub Release first, then re-run.
+
+          If you are publishing a new version:
+            Bump the version so a new tag is created instead.
+
+          DIAG
+            exit 1
+          fi
+
       - name: Create git archive
         id: archive
         run: |
-          mkdir -p dist
+          rm -rf dist && mkdir -p dist
           TARBALL="dist/hamlet-lint-${PKG_VERSION}.tar.gz"
           git archive --format=tar.gz --prefix="hamlet-lint-${PKG_VERSION}/" \
             -o "$TARBALL" HEAD
@@ -111,6 +153,7 @@ jobs:
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Create annotated tag
+        if: steps.tag.outputs.exists == 'false'
         run: |
           git tag -a "$TAG_NAME" -m "hamlet-lint ${PKG_VERSION}"
           git push origin "$TAG_NAME"
@@ -119,9 +162,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$TAG_NAME" "${{ steps.archive.outputs.tarball }}" \
-            --title "hamlet-lint ${PKG_VERSION}" \
-            --notes "Packaging release for hamlet ${HAMLET_VERSION} on OCaml ${OCAML_TARGET}. See CHANGELOG.md for walker-level changes."
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "GitHub Release ${TAG_NAME} already exists, skipping creation"
+          else
+            gh release create "$TAG_NAME" "${{ steps.archive.outputs.tarball }}" \
+              --title "hamlet-lint ${PKG_VERSION}" \
+              --notes "Packaging release for hamlet ${HAMLET_VERSION} on OCaml ${OCAML_TARGET}. See CHANGELOG.md for walker-level changes."
+          fi
           TARBALL_URL=$(gh release view "$TAG_NAME" --json assets -q '.assets[0].url')
           echo "TARBALL_URL=$TARBALL_URL" >> "$GITHUB_ENV"
 
@@ -169,6 +216,20 @@ jobs:
           PAIRS: ${{ needs.plan.outputs.pairs }}
           COUNT: ${{ needs.plan.outputs.count }}
         run: |
+          # Check for an existing PR before doing any work. Match on
+          # "hamlet-lint" in the title among open PRs on the fork.
+          existing=$(gh pr list \
+            --repo ocaml/opam-repository \
+            --search "[new release] hamlet-lint in:title" \
+            --state open \
+            --json number,title \
+            --jq '.[] | select(.title | contains("hamlet-lint")) | .number' \
+            | head -n1)
+          if [ -n "$existing" ]; then
+            echo "opam-repository PR #${existing} already open for hamlet-lint, skipping"
+            exit 0
+          fi
+
           WORKDIR=$(mktemp -d)
           gh repo clone ocaml/opam-repository "$WORKDIR" -- --depth=1
           cd "$WORKDIR"
