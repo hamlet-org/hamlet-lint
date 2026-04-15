@@ -30,7 +30,7 @@ let handled () =
 `prog`'s errors row has exactly one inhabitant: `` `NotFound ``. The
 handler discharges it and recovers to `success 0`, so you would
 expect `handled` to have the empty errors row. Instead OCaml infers
-`[> `Forbidden | `Timeout ]`: the two forwarding arms introduce
+`` [> `Forbidden | `Timeout ] ``: the two forwarding arms introduce
 `` `Timeout `` and `` `Forbidden `` into the output row out of
 nowhere. Any caller of `handled` now has to prove it can handle
 errors that the program provably cannot raise. That is phantom row

@@ -402,7 +402,7 @@ nested `let`, and cross-module), capped at depth 5 with a per-scan
 visited set so mutually recursive helpers terminate. On truncation
 the scanner contributes nothing for that path. Each arm's own
 pattern tags are subtracted from its `body_introduces`, so
-`` `T -> failure `T`` remains reportable as case (a).
+`` `T -> failure `T `` remains reportable as case (a).
 
 ### 6.2 Not instrumented (deferred to v0.2)
 

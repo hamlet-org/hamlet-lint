@@ -207,15 +207,15 @@ scanned syntactically for recognised introducer shapes instead of
 reading the type-inference-unified `'e` lower bound of the whole
 function. The walker recognises:
 
-- direct `Combinators.failure (`Tag …)`,
+- direct ``Combinators.failure (`Tag …)``,
 - direct `Combinators.failure (<Mod>.Errors.make_<name> …)`, the PPX
   constructor, mapped to its tag by a strip-prefix-and-capitalise
   heuristic,
-- direct `Combinators.try_catch _ (fun _ -> `Tag)` with an inline exn
-  handler returning a literal variant.
+- direct ``Combinators.try_catch _ (fun _ -> `Tag)`` with an inline
+  exn handler returning a literal variant.
 
 Before attaching `body_introduces` to an arm, the walker subtracts the
-arm's own pattern tags: a literal `` `T -> failure `T`` re-raise is the
+arm's own pattern tags: a literal `` `T -> failure `T `` re-raise is the
 stale-forward case (§2.3.a), not a legitimate introducer, and must not
 be self-silenced.
 
