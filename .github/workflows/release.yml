@@ -1,7 +1,10 @@
 name: release
 
-# Parameterised release job. One run = one published opam package
-# (hamlet, ocaml) pair. See docs/RELEASING.md for the full procedure.
+# Parameterised release job. One run = one published opam package for
+# one (hamlet, ocaml) pair. Typically invoked via release/run.sh, which
+# loops over missing pairs and skips anything already merged upstream.
+# Manual Run Workflow from the Actions UI is still supported for
+# one-offs, and is safe thanks to the guard job below.
 on:
   workflow_dispatch:
     inputs:
@@ -10,16 +13,43 @@ on:
         required: true
         type: string
       ocaml_target:
-        description: "The OCaml minor to build against, e.g. 5.4"
+        description: "The exact OCaml patch, e.g. 5.4.1 (must be in OCAML_PATCHES in release/versions.sh)"
         required: true
         type: choice
-        options: ["5.4"]
+        options: ["5.4.1"]
 
 permissions:
   contents: write
 
 jobs:
+  # Second layer of idempotency on top of release/run.sh. If the package
+  # is already merged on ocaml/opam-repository, skip the release job
+  # entirely. This covers the case where someone triggers Run Workflow
+  # from the UI bypassing the script, or where two invocations race.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      already: ${{ steps.check.outputs.already }}
+    steps:
+      - name: Check opam-repository for existing package
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pkg="${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}"
+          if gh api \
+               -H "Accept: application/vnd.github+json" \
+               "repos/ocaml/opam-repository/contents/packages/hamlet-lint/hamlet-lint.${pkg}" \
+               >/dev/null 2>&1; then
+            echo "hamlet-lint.${pkg} is already merged on ocaml/opam-repository; skipping release."
+            echo "already=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: guard
+    if: needs.guard.outputs.already != 'true'
     runs-on: ubuntu-latest
     env:
       HAMLET_VERSION: ${{ inputs.hamlet_version }}
@@ -43,16 +73,6 @@ jobs:
         run: |
           opam exec -- dune build
           opam exec -- dune runtest
-
-      - name: Compute OCaml bounds
-        id: bounds
-        run: |
-          MIN="${OCAML_TARGET}.0"
-          MAJOR="${OCAML_TARGET%.*}"
-          MINOR="${OCAML_TARGET#*.}"
-          MAX="${MAJOR}.$((MINOR + 1)).0"
-          echo "min=$MIN" >> "$GITHUB_OUTPUT"
-          echo "max=$MAX" >> "$GITHUB_OUTPUT"
 
       - name: Create git archive
         id: archive
@@ -87,8 +107,7 @@ jobs:
           sed \
             -e "s|%%VERSION%%|${PKG_VERSION}|g" \
             -e "s|%%HAMLET_VERSION%%|${HAMLET_VERSION}|g" \
-            -e "s|%%OCAML_MIN%%|${{ steps.bounds.outputs.min }}|g" \
-            -e "s|%%OCAML_MAX%%|${{ steps.bounds.outputs.max }}|g" \
+            -e "s|%%OCAML_TARGET%%|${OCAML_TARGET}|g" \
             -e "s|%%TARBALL_URL%%|${TARBALL_URL}|g" \
             -e "s|%%CHECKSUM_SHA256%%|${{ steps.archive.outputs.sha256 }}|g" \
             release/hamlet-lint.opam.tmpl > "$OPAM_OUT"

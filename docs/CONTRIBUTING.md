@@ -68,16 +68,17 @@ this:
 
 ## 3. How to add a new OCaml target
 
-When a new OCaml minor (say 5.5) starts being supported:
+When a new OCaml patch `<NEW>` starts being supported (today only
+`5.4.1` is in `OCAML_PATCHES`):
 
 1. Widen the top-of-file `#error` guard in `extract/compat.cppo.ml`
-   to admit the new version.
+   to admit `<NEW>`.
 2. Wrap any `compiler-libs`-facing body that drifted in
-   `#if OCAML_VERSION >= (5, 5, 0) … #else … #endif`. `compat.cppo.ml`
-   is the only file in the repo that cppo touches. Everything else is
-   plain OCaml.
-3. Loosen the `(ocaml …)` bound in `dune-project` to cover the new
-   minor.
+   `#if OCAML_VERSION = (...) … #else … #endif`. `compat.cppo.ml`
+   is the only file in the repo that cppo touches. Everything else
+   is plain OCaml.
+3. Loosen the `(ocaml …)` bound in `dune-project` to cover `<NEW>`.
 4. Add a row to the CI matrix in `.github/workflows/ci.yml` so both
-   minors are exercised on every push.
-5. Follow `RELEASING.md` §4 for the backfill release pass.
+   patches are exercised on every push.
+5. Append `<NEW>` to `OCAML_PATCHES` in `release/versions.sh`.
+6. Follow `docs/RELEASING.md` §5 for the backfill release pass.

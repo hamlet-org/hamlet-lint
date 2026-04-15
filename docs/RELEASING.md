@@ -22,21 +22,21 @@ axis you enumerate.
 
 A single published package consists of:
 
-- A **git tag** `v<hamlet>-<ocaml>` (e.g. `v0.1.0-5.4`), annotated,
-  pushed to `origin`.
+- A **git tag** `v<hamlet>-<ocaml>` (e.g. `v0.1.0-5.4.1`), annotated,
+  pushed to `origin`. The OCaml part is the full `major.minor.patch`:
+  one build = one patch, the label names it exactly.
 - A **GitHub Release** with the same name and a `git archive` tarball
   asset.
 - An **opam-repository PR** adding one directory under
   `packages/hamlet-lint/`, with an `opam` file rendered from
-  `release/hamlet-lint.opam.tmpl`.
+  `release/hamlet-lint.opam.tmpl`. The rendered `ocaml` constraint is
+  an exact pin `{= "<patch>"}`: `extract/compat.cppo.ml`'s `#error`
+  guard accepts exactly that patch, so the build artifact is
+  patch-specific and the package metadata says so.
 
 One workflow run produces exactly one of each. Shipping for multiple
-`(hamlet, ocaml)` pairs means triggering the workflow multiple times
-(or running a loop; see §4 for the backfill pattern).
-
-Trigger: **Actions → release → Run workflow** on
-`.github/workflows/release.yml`, with `hamlet_version=X.Y.Z` and
-`ocaml_target=5.4`.
+`(hamlet, ocaml)` pairs means triggering the workflow multiple times.
+Use `./release/run.sh` (see §3) instead of typing them in by hand.
 
 ---
 
@@ -87,7 +87,43 @@ to date before triggering.
 
 ---
 
-## 3. Cutting a hamlet release pass (most common)
+## 3. The release dispatcher: `release/run.sh`
+
+Both release passes below are driven by `./release/run.sh`. The script
+reads `release/versions.sh` for the supported OCaml patches, then for
+every `(hamlet, ocaml)` pair:
+
+1. Checks `packages/hamlet-lint/hamlet-lint.<pair>/` on
+   `ocaml/opam-repository`. Present = merged, skip.
+2. Checks for an open PR titled `hamlet-lint <pair>` on the same repo.
+   Present = in flight, skip.
+3. Otherwise invokes `gh workflow run release.yml` with the pair.
+
+The release workflow itself repeats check 1 in a `guard` job so that a
+direct Run Workflow from the Actions UI is equally safe.
+
+`release/versions.sh` defines `OCAML_PATCHES`, the supported OCaml
+patches, grouped by `major.minor` line for readability. Each entry is
+a full opam version string, including prereleases like `5.5.0~alpha1`.
+The patch is simultaneously the label that appears in the package
+version string and the exact pin in the generated opam file (no
+derived bounds). Mirroring is still required with
+`.github/workflows/ci.yml` (matrix row), the `#error` guard in
+`extract/compat.cppo.ml`, and the `(ocaml ...)` bound in
+`dune-project`, but all of them now agree on the exact same patch.
+
+There is no `HAMLET_VERSION` in `versions.sh`. A release is always
+for an explicit hamlet version that has already been published on
+opam-repository; pass it on the command line.
+
+Invocations:
+
+```sh
+./release/run.sh 0.1.0           # one hamlet version, every patch
+./release/run.sh 0.1.0 0.2.0     # backfill over several hamlet versions
+```
+
+## 4. Cutting a hamlet release pass (most common)
 
 Hamlet has just published `X.Y.Z` to opam-repository. Do this.
 
@@ -103,49 +139,57 @@ Hamlet has just published `X.Y.Z` to opam-repository. Do this.
    walker changes were needed, add nothing: the release event is
    recorded by GitHub Releases, not by `CHANGELOG.md` (see §2).
 
-3. **Bump `HAMLET_VERSION` in `.github/workflows/ci.yml`** to
-   `X.Y.Z`, so CI runs against the new hamlet from now on. Commit
-   these two changes together on `main`.
+3. **Bump `HAMLET_VERSION` in `.github/workflows/ci.yml`** to `X.Y.Z`
+   so CI keeps testing `main` against the current hamlet.
 
-4. **Trigger the release workflow once per supported OCaml minor.**
-   For today: one run with `hamlet_version=X.Y.Z`, `ocaml_target=5.4`.
-   When 5.5 is supported, repeat with `ocaml_target=5.5`.
+4. **Run `./release/run.sh X.Y.Z`.** The script crosses the new hamlet
+   version with every patch in `OCAML_PATCHES`, skips what is already
+   merged, and dispatches one workflow run per missing pair.
 
 5. **Verify the opam-repository PRs are green** and merge once CI
    passes upstream.
 
-## 4. Cutting an OCaml release pass (backfill)
+## 5. Cutting an OCaml release pass (backfill)
 
-A new OCaml minor (say 5.5) has just become supported. You want every
-past hamlet release to be installable on 5.5.
+Some future OCaml patch `<NEW>` has become supported and you want
+every past hamlet release to be installable on it. Today only
+`5.4.1` is in `OCAML_PATCHES`; this section describes the shape of
+the procedure when a second entry gets added, not a commitment to
+any specific future version.
 
-1. **Pull `main` and verify green** against OCaml 5.5 locally. Fix
+1. **Pull `main` and verify green** against `<NEW>` locally. Fix
    any `compiler-libs` drift in `extract/compat.cppo.ml` on `main`,
-   widening the `#error` guard and adding `#if OCAML_VERSION >= (5, 5, 0)`
-   branches as needed. Loosen the `(ocaml …)` bound in `dune-project`.
-   Add a 5.5 row to the CI matrix in `.github/workflows/ci.yml`.
+   widening the `#error` guard to also accept `<NEW>` via a new
+   `#if OCAML_VERSION = (...)` branch. Loosen the `(ocaml …)`
+   bound in `dune-project` so both patches pass. Add a `<NEW>` row
+   to the CI matrix in `.github/workflows/ci.yml`.
 
-2. **Add a single `CHANGELOG.md` entry** for the new OCaml target,
-   titled `## YYYY-MM-DD: OCaml 5.5 target added [5.5 only]`,
-   summarising the compat-firewall work. This is one entry, not
-   N; it describes the walker work once, regardless of how many
-   past hamlet releases you then backfill.
+2. **Extend `release/versions.sh`** in the same commit: append
+   `<NEW>` to its `major.minor` row in `OCAML_PATCHES` (or add a new
+   row if it's a new minor line). No bounds to edit: the patch is
+   the pin.
 
-3. **Trigger the release workflow for every past hamlet release**
-   with `hamlet_version=X.Y.Z` and `ocaml_target=5.5`. This is the
-   backfill loop, and it is mechanical: N past hamlet versions = N
-   workflow runs, all from the same `main` commit.
+3. **Add a single `CHANGELOG.md` entry** for the new target,
+   titled `## YYYY-MM-DD: OCaml <NEW> target added [<NEW> only]`,
+   summarising the compat-firewall work. One entry describes the
+   walker work once, regardless of how many past hamlet releases
+   you then backfill.
 
-   You can script this with `gh workflow run` in a shell loop:
+4. **Run `./release/run.sh` with every past hamlet version as an
+   argument.** Example:
 
-   ```bash
-   for v in 0.1.0 0.2.0 0.3.0; do
-     gh workflow run release.yml \
-       -f hamlet_version=$v -f ocaml_target=5.5
-   done
+   ```sh
+   ./release/run.sh 0.1.0 0.2.0 0.3.0
    ```
 
-4. **Monitor the opam-repository PRs.** Each one is independent.
+   The script crosses each hamlet with every patch in
+   `OCAML_PATCHES` (now including `<NEW>`), skips pairs that
+   already exist on opam-repository, and dispatches one workflow
+   run per missing pair. On a fresh backfill this is `N × 1` new
+   runs (N past hamlets × the new OCaml patch); pairs for the old
+   patches are all skipped.
+
+5. **Monitor the opam-repository PRs.** Each one is independent.
 
 ### Why backfill is not a no-op rename
 
@@ -179,8 +223,7 @@ steps:
    substituting:
    - `%%VERSION%%` → `<hamlet_version>-<ocaml_target>`
    - `%%HAMLET_VERSION%%` → `<hamlet_version>`
-   - `%%OCAML_MIN%%` → `<ocaml_target>.0`
-   - `%%OCAML_MAX%%` → next minor
+   - `%%OCAML_TARGET%%` → `<ocaml_target>` (the exact patch)
    - `%%TARBALL_URL%%` + `%%CHECKSUM_SHA256%%` after uploading the
      archive to the GitHub Release.
 6. **Create git tag** `v<hamlet_version>-<ocaml_target>`, push it.
