@@ -181,9 +181,10 @@ to `hamlet-lint`. Check with
 `hamlet-lint-extract _build/default/lib | head -1`: it should start
 with `{"kind":"header"`.
 
-**`no available version`** on `opam install`: your OCaml minor has
-no hamlet-lint release yet. Check `opam list -A hamlet-lint` and
-file an issue if you need your minor supported.
+**`no available version`** on `opam install`: your exact OCaml patch
+has no hamlet-lint release yet (we patch-pin via tilde, e.g.
+`hamlet-lint.0.1.0~5.4.1`). Check `opam list -A hamlet-lint` and
+file an issue if you need your patch supported.
 
 **Finding you expected is silent**: try `HAMLET_LINT_DEBUG=1
 hamlet-lint-extract …` on stderr to see which sites the walker

@@ -76,7 +76,7 @@ were built from the same `main` commit; the only differences are the
 pinned hamlet version and the fixture compilation target.
 
 **Two mandatory axes.** Every hamlet release (lockstep) and every
-OCaml minor (compat firewall, since the extractor links
+supported OCaml patch (compat firewall, since the extractor links
 `compiler-libs`) triggers a release pass from the current `main`. New
 hamlet: publish one package per supported OCaml. New OCaml: backfill
 one package per past hamlet. `main` only moves forward. The firewall

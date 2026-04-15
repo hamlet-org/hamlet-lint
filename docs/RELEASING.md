@@ -7,10 +7,10 @@ the lockstep-with-hamlet, single-trunk packaging model lives in
 Two kinds of release event exist:
 
 - **Hamlet release pass.** Triggered by every new `hamlet.X.Y.Z` on
-  opam-repository. Publishes `hamlet-lint.X.Y.Z-<ocaml>` for every
-  supported OCaml minor, from the current `main` commit.
-- **OCaml release pass (backfill).** Triggered when a new OCaml minor
-  starts being supported. Publishes `X.Y.Z-<new-ocaml>` for every past
+  opam-repository. Publishes `hamlet-lint.X.Y.Z~<ocaml>` for every
+  supported OCaml patch, from the current `main` commit.
+- **OCaml release pass (backfill).** Triggered when a new OCaml patch
+  starts being supported. Publishes `X.Y.Z~<new-ocaml>` for every past
   hamlet release, from the current `main` commit.
 
 Both paths use the same release workflow; they differ only in which
@@ -208,8 +208,8 @@ any specific future version.
 
 ### Why backfill is not a no-op rename
 
-Every package built for a new OCaml minor exercises the walker's
-`compiler-libs` code against that minor's `Typedtree` / `Cmt_format`
+Every package built for a new OCaml patch exercises the walker's
+`compiler-libs` code against that patch's `Typedtree` / `Cmt_format`
 shape. A backfill that passes CI is a real test that the walker's
 compat firewall still works against that hamlet's fixtures; it is
 not busywork.
@@ -236,7 +236,7 @@ steps:
    declared `(hamlet, ocaml)` pair must not ship.
 5. **Render opam file** from `release/hamlet-lint.opam.tmpl` by
    substituting:
-   - `%%VERSION%%` → `<hamlet_version>-<ocaml_target>`
+   - `%%VERSION%%` → `<hamlet_version>~<ocaml_target>`
    - `%%HAMLET_VERSION%%` → `<hamlet_version>`
    - `%%OCAML_TARGET%%` → `<ocaml_target>` (the exact patch)
    - `%%TARBALL_URL%%` + `%%CHECKSUM_SHA256%%` after uploading the
@@ -304,7 +304,7 @@ as a second layer of verification. Belt and braces.
 
 Before triggering the workflow:
 
-- [ ] `main` is green in CI for the target OCaml minor.
+- [ ] `main` is green in CI for the target OCaml patch.
 - [ ] `hamlet.<hamlet_version>` is merged on opam-repository and
       installable via `opam install hamlet.<hamlet_version>`.
 - [ ] `CHANGELOG.md` is up to date if the walker changed since the
@@ -329,6 +329,6 @@ Then: **Actions → release → Run workflow → fill inputs → go**.
 - `CHANGELOG.md`: single chronological walker/analyzer history.
   Decoupled from release events.
 - `extract/compat.cppo.ml`: compiler-libs firewall, cppo-preprocessed;
-  edit here (and widen the `#error` guard) when a new OCaml minor
-  breaks the walker.
+  edit here (and widen the `#error` guard) when a new OCaml patch
+  starts being supported.
 - `README.md` §2: the versioning model rationale.

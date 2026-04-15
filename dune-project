@@ -22,15 +22,16 @@
 ; Dev-time hamlet-lint package metadata.
 ;
 ; The generated hamlet-lint.opam file in this repo is what `opam install
-; .` and CI use locally. It pins to a SINGLE OCaml minor — the one the
+; .` and CI use locally. It pins to a SINGLE OCaml patch — the one the
 ; maintainer is currently developing against — and to a SINGLE hamlet
 ; version. It is NOT the file that ships to opam-repository.
 ;
 ; Release-time opam files are produced from hamlet-lint.opam.tmpl by
-; the `release` workflow, which substitutes both a compiler-specific
-; OCaml constraint and the exact hamlet version for the package being
-; published. Every published package corresponds to one (hamlet,
-; ocaml-minor) pair. See README.md for the versioning model.
+; the `release` workflow, which substitutes both a patch-exact OCaml
+; constraint and the exact hamlet version for the package being
+; published. Every published package corresponds to one
+; (hamlet, ocaml-patch) pair, named hamlet-lint.<hamlet>~<ocaml> on
+; opam-repository. See README.md for the versioning model.
 (package
  (name hamlet-lint)
  (synopsis "Semantic linter for Hamlet")
