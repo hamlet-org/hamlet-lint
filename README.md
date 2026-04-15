@@ -36,6 +36,21 @@ nowhere. Any caller of `handled` now has to prove it can handle
 errors that the program provably cannot raise. That is phantom row
 growth, and hamlet-lint reports both arms as stale.
 
+The same shape on the services row:
+
+```ocaml
+let prog () : (int, 'e, [> `Logger ]) Hamlet.t = need `Logger
+
+let handled env =
+  provide (prog ()) ~f:(function
+    | `Logger as r  -> give r env
+    | `Metrics as r -> need r)
+```
+
+`prog` asks only for `` `Logger ``, the `` `Logger `` arm satisfies it,
+and the `` `Metrics `` arm is pure forwarding on a tag that was never
+requested. hamlet-lint reports it.
+
 The one-line rule: *every tag that appears on the output row but not
 on the input row must be attributable to a real introducer on the
 path; if the only thing adding it is a forwarding arm that
