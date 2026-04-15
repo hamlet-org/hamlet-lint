@@ -20,7 +20,7 @@ exactly.
 Installs `hamlet-lint-extract` and `hamlet-lint` on `PATH`.
 
 As a **project dev dependency**, pin the exact version matching the
-hamlet release you depend on:
+hamlet~ocaml releases you depend on:
 
 ```
 depends: [
