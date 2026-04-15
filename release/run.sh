@@ -21,9 +21,10 @@
 #
 # Idempotency: a pair is skipped if its package directory already
 # exists on ocaml/opam-repository, or if an open PR titled
-# "hamlet-lint <pair>" is already up. Local git state is not consulted
-# — a stale tag from a failed run is a separate cleanup
-# (`git push origin :v<pair>`).
+# "[new release] hamlet-lint (<pair>)" is already up. Local git state
+# is not consulted — a stale tag from a failed run is a separate
+# cleanup (`git push origin :v<hamlet>-<ocaml>`, the tag uses `-`
+# because git refs forbid `~`).
 #
 # Requires: gh (authenticated, with read on ocaml/opam-repository and
 # workflow-dispatch on hamlet-org/hamlet-lint) and jq.
@@ -42,12 +43,12 @@ source "${here}/versions.sh"
 
 # Enumerate every hamlet version ever published on opam-repository, by
 # listing packages/hamlet-lint/ and stripping the hamlet-lint. prefix
-# and the -<ocaml> suffix. Deduplicated and sorted.
+# and the ~<ocaml> suffix. Deduplicated and sorted.
 list_published_hamlets() {
   gh api \
       -H "Accept: application/vnd.github+json" \
       "repos/ocaml/opam-repository/contents/packages/hamlet-lint" \
-      --jq '.[].name | sub("^hamlet-lint\\."; "") | split("-")[0]' \
+      --jq '.[].name | sub("^hamlet-lint\\."; "") | split("~")[0]' \
     | sort -uV
 }
 
@@ -80,12 +81,12 @@ is_published() {
       >/dev/null 2>&1
 }
 
-# Open PR on opam-repository titled "hamlet-lint <pair>"?
+# Open PR on opam-repository titled "[new release] hamlet-lint (<pair>)"?
 has_open_pr() {
   local pkg="$1"
   local count
   count=$(gh pr list --repo ocaml/opam-repository --state open \
-            --search "hamlet-lint ${pkg} in:title" \
+            --search "hamlet-lint (${pkg}) in:title" \
             --json number | jq 'length')
   [ "$count" -gt 0 ]
 }
@@ -94,7 +95,11 @@ dispatched=0
 skipped=0
 for hamlet in "${hamlets[@]}"; do
   for ocaml in "${patches[@]}"; do
-    pkg="${hamlet}-${ocaml}"
+    # Package directory on opam-repository uses the tilde convention
+    # (matches release.yml's PKG_VERSION). Git tags / branches use a
+    # hyphen because git refs forbid `~`; that asymmetry only matters
+    # to release.yml, which derives both forms from the same inputs.
+    pkg="${hamlet}~${ocaml}"
 
     if is_published "${pkg}"; then
       echo "skip  ${pkg}: already merged on ocaml/opam-repository"

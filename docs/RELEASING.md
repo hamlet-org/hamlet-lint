@@ -24,15 +24,20 @@ A single published package consists of:
 
 - A **git tag** `v<hamlet>-<ocaml>` (e.g. `v0.1.0-5.4.1`), annotated,
   pushed to `origin`. The OCaml part is the full `major.minor.patch`:
-  one build = one patch, the label names it exactly.
+  one build = one patch, the label names it exactly. The tag uses a
+  hyphen (not the tilde used by the opam package version) because
+  git refs forbid `~`; see `git-check-ref-format(1)`.
 - A **GitHub Release** with the same name and a `git archive` tarball
   asset.
 - An **opam-repository PR** adding one directory under
-  `packages/hamlet-lint/`, with an `opam` file rendered from
-  `release/hamlet-lint.opam.tmpl`. The rendered `ocaml` constraint is
-  an exact pin `{= "<patch>"}`: `extract/compat.cppo.ml`'s `#error`
-  guard accepts exactly that patch, so the build artifact is
-  patch-specific and the package metadata says so.
+  `packages/hamlet-lint/`, named `hamlet-lint.<hamlet>~<ocaml>` (e.g.
+  `hamlet-lint.0.1.0~5.4.1`), with an `opam` file rendered from
+  `release/hamlet-lint.opam.tmpl`. The rendered `ocaml` constraint
+  is an exact pin `{= "<patch>"}`: `extract/compat.cppo.ml`'s
+  `#error` guard accepts exactly that patch, so the build artifact
+  is patch-specific and the package metadata says so. The PR title
+  is `[new release] hamlet-lint (<hamlet>~<ocaml>)`, matching the
+  opam-repository convention.
 
 One workflow run produces exactly one of each. Shipping for multiple
 `(hamlet, ocaml)` pairs means triggering the workflow multiple times.
@@ -54,7 +59,7 @@ only one OCaml target (typically compat-firewall work).
 ```
 
 **No "version" heading.** The packaging label
-`hamlet-lint.<hamlet>-<ocaml>` is not a line of walker development;
+`hamlet-lint.<hamlet>~<ocaml>` is not a line of walker development;
 many packages can be built from the same `main` commit without any
 entry in `CHANGELOG.md` (because the walker did not change). And many
 entries can accumulate between releases.
@@ -93,9 +98,10 @@ Both release passes below are driven by `./release/run.sh`. The script
 reads `release/versions.sh` for the supported OCaml patches, then for
 every `(hamlet, ocaml)` pair:
 
-1. Checks `packages/hamlet-lint/hamlet-lint.<pair>/` on
+1. Checks `packages/hamlet-lint/hamlet-lint.<hamlet>~<ocaml>/` on
    `ocaml/opam-repository`. Present = merged, skip.
-2. Checks for an open PR titled `hamlet-lint <pair>` on the same repo.
+2. Checks for an open PR titled
+   `[new release] hamlet-lint (<hamlet>~<ocaml>)` on the same repo.
    Present = in flight, skip.
 3. Otherwise invokes `gh workflow run release.yml` with the pair.
 
@@ -239,7 +245,7 @@ steps:
 7. **Create GitHub Release** with the tag, upload the `git archive`
    tarball as an asset.
 8. **Open opam-repository PR** via `gh`, forking if needed, creating
-   `packages/hamlet-lint/hamlet-lint.<hamlet>-<ocaml>/opam`,
+   `packages/hamlet-lint/hamlet-lint.<hamlet>~<ocaml>/opam`,
    committing, pushing, opening the PR.
 
 ### 5.1 Option: pre-preprocess the cppo file per target
@@ -268,7 +274,7 @@ downstream.
 `dune-release` is the standard opam release tool, but three features
 of our scheme fight its defaults:
 
-1. Our version strings contain a `-` suffix (`0.1.0-5.4`). The
+1. Our version strings contain a `~` suffix (`0.1.0~5.4.1`). The
    `dune-release` parser does not handle this shape as we want.
 2. We publish many packages from one commit (lockstep backfill).
    `dune-release` assumes one tag = one shipped package.

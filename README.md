@@ -62,14 +62,16 @@ formally and lists the eight combinators where it applies.
 ## 2. Versioning model
 
 hamlet-lint is published as one opam package per
-`(hamlet, ocaml-minor)` pair. Package names look like
-`hamlet-lint.<hamlet>-<ocaml>`, e.g. `hamlet-lint.0.1.0-5.4`. Each
-package pins `hamlet = <hamlet>` exactly and targets one OCaml minor.
+`(hamlet, ocaml-patch)` pair. Package names look like
+`hamlet-lint.<hamlet>~<ocaml>`, e.g. `hamlet-lint.0.1.0~5.4.1`. Each
+package pins `hamlet = <hamlet>` and `ocaml = <ocaml>` exactly. The
+tilde follows the opam convention for compiler-tied variant suffixes
+(cf. `ppxlib.0.38.0~5.5preview`).
 
 **One codebase.** There is only one hamlet-lint source tree: `main`.
 Package version strings are labels of packaging, not lines of
-divergent source history. When `hamlet-lint.0.2.0-5.4` and
-`hamlet-lint.0.3.0-5.4` sit side by side on opam-repository, both
+divergent source history. When `hamlet-lint.0.2.0~5.4.1` and
+`hamlet-lint.0.3.0~5.4.1` sit side by side on opam-repository, both
 were built from the same `main` commit; the only differences are the
 pinned hamlet version and the fixture compilation target.
 

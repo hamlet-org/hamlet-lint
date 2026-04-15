@@ -36,7 +36,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pkg="${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}"
+          pkg="${{ inputs.hamlet_version }}~${{ inputs.ocaml_target }}"
           if gh api \
                -H "Accept: application/vnd.github+json" \
                "repos/ocaml/opam-repository/contents/packages/hamlet-lint/hamlet-lint.${pkg}" \
@@ -54,8 +54,16 @@ jobs:
     env:
       HAMLET_VERSION: ${{ inputs.hamlet_version }}
       OCAML_TARGET: ${{ inputs.ocaml_target }}
-      PKG_VERSION: ${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}
+      # Opam package version uses the tilde convention for the
+      # OCaml-target suffix (idiomatic on opam-repository, see
+      # ppxlib.0.38.0~5.5preview for a precedent). The git tag and
+      # PR branch name MUST use a hyphen instead, because git refs
+      # forbid `~` (see git-check-ref-format(1)). The two namespaces
+      # are kept consistent by always deriving them from the same
+      # two inputs.
+      PKG_VERSION: ${{ inputs.hamlet_version }}~${{ inputs.ocaml_target }}
       TAG_NAME: v${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}
+      BRANCH_NAME: hamlet-lint-${{ inputs.hamlet_version }}-${{ inputs.ocaml_target }}
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -120,15 +128,15 @@ jobs:
           WORKDIR=$(mktemp -d)
           gh repo clone ocaml/opam-repository "$WORKDIR" -- --depth=1
           cd "$WORKDIR"
-          git checkout -b "hamlet-lint-${PKG_VERSION}"
+          git checkout -b "${BRANCH_NAME}"
           PKG_DIR="packages/hamlet-lint/hamlet-lint.${PKG_VERSION}"
           mkdir -p "$PKG_DIR"
           cp "${GITHUB_WORKSPACE}/rendered/opam" "$PKG_DIR/opam"
           git add "$PKG_DIR/opam"
           git -c user.name="hamlet-lint release bot" \
               -c user.email="release@hamlet-lint" \
-              commit -m "hamlet-lint ${PKG_VERSION}"
+              commit -m "[new release] hamlet-lint (${PKG_VERSION})"
           gh pr create \
             --repo ocaml/opam-repository \
-            --title "hamlet-lint ${PKG_VERSION}" \
+            --title "[new release] hamlet-lint (${PKG_VERSION})" \
             --body "Automated release of hamlet-lint ${PKG_VERSION} (hamlet ${HAMLET_VERSION}, OCaml ${OCAML_TARGET})."

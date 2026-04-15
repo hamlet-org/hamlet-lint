@@ -6,15 +6,15 @@
 # requires. This template is only consumed by the release workflow
 # (.github/workflows/release.yml), which substitutes the placeholders
 # below and produces a target-specific opam file named like
-# `hamlet-lint.<hamlet_version>-<ocaml_target>.opam` (e.g.
-# `hamlet-lint.0.1.0-5.4.opam`) to push into opam-repository.
+# `hamlet-lint.<hamlet_version>~<ocaml_target>/opam` (e.g.
+# `hamlet-lint.0.1.0~5.4.1/opam`) to push into opam-repository.
 #
 # It lives under `release/` instead of the repo root so dune does NOT
 # pick it up as a `.opam.template` source for its own opam-file
 # generation.
 #
 # Placeholder reference:
-#   %%VERSION%%         e.g. 0.1.0-5.4.1 — the full opam version string
+#   %%VERSION%%         e.g. 0.1.0~5.4.1 — the full opam version string
 #   %%HAMLET_VERSION%%  e.g. 0.1.0       — matching hamlet release
 #   %%OCAML_TARGET%%    e.g. 5.4.1       — exact OCaml patch (the build
 #                       artifact is patch-specific, so the opam ocaml
