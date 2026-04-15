@@ -121,6 +121,7 @@ Invocations:
 ```sh
 ./release/run.sh 0.1.0           # one hamlet version, every patch
 ./release/run.sh 0.1.0 0.2.0     # backfill over several hamlet versions
+./release/run.sh --all           # backfill every hamlet ever published
 ```
 
 ## 4. Cutting a hamlet release pass (most common)
@@ -175,11 +176,19 @@ any specific future version.
    walker work once, regardless of how many past hamlet releases
    you then backfill.
 
-4. **Run `./release/run.sh` with every past hamlet version as an
-   argument.** Example:
+4. **Run `./release/run.sh --all`.** Only after the new patch has
+   been added to `OCAML_PATCHES` in step 2 — the `--all` form does
+   not enlarge the OCaml axis, it just enumerates every hamlet ever
+   published on `ocaml/opam-repository` (by listing
+   `packages/hamlet-lint/` and stripping the `-<ocaml>` suffix) and
+   crosses each with the current `OCAML_PATCHES`. Without step 2 the
+   new patch is not in the support window and `--all` will dispatch
+   nothing new (every existing pair is already merged and skipped).
+   Equivalent to passing the full list by hand:
 
    ```sh
-   ./release/run.sh 0.1.0 0.2.0 0.3.0
+   ./release/run.sh 0.1.0 0.2.0 0.3.0   # explicit form
+   ./release/run.sh --all               # auto-enumerated form
    ```
 
    The script crosses each hamlet with every patch in

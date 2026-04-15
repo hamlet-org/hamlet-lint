@@ -5,6 +5,15 @@
 # Usage:
 #   ./release/run.sh 0.1.0           # one hamlet version
 #   ./release/run.sh 0.1.0 0.2.0     # backfill several hamlet versions
+#   ./release/run.sh --all           # backfill every hamlet ever
+#                                    # published on opam-repository.
+#                                    # Use this AFTER a new OCaml
+#                                    # patch has been released AND
+#                                    # added to OCAML_PATCHES in
+#                                    # release/versions.sh: the new
+#                                    # patch is the only column that
+#                                    # produces non-skipped pairs,
+#                                    # everything else is already out.
 #
 # At least one hamlet version is required: a release always names an
 # explicit hamlet, no "current main" default. The OCaml axis comes
@@ -23,7 +32,7 @@ set -euo pipefail
 
 if [ "$#" -lt 1 ]; then
   echo "usage: $0 <hamlet-version> [<hamlet-version> ...]" >&2
-  echo "       (at least one hamlet version is required; no default)" >&2
+  echo "       $0 --all" >&2
   exit 2
 fi
 
@@ -31,7 +40,30 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=release/versions.sh
 source "${here}/versions.sh"
 
-hamlets=("$@")
+# Enumerate every hamlet version ever published on opam-repository, by
+# listing packages/hamlet-lint/ and stripping the hamlet-lint. prefix
+# and the -<ocaml> suffix. Deduplicated and sorted.
+list_published_hamlets() {
+  gh api \
+      -H "Accept: application/vnd.github+json" \
+      "repos/ocaml/opam-repository/contents/packages/hamlet-lint" \
+      --jq '.[].name | sub("^hamlet-lint\\."; "") | split("-")[0]' \
+    | sort -uV
+}
+
+if [ "$1" = "--all" ]; then
+  if [ "$#" -ne 1 ]; then
+    echo "--all takes no further arguments" >&2
+    exit 2
+  fi
+  mapfile -t hamlets < <(list_published_hamlets)
+  if [ "${#hamlets[@]}" -eq 0 ]; then
+    echo "no hamlet-lint packages found on ocaml/opam-repository" >&2
+    exit 2
+  fi
+else
+  hamlets=("$@")
+fi
 mapfile -t patches < <(all_patches)
 
 if [ "${#patches[@]}" -eq 0 ]; then
