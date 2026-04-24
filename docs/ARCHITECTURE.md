@@ -204,6 +204,7 @@ Subsequent records are `candidate`:
 {
   "kind": "candidate",
   "site_kind": "catch",
+  "combinator": "catch",
   "loc": {"file":"app.ml","line":42,"col":2},
   "declared": ["Console_error","Database_error"],
   "upstream": ["Console_error"]
@@ -211,6 +212,9 @@ Subsequent records are `candidate`:
 ```
 
 - `site_kind`: `"catch"` (slot `'e`) or `"provide"` (slot `'r`).
+- `combinator`: short callee name (e.g. `"catch"`, `"map_error"`,
+  `"Layer.provide_to_effect"`), used by the report so the user sees
+  which combinator fired.
 - `loc`: the application site, where the finding will land.
 - `declared`: handler's declared universe in source order.
 - `upstream`: upstream's row tags in source order.
