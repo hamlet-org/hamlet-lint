@@ -52,14 +52,25 @@ a different bug class and out of scope here.
 
 The callee is recognised when either:
 
-1. `Path.name` of the called identifier equals
-   `Hamlet.Combinators.catch` (or `.provide`), or
-2. the last segment of the path is `catch` / `provide` *and*
-   the value's type structurally mentions a 3-arg
-   `Hamlet.t` constructor anywhere in its surface — used as a
-   structural fingerprint when the path is shortened by
-   `let open Hamlet.Combinators in ...` or aliased through
-   `let module HC = Hamlet.Combinators in HC.catch`.
+1. `Path.name` of the called identifier equals one of the entries in
+   `single_arg_paths` / `curried_paths` (e.g.
+   `Hamlet.Combinators.catch`, `Hamlet.Layer.provide_to_effect`), or
+2. the last segment of the path matches a known bare name (`catch` /
+   `provide` / `map_error` / `provide_to_*`) *and* both:
+   - the value's type structurally mentions a 3-arg `Hamlet.t`
+     constructor whose root identifier is `Hamlet` or `Hamlet__*`
+     (the dune-mangled wrapper), and
+   - the callee provably comes from Hamlet — either the callee path
+     itself is rooted in `Hamlet` / `Hamlet__*` (covers
+     `let open Hamlet.Combinators in catch ...`) or the callee's
+     `value_description.val_loc` points at `hamlet.mli` /
+     `hamlet.ml` (covers
+     `let module HC = Hamlet.Combinators in HC.catch`, where the
+     path root is the local alias `HC` rather than `Hamlet`).
+
+The provenance gate rules out user-defined helpers that happen to be
+named `catch` / `provide` / ... and operate on `Hamlet.t` (regression
+test: `test/cases/edge_cases.ml::e11`).
 
 ### 3.2 Upstream
 
