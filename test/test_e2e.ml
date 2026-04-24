@@ -79,6 +79,11 @@ let cases =
       expected_exit = 1;
       expected_lines = [ 34; 59; 94; 160; 183 ];
     };
+    {
+      fixture = "Cross_cu_cases";
+      expected_exit = 1;
+      expected_lines = [ 40; 71 ];
+    };
   ]
 
 (* ============================================================ *)

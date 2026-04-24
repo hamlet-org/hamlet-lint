@@ -4,77 +4,90 @@ What hamlet-lint does *not* catch today, and why.
 
 ## 1. Inline upstream (false negative)
 
-Calls where the upstream effect is built inline rather than
-let-bound:
+When upstream is built inline (no `let` binding) the linter has
+no `Texp_ident` to read a narrow `val_type` from, falls back to
+`exp_type`, and that has already been widened to match the
+handler's annotation. Result: `declared = upstream`, no finding.
+
+**Not flagged:**
 
 ```ocaml
-catch
-  (let* (module C) = Console.Tag.summon () in C.print_endline "go")
-  ~f:(fun (x : [%hamlet.te Console_error, Database_error]) ->
-      match x with [%hamlet.propagate_e] -> .)
+catch (let* (module C) = Console.Tag.summon () in C.print_endline "go")
+  ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-Because there is no `Texp_ident` for upstream, the linter falls
-back to `exp_type`. By the time the typechecker stored
-`exp_type` the covariant subtyping has widened the row to match
-the handler's annotation — the linter sees `declared = upstream`
-and emits no finding. See `docs/RULE.md` §5.
-
-**Workaround.** Bind upstream first:
+**Workaround** — bind upstream first:
 
 ```ocaml
-let eff = let* (module C) = ... in C.print_endline "go" in
-catch eff ~f:...
+let eff = let* (module C) = Console.Tag.summon () in C.print_endline "go" in
+catch eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+(* now flagged: Database is extra *)
 ```
 
 ## 2. Handlers built by code the walker does not pattern-match
 
 The five recognised handler shapes (param-pat annotation,
-function-cases annotation, scrutinee annotation, named
-identifier, single apply-built) cover the PoC fixtures and the
-common idioms. Handlers built by more elaborate constructs (a
-chain of `let ... in ...` whose body is a `Texp_function`, a
-ppx-generated wrapper around a function-cases value, a handler
-returned from a partial application of a partial application,
-etc.) currently fall through to `Other` and emit no candidate.
+function-cases annotation, scrutinee annotation, named identifier,
+single apply-built) cover the common idioms. More elaborate
+constructs fall through to `Other` and emit no candidate.
 
-A future extension would walk through one or two layers of
-expression structure before giving up. Tracked, not yet a
-priority.
+**Not flagged** (handler is a `let` chain, not a `Texp_function`):
 
-## 3. Combinators outside catch / provide
+```ocaml
+catch eff ~f:(let prep () = () in prep (); fun x -> ...)
+```
 
-Hamlet has other combinators (`bind`, `pure`, `merge_all`, etc.)
-but none of them carry handlers that can declare a wider
-universe than upstream — the row arithmetic is structural
-addition, not handler-driven discharge. The linter is silent on
-those by design.
+**Workaround** — extract the handler into a named binding so it
+matches shape 4 (`Texp_ident`):
 
-## 4. Cross-CU upstream and the PPX `[@@rest_cross_cu]` shape
+```ocaml
+let h x = ... in
+catch eff ~f:h
+```
 
-When upstream lives in a different compilation unit and is
-re-exported through hamlet's `[@@rest_cross_cu]` machinery, the
-linter still walks the call site's `.cmt`. The val_type the
-walker reads is the post-typechecker materialisation: cross-CU
-should work transparently, but exotic cases involving the
-synthesised `__Hamlet_rest_*` aliases have not been
-exhaustively tested. File an issue with a minimal reproducer if
-you hit one.
+## 3. Combinators outside the 7 monitored ones
 
-## 5. OCaml version coupling
+`bind`, `pure`, `merge_all`, `try_catch`, `or_die`, `tap`,
+`Layer.make`, `Layer.fresh`, `Layer.unwrap`, etc. carry no
+handler that declares a row universe — the row arithmetic is
+structural addition, not handler-driven. Silent by design.
 
-The walker links `compiler-libs.common`, which means every
-patch of the OCaml compiler is potentially a compatibility
-break. The single file `extract/compat.cppo.ml` is the firewall
-(currently a `#error` guard pinning 5.4.1; future drift will
-add `#if OCAML_VERSION >= (5, 5, 0)` branches there). The
-analyzer does not depend on `compiler-libs` and is unaffected.
+## 4. OCaml version coupling
 
-## 6. Computed combinator references
+The walker links `compiler-libs.common`, so every OCaml patch
+is potentially a compatibility break. The single file
+`extract/compat.cppo.ml` is the firewall (currently a `#error`
+guard pinning 5.4.1). The analyzer is pure OCaml and unaffected.
 
-`(if cond then catch else provide) eff ~f:...` and similar
-syntactic obfuscations of the callee are not recognised. The
-walker's `classify_path` looks at a `Texp_ident`'s path; an
-`Texp_ifthenelse` in callee position is skipped. Idiomatic
-hamlet code does not write callees this way; if it became
+## 5. Computed combinator references
+
+A callee built by an expression (not a plain identifier) is not
+recognised — `classify_path` matches on `Texp_ident`'s path.
+
+**Not flagged:**
+
+```ocaml
+let combinator = if production then catch else provide in
+combinator eff ~f:...
+```
+
+Idiomatic Hamlet does not write callees this way; if it became
 common we would extend the classifier.
+
+---
+
+## Verified to work (no longer limits)
+
+The following were caveats in earlier drafts but are now covered
+end-to-end:
+
+- **Cross-CU services with `[@@rest_cross_cu]`**. The linter walks
+  the consumer's `.cmt` and reads the upstream's `val_type` even
+  when the row was assembled via the producer's synthesised
+  `__Hamlet_rest_*` aliases. Exercised by
+  `test/cases/cross_cu_cases.ml` (xc1–xc4).
+- **`Layer.t` upstream built via `Layer.make`**. Hamlet `d62acb7`
+  made `Layer.t` covariant in `'e` / `'r`; the typechecker now
+  keeps the layer's row narrow at `val_type` while widening at
+  the call site. Exercised by `lc2`, `lpe2`, `lpl2`, `lpm2` in
+  `test/cases/layer_cases.ml`.
