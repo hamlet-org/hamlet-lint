@@ -40,8 +40,10 @@ let loc_to_schema (l : Location.t) : S.loc =
     not be recognised — e.g. handler is a literal closure we don't
     pattern-match, or upstream is not a [Hamlet.t] / [Layer.t] value. [~peel] is
     the number of outer handler parameters to skip (used for curried handlers in
-    [Layer.provide_to_*]). *)
-let try_candidate ~kind ~peel ~loc args : S.candidate option =
+    [Layer.provide_to_*]). [~combinator] is the dotted-path name of the callee
+    for inclusion in the wire record (e.g. ["catch"], ["map_error"],
+    ["Layer.provide_to_effect"]). *)
+let try_candidate ~kind ~peel ~combinator ~loc args : S.candidate option =
   match (extract_upstream args, extract_handler args) with
   | Some up, Some h -> (
       match (Handler.universe_tags ~peel h, Upstream.row_tags up ~kind) with
@@ -49,9 +51,40 @@ let try_candidate ~kind ~peel ~loc args : S.candidate option =
           let site_kind : S.kind =
             match kind with `Catch -> Catch | `Provide -> Provide
           in
-          Some { loc = loc_to_schema loc; kind = site_kind; declared; upstream }
+          Some
+            {
+              loc = loc_to_schema loc;
+              kind = site_kind;
+              combinator;
+              declared;
+              upstream;
+            }
       | _ -> None)
   | _ -> None
+
+(** Strip the [Hamlet.] / [Hamlet__] prefix from a path so the report can show a
+    short, user-readable combinator name. ["Hamlet.Layer.provide_to_effect"]
+    becomes ["Layer.provide_to_effect"]; ["Hamlet.Combinators.catch"] becomes
+    ["catch"]; anything that doesn't start with a Hamlet root is returned
+    unchanged. *)
+let short_name (path : Path.t) : string =
+  let n = Path.name path in
+  let strip prefix =
+    let pl = String.length prefix in
+    if String.length n >= pl && String.sub n 0 pl = prefix then
+      String.sub n pl (String.length n - pl)
+    else n
+  in
+  let after_root = strip "Hamlet." in
+  if after_root = n then strip "Hamlet__"
+  else
+    let combinators_prefix = "Combinators." in
+    let cl = String.length combinators_prefix in
+    if
+      String.length after_root >= cl
+      && String.sub after_root 0 cl = combinators_prefix
+    then String.sub after_root cl (String.length after_root - cl)
+    else after_root
 
 (** Walk one [.cmt] file, accumulating candidates. Skips non-impl cmts
     (interfaces have no expressions to inspect). *)
@@ -64,8 +97,11 @@ let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
         | Texp_apply (fn, args) -> (
             match fn.exp_desc with
             | Texp_ident (pth, _, vd) -> (
+                let combinator = short_name pth in
                 let push kind peel =
-                  match try_candidate ~kind ~peel ~loc:e.exp_loc args with
+                  match
+                    try_candidate ~kind ~peel ~combinator ~loc:e.exp_loc args
+                  with
                   | Some c -> acc := c :: !acc
                   | None -> ()
                 in

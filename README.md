@@ -3,8 +3,9 @@
 A semantic linter for the [Hamlet](https://github.com/hamlet-org/hamlet)
 effect system. It walks the typed AST of your compiled project and
 hunts one specific bug: **retroactive widening** in the handlers of
-Hamlet's two row-discharging combinators, `Hamlet.Combinators.catch`
-and `.provide`.
+Hamlet's seven handler-driven row combinators —
+`Hamlet.Combinators.{catch, map_error, provide}` and
+`Hamlet.Layer.{catch, provide_to_effect, provide_to_layer, provide_merge_to_layer}`.
 
 ---
 
@@ -36,14 +37,16 @@ tags are dead weight: callers must now prove they handle errors that
 the program provably cannot raise. hamlet-lint flags both extras.
 
 The same shape on the services row uses `[%hamlet.ts ...]` and
-`Hamlet.Combinators.provide`. The one-line rule:
+`Hamlet.Combinators.provide` (or one of the `Layer.provide_to_*`
+variants). The one-line rule:
 
-> *for every call to `catch` / `provide`, the tag set declared by the
-> handler's `[%hamlet.te ...]` / `[%hamlet.ts ...]` annotation must be
-> a subset of the tag set actually carried by the upstream effect's
-> row.*
+> *for every call to a monitored combinator, the tag set declared
+> by the handler's `[%hamlet.te ...]` / `[%hamlet.ts ...]` annotation
+> must be a subset of the tag set actually carried by the upstream
+> effect's row at the relevant slot.*
 
-`docs/RULE.md` states this formally and lists every handler /
+`docs/RULE.md` states this formally, lists all 7 monitored
+combinators with their slot/arity, and enumerates every handler /
 callee shape the linter recognises.
 
 OCaml's row subtyping cannot reject this at compile time given
@@ -102,9 +105,11 @@ config, flags, and CI integration see `docs/USAGE.md`.
 ## 4. Architecture in one paragraph
 
 Two binaries. `hamlet-lint-extract` links `compiler-libs`, walks the
-`.cmt` files for every `Hamlet.Combinators.catch` / `.provide`
-application, extracts the handler's declared universe and upstream's
-row, and emits one ND-JSON record per recognised call on stdout.
+`.cmt` files for every monitored combinator application
+(`Combinators.{catch, map_error, provide}`, all four
+`Layer.{catch, provide_to_*}`), extracts the handler's declared
+universe and upstream's row, and emits one ND-JSON record per
+recognised call on stdout.
 `hamlet-lint` is OCaml-version-agnostic: it reads the ND-JSON
 stream, applies the rule (declared \\ upstream ≠ ∅), and prints
 human-readable findings. The wire schema is versioned (`schema/`)

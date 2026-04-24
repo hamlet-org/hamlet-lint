@@ -1,6 +1,14 @@
 (tests
  (names test_rule test_e2e)
- (libraries alcotest fmt str unix hamlet_lint_schema hamlet_lint_analyzer)
+ (libraries
+  alcotest
+  fmt
+  str
+  unix
+  compiler-libs.common
+  hamlet_lint_schema
+  hamlet_lint_analyzer
+  hamlet_lint_extract)
  (deps
   (alias_rec cases/all)
   %{bin:hamlet-lint}

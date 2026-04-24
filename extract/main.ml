@@ -7,6 +7,7 @@
 
 module S = Hamlet_lint_schema.Schema
 module Config = Hamlet_lint_config.Config
+module Walker = Hamlet_lint_extract.Walker
 
 (** Print [msg] to stderr and exit 2 — the documented "user / input error" code.
     Used everywhere the extractor runs into a missing or unreadable filesystem

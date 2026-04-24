@@ -6,8 +6,13 @@ module Rule = Hamlet_lint_analyzer.Rule
 
 let loc : S.loc = { file = "x.ml"; line = 1; col = 0 }
 
-let mk_candidate ?(kind = S.Catch) ~declared ~upstream () : S.candidate =
-  { loc; kind; declared; upstream }
+let mk_candidate
+    ?(kind = S.Catch)
+    ?(combinator = "catch")
+    ~declared
+    ~upstream
+    () : S.candidate =
+  { loc; kind; combinator; declared; upstream }
 
 let testable_finding =
   let pp ppf (f : Rule.finding) =
@@ -63,31 +68,31 @@ let analyze_filters_headers_and_collects () =
   in
   Alcotest.(check int) "two findings" 2 (List.length findings)
 
-(* The classifier's Hamlet-root check lives in extract/classify.ml but
-   is exposed via the executable. Since extract/ isn't a library we
-   can link from tests, re-implement the same predicate here as a
-   guard against regression. If extract/classify.ml's path_root_is_hamlet
-   diverges from this list, we want a build / test failure. *)
+(* Lock in the classifier's Hamlet-root check. We test the production
+   predicate directly (not a copy) by linking [hamlet_lint_extract] from
+   test/dune and constructing a [Path.Pident] of the given identifier
+   name. *)
 
-let path_root_is_hamlet (n : string) : bool =
-  n = "Hamlet" || (String.length n >= 8 && String.sub n 0 8 = "Hamlet__")
+module Classify = Hamlet_lint_extract.Classify
+
+let root_accepts (name : string) : bool =
+  let id = Ident.create_local name in
+  Classify.path_root_is_hamlet (Path.Pident id)
 
 let test_root_accepts_hamlet () =
-  Alcotest.(check bool) "Hamlet" true (path_root_is_hamlet "Hamlet");
+  Alcotest.(check bool) "Hamlet" true (root_accepts "Hamlet");
   Alcotest.(check bool)
     "Hamlet__Combinators" true
-    (path_root_is_hamlet "Hamlet__Combinators");
-  Alcotest.(check bool) "Hamlet__" true (path_root_is_hamlet "Hamlet__")
+    (root_accepts "Hamlet__Combinators");
+  Alcotest.(check bool) "Hamlet__" true (root_accepts "Hamlet__")
 
 let test_root_rejects_lookalikes () =
-  Alcotest.(check bool) "Hamlet_lint" false (path_root_is_hamlet "Hamlet_lint");
-  Alcotest.(check bool) "HamletFoo" false (path_root_is_hamlet "HamletFoo");
-  Alcotest.(check bool) "Hamleton" false (path_root_is_hamlet "Hamleton");
-  Alcotest.(check bool)
-    "hamlet (lowercase)" false
-    (path_root_is_hamlet "hamlet");
-  Alcotest.(check bool) "" false (path_root_is_hamlet "");
-  Alcotest.(check bool) "Other" false (path_root_is_hamlet "Other")
+  Alcotest.(check bool) "Hamlet_lint" false (root_accepts "Hamlet_lint");
+  Alcotest.(check bool) "HamletFoo" false (root_accepts "HamletFoo");
+  Alcotest.(check bool) "Hamleton" false (root_accepts "Hamleton");
+  Alcotest.(check bool) "hamlet (lowercase)" false (root_accepts "hamlet");
+  Alcotest.(check bool) "" false (root_accepts "");
+  Alcotest.(check bool) "Other" false (root_accepts "Other")
 
 let () =
   Alcotest.run "rule"

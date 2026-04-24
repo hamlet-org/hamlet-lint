@@ -1,21 +1,33 @@
 ; The compiler-libs side of hamlet-lint. Walks .cmt files, classifies
-; calls to Hamlet.Combinators.catch / .provide, extracts handler and
-; upstream tag rows, and emits per-call ND-JSON candidate records on
-; stdout. The analyzer (sibling [analyzer/] dir) consumes them.
+; calls to monitored combinators, extracts handler and upstream tag
+; rows, and emits per-call ND-JSON candidate records on stdout. The
+; analyzer (sibling [analyzer/] dir) consumes them.
 ;
 ; Only [compat.cppo.ml] gates on ocaml_version — every other module
 ; uses standard 5.x compiler-libs APIs through the firewall.
+;
+; The walker logic is split into a library (`hamlet_lint_extract`)
+; so unit tests can link individual modules (notably Classify for
+; the path_root_is_hamlet regression guard). The executable is a
+; thin driver around `Main_driver`.
 
-(executable
- (name main)
- (public_name hamlet-lint-extract)
- (package hamlet-lint)
+(library
+ (name hamlet_lint_extract)
+ (public_name hamlet-lint.extract)
  (libraries
   hamlet_lint_schema
   hamlet_lint_config
   compiler-libs.common
   yojson
-  unix))
+  unix)
+ (modules tags classify upstream handler walker compat))
+
+(executable
+ (name main)
+ (public_name hamlet-lint-extract)
+ (package hamlet-lint)
+ (libraries hamlet_lint_extract hamlet_lint_schema hamlet_lint_config unix)
+ (modules main))
 
 (rule
  (targets compat.ml)

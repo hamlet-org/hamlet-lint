@@ -12,10 +12,11 @@
   (pps ppx_hamlet))
  (modules widening_cases edge_cases layer_cases cross_cu_cases))
 
-; Tag the build outputs so test/dune can depend on the whole tree
-; via (alias_rec cases/all).
+; Force compilation of the fixture library so test/dune's
+; (alias_rec cases/all) sees it. Depending on the .cma archive
+; forces dune to build hamlet_lint_fixtures and emit every module's
+; .cmt under .objs/byte/, which test_e2e then reads.
 
 (alias
  (name all)
- (deps
-  (glob_files *.cmt)))
+ (deps hamlet_lint_fixtures.cma))

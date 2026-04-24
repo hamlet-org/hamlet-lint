@@ -13,6 +13,7 @@ module S = Hamlet_lint_schema.Schema
 type finding = {
   loc : S.loc;
   kind : S.kind;
+  combinator : string;
   declared : string list;
   upstream : string list;
   extra : string list;
@@ -31,6 +32,7 @@ let check (c : S.candidate) : finding option =
       {
         loc = c.loc;
         kind = c.kind;
+        combinator = c.combinator;
         declared = c.declared;
         upstream = c.upstream;
         extra;

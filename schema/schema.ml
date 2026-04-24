@@ -21,12 +21,17 @@ let schema_version = 1
 type loc = { file : string; line : int; col : int }
 type kind = Catch | Provide
 
-(** A single recognised catch/provide call site. The two tag lists are presented
-    in source declaration order; the analyzer compares them with a list-set
-    difference. *)
+(** A single recognised call site for one of the 7 monitored combinators. The
+    two tag lists are presented in source declaration order; the analyzer
+    compares them with a list-set difference. *)
 type candidate = {
   loc : loc;
   kind : kind;
+  combinator : string;
+      (** The dotted path of the actual combinator — e.g. [catch], [map_error],
+          [Layer.provide_to_effect]. [kind] only tells you which slot was
+          inspected; this field lets the report say precisely which combinator
+          fired. *)
   declared : string list;
       (** Handler's declared universe ([%hamlet.te ...] or [%hamlet.ts ...]). *)
   upstream : string list;
@@ -100,6 +105,7 @@ let candidate_to_yojson (c : candidate) : Yojson.Basic.t =
     [
       ("kind", `String "candidate");
       ("site_kind", `String (kind_to_string c.kind));
+      ("combinator", `String c.combinator);
       ("loc", loc_to_yojson c.loc);
       ("declared", strings_to_yojson c.declared);
       ("upstream", strings_to_yojson c.upstream);
@@ -111,8 +117,14 @@ let candidate_of_yojson_fields fs : candidate =
     | `String s -> kind_of_string s
     | _ -> failwith "candidate: site_kind not a string"
   in
+  let combinator =
+    match assoc_or_fail "candidate" "combinator" fs with
+    | `String s -> s
+    | _ -> failwith "candidate: combinator not a string"
+  in
   {
     kind = site_kind;
+    combinator;
     loc = loc_of_yojson (assoc_or_fail "candidate" "loc" fs);
     declared = strings_of_yojson (assoc_or_fail "candidate" "declared" fs);
     upstream = strings_of_yojson (assoc_or_fail "candidate" "upstream" fs);

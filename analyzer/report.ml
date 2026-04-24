@@ -8,12 +8,11 @@ let key_of_kind : S.kind -> string = function
   | Catch -> "[%hamlet.te ...]"
   | Provide -> "[%hamlet.ts ...]"
 
-let name_of_kind : S.kind -> string = function
-  | Catch -> "catch"
-  | Provide -> "provide"
-
 (** Render one finding to a string using the same shape as the PoC: a leading
-    file:line:col, then four indented fields. *)
+    file:line:col, then four indented fields. The combinator name (e.g.
+    [map_error], [Layer.provide_to_effect]) appears in the WARNING line so
+    callers can tell which call site was flagged when multiple combinator
+    families coexist in the same source range. *)
 let pp_finding (f : Rule.finding) : string =
   Printf.sprintf
     "File %S, line %d, characters %d-%d:\n\
@@ -21,8 +20,7 @@ let pp_finding (f : Rule.finding) : string =
     \    declared  : [%s]\n\
     \    upstream  : [%s]\n\
     \    extra tag%s not emitted : [%s]\n"
-    f.loc.file f.loc.line f.loc.col f.loc.col (name_of_kind f.kind)
-    (key_of_kind f.kind)
+    f.loc.file f.loc.line f.loc.col f.loc.col f.combinator (key_of_kind f.kind)
     (String.concat "; " f.declared)
     (String.concat "; " f.upstream)
     (if List.length f.extra = 1 then "" else "s")

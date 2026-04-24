@@ -52,12 +52,26 @@ catch eff ~f:h
 handler that declares a row universe — the row arithmetic is
 structural addition, not handler-driven. Silent by design.
 
+```ocaml
+(* not a row-handler combinator → not flagged regardless of types *)
+bind eff ~f:(fun x -> ...)
+try_catch ~thunk:f ~h:(fun (_ : exn) -> `Wrapped)
+```
+
 ## 4. OCaml version coupling
 
 The walker links `compiler-libs.common`, so every OCaml patch
 is potentially a compatibility break. The single file
-`extract/compat.cppo.ml` is the firewall (currently a `#error`
-guard pinning 5.4.1). The analyzer is pure OCaml and unaffected.
+`extract/compat.cppo.ml` is the firewall:
+
+```ocaml
+#if OCAML_VERSION < (5, 4, 1) || OCAML_VERSION >= (5, 5, 0)
+#error "hamlet-lint currently supports only OCaml 5.4.1"
+#endif
+```
+
+Future drift adds `#if OCAML_VERSION >= (5, 5, 0)` branches there.
+The analyzer is pure OCaml and unaffected.
 
 ## 5. Computed combinator references
 
