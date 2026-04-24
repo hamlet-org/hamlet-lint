@@ -141,6 +141,94 @@ let test_invalid_json () =
     "garbage JSON → exit 2" 2
     (pipe_string_to_analyzer "not even JSON")
 
+(* ============================================================ *)
+(* Filesystem error contract                                    *)
+(* ============================================================ *)
+
+(* Both binaries must exit 2 (user-error) on a missing path, never
+   crash with an uncaught Sys_error / Unix_error. *)
+
+let exit_of_command (cmd : string) : int =
+  match Unix.system (cmd ^ " 2>/dev/null >/dev/null") with
+  | WEXITED n -> n
+  | _ -> 255
+
+let test_extract_missing_input () =
+  Alcotest.(check int)
+    "extract on missing path → exit 2" 2
+    (exit_of_command
+       (Printf.sprintf "%s /tmp/hamlet-lint-test-does-not-exist-XYZ"
+          (Filename.quote extract_bin)))
+
+let test_extract_missing_exclude () =
+  Alcotest.(check int)
+    "extract --exclude on missing path → exit 2" 2
+    (exit_of_command
+       (Printf.sprintf
+          "%s --exclude /tmp/hamlet-lint-test-does-not-exist-XYZ \
+           /tmp/hamlet-lint-test-does-not-exist-also"
+          (Filename.quote extract_bin)))
+
+let test_analyzer_missing_input () =
+  Alcotest.(check int)
+    "analyzer --input on missing file → exit 2" 2
+    (exit_of_command
+       (Printf.sprintf "%s --input /tmp/hamlet-lint-test-does-not-exist-XYZ"
+          (Filename.quote analyze_bin)))
+
+(* The exclude-prefix bug surfaced by codex: `--exclude /a/foo` must
+   not also exclude `/a/foobar`. We can't easily build a real
+   directory tree of cmts in the test, but we can check that the
+   exclude logic doesn't drop paths whose absolute realpath matches
+   the prefix only as a string-prefix-not-path-child. We exercise
+   it by running extract on a directory whose name is a string
+   superset of an excluded sibling. *)
+let test_exclude_prefix_word_boundary () =
+  let tmp = Filename.get_temp_dir_name () in
+  let suffix = Printf.sprintf "hl-test-%d" (Unix.getpid ()) in
+  let root = Filename.concat tmp suffix in
+  let bar = Filename.concat root "bar" in
+  let barista = Filename.concat root "barista" in
+  Unix.mkdir root 0o755;
+  Unix.mkdir bar 0o755;
+  Unix.mkdir barista 0o755;
+  (* copy a known fixture cmt under barista/ *)
+  let src = cmt_for "Layer_cases" in
+  let dst = Filename.concat barista "L.cmt" in
+  let buf = read_all (open_in_bin src) in
+  let oc = open_out_bin dst in
+  output_string oc buf;
+  close_out oc;
+  let with_excl =
+    let cmd =
+      Printf.sprintf "%s --exclude %s %s 2>/dev/null"
+        (Filename.quote extract_bin)
+        (Filename.quote bar) (Filename.quote root)
+    in
+    let ic = Unix.open_process_in cmd in
+    let s = read_all ic in
+    let _ = Unix.close_process_in ic in
+    String.length s
+  in
+  let without_excl =
+    let cmd =
+      Printf.sprintf "%s %s 2>/dev/null"
+        (Filename.quote extract_bin)
+        (Filename.quote root)
+    in
+    let ic = Unix.open_process_in cmd in
+    let s = read_all ic in
+    let _ = Unix.close_process_in ic in
+    String.length s
+  in
+  Sys.remove dst;
+  Unix.rmdir bar;
+  Unix.rmdir barista;
+  Unix.rmdir root;
+  Alcotest.(check int)
+    "exclude /tmp/.../bar must not drop /tmp/.../barista/*.cmt" without_excl
+    with_excl
+
 let () =
   Alcotest.run "e2e"
     [
@@ -154,5 +242,16 @@ let () =
           Alcotest.test_case "malformed candidate" `Quick
             test_malformed_candidate;
           Alcotest.test_case "invalid JSON" `Quick test_invalid_json;
+        ] );
+      ( "fs_errors",
+        [
+          Alcotest.test_case "extract: missing positional path" `Quick
+            test_extract_missing_input;
+          Alcotest.test_case "extract: missing --exclude path" `Quick
+            test_extract_missing_exclude;
+          Alcotest.test_case "analyzer: missing --input path" `Quick
+            test_analyzer_missing_input;
+          Alcotest.test_case "exclude prefix is path-segment-aware" `Quick
+            test_exclude_prefix_word_boundary;
         ] );
     ]

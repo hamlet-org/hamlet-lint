@@ -8,16 +8,47 @@
 module S = Hamlet_lint_schema.Schema
 module Config = Hamlet_lint_config.Config
 
+(** Print [msg] to stderr and exit 2 — the documented "user / input error" code.
+    Used everywhere the extractor runs into a missing or unreadable filesystem
+    path. *)
+let die_user_error msg =
+  Printf.eprintf "hamlet-lint-extract: %s\n" msg;
+  exit 2
+
 let is_cmt f = Filename.check_suffix f ".cmt"
 
 let rec collect_cmts path acc =
-  if Sys.is_directory path then
-    let entries = Sys.readdir path in
-    Array.fold_left
-      (fun acc name -> collect_cmts (Filename.concat path name) acc)
-      acc entries
-  else if is_cmt path then path :: acc
-  else acc
+  match Sys.is_directory path with
+  | exception Sys_error msg -> die_user_error msg
+  | true ->
+      let entries =
+        try Sys.readdir path with Sys_error msg -> die_user_error msg
+      in
+      Array.fold_left
+        (fun acc name -> collect_cmts (Filename.concat path name) acc)
+        acc entries
+  | false -> if is_cmt path then path :: acc else acc
+
+(** Resolve a user-supplied path or exit 2 with a clear message. Used for
+    [--exclude] entries, where a typo on the command line should surface as a
+    user error rather than an uncaught [Unix.Unix_error]. *)
+let realpath_or_die p =
+  try Unix.realpath p
+  with Unix.Unix_error (err, _, _) ->
+    die_user_error (Printf.sprintf "%s: %s" p (Unix.error_message err))
+
+(** True iff [abs] equals [prefix] OR sits strictly under [prefix] as a path
+    child. The [prefix + "/"] guard prevents [--exclude /a/foo] from also
+    dropping [/a/foobar/...] (a real bug surfaced by codex review). *)
+let is_under_prefix ~prefix ~abs =
+  let p = prefix in
+  let a = abs in
+  if a = p then true
+  else
+    let pl = String.length p in
+    String.length a > pl
+    && String.sub a 0 pl = p
+    && a.[pl] = Filename.dir_sep.[0]
 
 let cmp_loc (a : S.loc) (b : S.loc) =
   let c = compare a.file b.file in
@@ -78,20 +109,14 @@ let () =
     match cfg with Some c -> Config.resolved_exclude c | None -> []
   in
   let inputs = explicit_cli_inputs @ cfg_targets in
-  let excludes = List.map Unix.realpath (!excludes @ cfg_excludes) in
-  if inputs = [] then (
-    prerr_endline
-      "hamlet-lint-extract: no inputs given (pass a directory or create a \
-       .hamlet-lint.sexp config)";
-    exit 2);
+  let excludes = List.map realpath_or_die (!excludes @ cfg_excludes) in
+  if inputs = [] then
+    die_user_error
+      "no inputs given (pass a directory or create a .hamlet-lint.sexp config)";
   let cmts_files = List.fold_left (fun acc p -> collect_cmts p acc) [] inputs in
   let is_excluded f =
     let abs = try Unix.realpath f with Unix.Unix_error _ -> f in
-    List.exists
-      (fun prefix ->
-        String.length abs >= String.length prefix
-        && String.sub abs 0 (String.length prefix) = prefix)
-      excludes
+    List.exists (fun prefix -> is_under_prefix ~prefix ~abs) excludes
   in
   let cmts_files = List.filter (fun f -> not (is_excluded f)) cmts_files in
   let acc = ref [] in

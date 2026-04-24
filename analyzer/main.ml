@@ -31,9 +31,20 @@ let read_records_or_exit2 (ic : in_channel) : S.record list =
       Printf.eprintf "hamlet-lint: malformed record: %s\n" msg;
       exit 2
 
+(** Open the input channel for reading. Missing or unreadable files surface as
+    exit 2 (user error) rather than the default uncaught [Sys_error] / exit 125.
+*)
+let open_input_or_exit2 = function
+  | None -> stdin
+  | Some p -> (
+      try open_in p
+      with Sys_error msg ->
+        Printf.eprintf "hamlet-lint: %s\n" msg;
+        exit 2)
+
 let run input cli_warn_only =
   let warn_only = cli_warn_only || warn_mode_from_config () in
-  let ic = match input with None -> stdin | Some p -> open_in p in
+  let ic = open_input_or_exit2 input in
   let records = read_records_or_exit2 ic in
   (match input with Some _ -> close_in ic | None -> ());
   (* Schema guard: reject any stream whose first record isn't a header
