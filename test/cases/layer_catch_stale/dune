@@ -1,3 +1,0 @@
-(library
- (name hamlet_lint_fixture_layer_catch_stale)
- (libraries hamlet))

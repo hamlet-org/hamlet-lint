@@ -1,3 +1,0 @@
-(library
- (name hamlet_lint_fixture_wrapper_no_callers_clean)
- (libraries hamlet))

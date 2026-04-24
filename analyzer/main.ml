@@ -1,20 +1,16 @@
 (** [hamlet-lint] entry point. Reads ND-JSON records from stdin or a file, runs
-    the rule, prints findings, sets the exit code.
+    the rule, prints findings, sets exit code.
 
     Exit codes:
-    - 0 clean run, or findings present with [--warn-only]
+    - 0 clean run, or findings present with [--warn-only] / config [warn]
     - 1 findings present (default)
     - 2 malformed input (missing header or unsupported schema version) *)
 
-open Hamlet_lint_schema.Schema
+module S = Hamlet_lint_schema.Schema
 module Rule = Hamlet_lint_analyzer.Rule
 module Report = Hamlet_lint_analyzer.Report
 module Config = Hamlet_lint_config.Config
 
-(** If a config file is discoverable at or above cwd, read it and return whether
-    its [mode] field is [warn]. Any error reading the file (missing, parse
-    error, unknown key) is swallowed and treated as "no config": the config is
-    meant to reduce typing, not to be a hard requirement. *)
 let warn_mode_from_config () =
   match Config.find () with
   | None -> false
@@ -23,20 +19,42 @@ let warn_mode_from_config () =
       | Ok cfg -> cfg.mode = Config.Warn
       | Error _ -> false)
 
+(** Read ND-JSON from [ic] with deterministic error reporting. Any decoder
+    failure (malformed JSON, missing fields, unknown record kind) is caught and
+    turned into exit code 2 with a stderr line — never a stack trace. *)
+let read_records_or_exit2 (ic : in_channel) : S.record list =
+  try S.read_ndjson ic with
+  | Yojson.Json_error msg ->
+      Printf.eprintf "hamlet-lint: malformed ND-JSON: %s\n" msg;
+      exit 2
+  | Failure msg ->
+      Printf.eprintf "hamlet-lint: malformed record: %s\n" msg;
+      exit 2
+
+(** Open the input channel for reading. Missing or unreadable files surface as
+    exit 2 (user error) rather than the default uncaught [Sys_error] / exit 125.
+*)
+let open_input_or_exit2 = function
+  | None -> stdin
+  | Some p -> (
+      try open_in p
+      with Sys_error msg ->
+        Printf.eprintf "hamlet-lint: %s\n" msg;
+        exit 2)
+
 let run input cli_warn_only =
   let warn_only = cli_warn_only || warn_mode_from_config () in
-  let ic = match input with None -> stdin | Some p -> open_in p in
-  let records = read_ndjson ic in
+  let ic = open_input_or_exit2 input in
+  let records = read_records_or_exit2 ic in
   (match input with Some _ -> close_in ic | None -> ());
-  (* Schema guard: reject any stream whose first record isn't a header with
-     the current major version. The analyzer exits 2 (malformed input) so
-     callers can distinguish "bug" from "findings present". *)
+  (* Schema guard: reject any stream whose first record isn't a header
+     with the current major version. *)
   (match records with
-  | Header h :: _ when h.schema_version = schema_version -> ()
-  | Header h :: _ ->
+  | S.Header h :: _ when h.schema_version = S.schema_version -> ()
+  | S.Header h :: _ ->
       Printf.eprintf
         "hamlet-lint: unsupported schema_version %d (this binary speaks %d)\n"
-        h.schema_version schema_version;
+        h.schema_version S.schema_version;
       exit 2
   | _ ->
       Printf.eprintf
@@ -62,7 +80,8 @@ let warn_only =
 
 let cmd =
   let doc =
-    "Semantic linter for stale forwarding arms in Hamlet row handlers."
+    "Semantic linter for retroactive widening in Hamlet's catch/provide \
+     handlers."
   in
   let info = Cmd.info "hamlet-lint" ~doc in
   Cmd.v info Term.(const run $ input $ warn_only)

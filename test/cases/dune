@@ -1,1 +1,22 @@
-; Empty stanza just to make (alias_rec cases/all) resolve.
+; Fixtures ported 1:1 from hamlet PR #9 (lint_poc/). Each module
+; declares a mix of catch/provide calls, some BAD (handler universe
+; widens past upstream's row), some GOOD (handler matches upstream).
+; The dune build emits the .cmt files the linter walks.
+
+(library
+ (name hamlet_lint_fixtures)
+ (libraries hamlet hamlet_test_services)
+ (flags
+  (:standard -w -18-26-27-32-33-37-60-69))
+ (preprocess
+  (pps ppx_hamlet))
+ (modules widening_cases edge_cases layer_cases cross_cu_cases))
+
+; Force compilation of the fixture library so test/dune's
+; (alias_rec cases/all) sees it. Depending on the .cma archive
+; forces dune to build hamlet_lint_fixtures and emit every module's
+; .cmt under .objs/byte/, which test_e2e then reads.
+
+(alias
+ (name all)
+ (deps hamlet_lint_fixtures.cma))

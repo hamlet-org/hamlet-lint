@@ -1,3 +1,0 @@
-(library
- (name hamlet_lint_fixture_errors_multiple_arms_distinct_clean)
- (libraries hamlet))

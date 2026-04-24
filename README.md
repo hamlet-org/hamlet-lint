@@ -2,9 +2,10 @@
 
 A semantic linter for the [Hamlet](https://github.com/hamlet-org/hamlet)
 effect system. It walks the typed AST of your compiled project and
-hunts one very specific bug: **phantom row growth** caused by stale
-forwarding arms in the handlers of Hamlet's row-discharging
-combinators.
+hunts one specific bug: **retroactive widening** in the handlers of
+Hamlet's seven handler-driven row combinators —
+`Hamlet.Combinators.{catch, map_error, provide}` and
+`Hamlet.Layer.{catch, provide_to_effect, provide_to_layer, provide_merge_to_layer}`.
 
 ---
 
@@ -12,50 +13,47 @@ combinators.
 
 Hamlet expresses a computation's required services and possible
 errors as two open polymorphic variant rows on
-`('a, 'e, 'r) Hamlet.t`. Both rows grow as effects compose and are
-discharged by a small set of handler-style combinators. The bug
-hamlet-lint catches is the case where a forwarding arm resurrects a
-tag that the input effect never carried:
+`('a, 'e, 'r) Hamlet.t`. When a handler is annotated with
+`[%hamlet.te ...]` (errors universe) or `[%hamlet.ts ...]` (services
+universe), OCaml's covariant subtyping silently widens upstream's row
+to make it match the handler's universe — even when upstream
+provably never carries some of those tags. The bug is invisible at
+compile time:
 
 ```ocaml
-let prog () : (int, [> `NotFound ], 'r) Hamlet.t = failure `NotFound
+let eff =
+  let* (module C) = Console.Tag.summon () in
+  C.print_endline "go"   (* upstream row : [ Console_error ] *)
 
-let handled () =
-  catch (prog ()) ~f:(function
-    | `NotFound  -> success 0
-    | `Timeout   -> failure `Timeout
-    | `Forbidden -> failure `Forbidden)
+let _ =
+  catch eff
+    ~f:(fun (x : [%hamlet.te Console_error, Connection_error, Query_error]) ->
+        match x with [%hamlet.propagate_e] -> .)
 ```
 
-`prog`'s errors row has exactly one inhabitant: `` `NotFound ``. The
-handler discharges it and recovers to `success 0`, so you would
-expect `handled` to have the empty errors row. Instead OCaml infers
-`` [> `Forbidden | `Timeout ] ``: the two forwarding arms introduce
-`` `Timeout `` and `` `Forbidden `` into the output row out of
-nowhere. Any caller of `handled` now has to prove it can handle
-errors that the program provably cannot raise. That is phantom row
-growth, and hamlet-lint reports both arms as stale.
+The handler claims to cover `Console_error`, `Connection_error`,
+`Query_error`. Upstream emits only `Console_error`. The two extra
+tags are dead weight: callers must now prove they handle errors that
+the program provably cannot raise. hamlet-lint flags both extras.
 
-The same shape on the services row:
+The same shape on the services row uses `[%hamlet.ts ...]` and
+`Hamlet.Combinators.provide` (or one of the `Layer.provide_to_*`
+variants). The one-line rule:
 
-```ocaml
-let prog () : (int, 'e, [> `Logger ]) Hamlet.t = need `Logger
+> *for every call to a monitored combinator, the tag set declared
+> by the handler's `[%hamlet.te ...]` / `[%hamlet.ts ...]` annotation
+> must be a subset of the tag set actually carried by the upstream
+> effect's row at the relevant slot.*
 
-let handled env =
-  provide (prog ()) ~f:(function
-    | `Logger as r  -> give r env
-    | `Metrics as r -> need r)
-```
+`docs/RULE.md` states this formally, lists all 7 monitored
+combinators with their slot/arity, and enumerates every handler /
+callee shape the linter recognises.
 
-`prog` asks only for `` `Logger ``, the `` `Logger `` arm satisfies it,
-and the `` `Metrics `` arm is pure forwarding on a tag that was never
-requested. hamlet-lint reports it.
-
-The one-line rule: *every tag that appears on the output row but not
-on the input row must be attributable to a real introducer on the
-path; if the only thing adding it is a forwarding arm that
-pattern-matches it, the arm is stale.* `docs/RULE.md` states this
-formally and lists the eight combinators where it applies.
+OCaml's row subtyping cannot reject this at compile time given
+hamlet's covariant design (see `docs/ARCHITECTURE.md` §2 for the
+type-system explanation). The linter operates on the `.cmt` files
+the typechecker emits, so the only requirement is a successful
+compilation.
 
 ---
 
@@ -63,7 +61,7 @@ formally and lists the eight combinators where it applies.
 
 hamlet-lint is published as one opam package per
 `(hamlet, ocaml-patch)` pair. Package names look like
-`hamlet-lint.<hamlet>~<ocaml>`, e.g. `hamlet-lint.0.1.0~5.4.1`. Each
+`hamlet-lint.<hamlet>~<ocaml>`, e.g. `hamlet-lint.0.2.0~5.4.1`. Each
 package pins `hamlet = <hamlet>` and `ocaml = <ocaml>` exactly. The
 tilde follows the opam convention for compiler-tied variant suffixes
 (cf. `ppxlib.0.38.0~5.5preview`).
@@ -81,7 +79,7 @@ supported OCaml patch (compat firewall, since the extractor links
 hamlet: publish one package per supported OCaml. New OCaml: backfill
 one package per past hamlet. `main` only moves forward. The firewall
 lives in a single `cppo`-preprocessed file
-(`extract/compat.cppo.ml`) with a top-level `#error` guard. v0.1
+(`extract/compat.cppo.ml`) with a top-level `#error` guard. v0.2
 pins OCaml 5.4.1 exactly.
 
 See `docs/RELEASING.md` for the operational procedure and
@@ -96,35 +94,49 @@ dune build
 hamlet-lint-extract _build/default | hamlet-lint
 ```
 
-Clean runs print `no findings` and exit 0. Findings print
-`file:line:col: stale forwarding arm …` and exit 1 (exit 2 on input
-error, typically a `schema_version` mismatch between the two
-binaries). For install, config, flags, and CI integration see
-`docs/USAGE.md`.
+Clean runs print nothing and exit 0. Findings print a multi-line
+warning per call site (location + declared / upstream / extra tags)
+and exit 1. Exit 2 indicates malformed ND-JSON input — typically a
+`schema_version` mismatch between the two binaries. For install,
+config, flags, and CI integration see `docs/USAGE.md`.
 
 ---
 
-## 4. Documentation
+## 4. Architecture in one paragraph
+
+Two binaries. `hamlet-lint-extract` links `compiler-libs`, walks the
+`.cmt` files for every monitored combinator application
+(`Combinators.{catch, map_error, provide}`, all four
+`Layer.{catch, provide_to_*}`), extracts the handler's declared
+universe and upstream's row, and emits one ND-JSON record per
+recognised call on stdout.
+`hamlet-lint` is OCaml-version-agnostic: it reads the ND-JSON
+stream, applies the rule (declared \\ upstream ≠ ∅), and prints
+human-readable findings. The wire schema is versioned (`schema/`)
+so the analyzer can refuse mismatched input loudly. See
+`docs/ARCHITECTURE.md`.
+
+---
+
+## 5. Documentation
 
 - `docs/USAGE.md`: install, config, CLI flags, CI integration,
   finding format, troubleshooting.
-- `docs/RULE.md`: the eight combinators and the formal rule (cases
-  a, b, c; wildcard suppression; latent sites).
+- `docs/RULE.md`: the formal rule, supported handler / callee
+  shapes, slot mapping (`'e` vs `'r`), wire format.
 - `docs/LIMITATIONS.md`: what hamlet-lint does NOT catch today and
-  why (data-flow handlers, opam dependencies, complex arm bodies,
-  OCaml and hamlet version coupling).
-- `docs/ARCHITECTURE.md`: why `.cmt`, two-firewall model,
-  concrete/latent sites, analyzer pseudocode, ND-JSON contract,
-  walker coverage details.
+  why (notably: inline upstream without a let-binding).
+- `docs/ARCHITECTURE.md`: why `.cmt`, two-binary split, ND-JSON
+  contract, walker coverage details.
 - `docs/RELEASING.md`: release workflow, CHANGELOG model, backfill
   passes.
-- `docs/CONTRIBUTING.md`: dev setup, adding tests and combinators,
-  adding new OCaml targets.
-- `CHANGELOG.md`: chronological walker and analyzer history.
+- `docs/CONTRIBUTING.md`: dev setup, adding tests, adding new
+  OCaml targets.
+- `CHANGELOG.md`: chronological history.
 
 ---
 
-## 5. License and issues
+## 6. License and issues
 
 hamlet-lint ships under the MIT license (`LICENSE` in the repository
 root). File issues at

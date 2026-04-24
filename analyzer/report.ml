@@ -1,22 +1,30 @@
-(** Pretty reporter. The only reporter implemented in v0.1 (the design doc also
-    specs GitHub Actions and SARIF; both are M7, out of scope). *)
+(** Pretty-print findings for human consumption. Multi-line; mirrors the format
+    used by the upstream PoC ([hamlet/lint_poc/bin/poc.ml]) so that snapshot
+    tests carrying over from the PoC don't drift. *)
 
-open Rule
-open Hamlet_lint_schema.Schema
+module S = Hamlet_lint_schema.Schema
 
-let pp_loc (l : loc) = Printf.sprintf "%s:%d:%d" l.file l.line l.col
+let key_of_kind : S.kind -> string = function
+  | Catch -> "[%hamlet.te ...]"
+  | Provide -> "[%hamlet.ts ...]"
 
-let pretty (findings : finding list) : string =
-  let buf = Buffer.create 256 in
-  List.iter
-    (fun (f : Rule.finding) ->
-      Buffer.add_string buf (pp_loc f.loc);
-      Buffer.add_string buf ": ";
-      Buffer.add_string buf f.message;
-      Buffer.add_char buf '\n';
-      Buffer.add_string buf "  arm at ";
-      Buffer.add_string buf (pp_loc f.arm_loc);
-      Buffer.add_char buf '\n')
-    findings;
-  if findings = [] then Buffer.add_string buf "no findings\n";
-  Buffer.contents buf
+(** Render one finding to a string using the same shape as the PoC: a leading
+    file:line:col, then four indented fields. The combinator name (e.g.
+    [map_error], [Layer.provide_to_effect]) appears in the WARNING line so
+    callers can tell which call site was flagged when multiple combinator
+    families coexist in the same source range. *)
+let pp_finding (f : Rule.finding) : string =
+  Printf.sprintf
+    "File %S, line %d, characters %d-%d:\n\
+    \  hamlet-lint WARNING: %s handler declares %s tags not present in upstream.\n\
+    \    declared  : [%s]\n\
+    \    upstream  : [%s]\n\
+    \    extra tag%s not emitted : [%s]\n"
+    f.loc.file f.loc.line f.loc.col f.loc.col f.combinator (key_of_kind f.kind)
+    (String.concat "; " f.declared)
+    (String.concat "; " f.upstream)
+    (if List.length f.extra = 1 then "" else "s")
+    (String.concat "; " f.extra)
+
+let pretty (findings : Rule.finding list) : string =
+  String.concat "" (List.map pp_finding findings)

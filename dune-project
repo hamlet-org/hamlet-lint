@@ -36,7 +36,7 @@
  (name hamlet-lint)
  (synopsis "Semantic linter for Hamlet")
  (description
-  "hamlet-lint is a semantic linter for projects using hamlet. It reads .cmt files produced by the OCaml typechecker and flags stale forwarding arms in row-handler combinators — cases where a handler advertises it can produce a tag the input effect never carries, silently growing the effect's row.")
+  "hamlet-lint is a semantic linter for projects using hamlet. It reads .cmt files produced by the OCaml typechecker and flags retroactive widening in `Hamlet.Combinators.catch` and `.provide`: cases where a handler's declared `[%hamlet.te ...]` / `[%hamlet.ts ...]` universe contains tags that upstream's row never carries, a bug OCaml's row subtyping cannot reject at compile time.")
  (depends
   (ocaml
    (and

@@ -1,61 +1,55 @@
 # hamlet-lint architecture
 
 Internal reference for the walker, the analyzer, and the wire contract
-between them. For the one-line rule and the eight combinators see
-`README.md`; for install / config / CI see `USAGE.md`; for release
+between them. For the rule statement and recognised shapes see
+`RULE.md`; for install / config / CI see `USAGE.md`; for release
 mechanics see `RELEASING.md`.
 
 ---
 
 ## 1. Why `.cmt` files
 
-Row lower bounds exist only after type inference, so the linter cannot
-be a `ppxlib` PPX (PPX runs before inference). `.cmt` files are the
-typed AST the compiler emits under `_build/default/**/*.cmt`;
-`compiler-libs` provides `Cmt_format.read_cmt` to parse them back. The
-tool is therefore version-locked against `compiler-libs` (`Typedtree`,
-`Types`, and friends drift across OCaml minors without semver);
-`README.md` §2 covers the version-support policy.
+The retroactive-widening bug is invisible at the source level: the PPX
+expands `[%hamlet.te ...]` and `[%hamlet.ts ...]` into closed rows on
+the handler's parameter pattern, but covariant subtyping mutates
+upstream's `exp_type` at the call site to satisfy the handler's
+universe. Both sides end up structurally compatible — exactly what
+hamlet's `('a, +'e, +'r) Hamlet.t` design is meant to allow — and the
+typechecker raises no error.
+
+The information the linter needs lives in two places that survive
+into `.cmt` files:
+
+- the handler parameter pattern's `pat_type` (the closed row the PPX
+  produced), and
+- a let-bound upstream's `Texp_ident.value_description.val_type` (the
+  *narrow*, pre-widening row the upstream had at its definition).
+
+`.cmt` files are the typed AST the compiler emits under
+`_build/default/**/*.cmt`; `compiler-libs` provides
+`Cmt_format.read_cmt` to parse them back. The tool is therefore
+version-locked against `compiler-libs` (`Typedtree`, `Types`, and
+friends drift across OCaml minors without semver); `README.md` §2
+covers the version-support policy.
 
 ### 1.1 `.cmt` vs `.cmti`
 
-The extractor walks `.cmt` only, never `.cmti`:
-`Filename.check_suffix f ".cmt"` in `extract/main.ml` (a `.cmti` file
-does not satisfy that check because the suffix comparison is
-length-strict). Consequence: **the linter sees through signature
-abstraction**. An opaque `.mli` that hides or narrows a row does not
-hide the implementation's raw `provide` / `catch` / `map_error` calls
-from hamlet-lint.
-
-Three `.mli` cases, in decreasing order of how much value the linter
-adds:
-
-- **No `.mli`.** The compiler infers the general type with the phantom
-  tag. The code type-checks, the bug is silent, the linter is the
-  only thing that catches it. This is the common case.
-- **`.mli` with a free row variable.** Signature coercion admits the
-  contaminated row; the linter catches it, the compiler does not.
-- **`.mli` with a tight concrete row.** Signature coercion itself
-  rejects the impl, a compiler error before the linter runs. Good
-  defence-in-depth, nothing for the linter to add.
+The extractor walks `.cmt` only. Consequence: the linter sees through
+`.mli` abstraction. An opaque `.mli` that hides or narrows a row does
+not hide the implementation's raw `catch` / `provide` calls from
+hamlet-lint.
 
 ### 1.2 Pre-installed libraries are invisible
 
 opam ships `.cmi` / `.cmti` / `.cmxa` into `_opam/lib/<pkg>/` but not
 `.cmt`, so anything installed from opam is invisible to the walker.
 This is shared with every typed-AST tool (merlin, mdx, ppxlib linters,
-…).
-
-Consequence for **library authors**: if your package uses Hamlet
-internally and you want a phantom-row-growth guarantee, run hamlet-lint
-in your own CI before releasing. Downstream users cannot lint it for
-you.
+...).
 
 For **library users**: the linter analyses your own code and passes
-silently over opam dependencies. You still catch stale forwards in
-your code that use a dependency's services or errors (those live in
-your own `.cmt`s); you do not catch stale forwards inside the
-dependency itself.
+silently over opam dependencies. For **library authors**: if your
+package uses Hamlet internally and you want a no-widening guarantee,
+run hamlet-lint in your own CI before releasing.
 
 ### 1.3 Two couplings, two firewalls
 
@@ -63,356 +57,185 @@ The walker is coupled to two moving targets (`compiler-libs` and
 hamlet's surface API), but only one needs a compile-time firewall.
 
 **`compiler-libs` (hard coupling).** The walker destructures
-`Types.type_expr`, `Typedtree.expression`, `Types.row_desc`, etc. These
-shapes drift across OCaml minors without semver, and two incompatible
-shapes **cannot coexist** in a single `.ml` file: the typechecker
-rejects one or the other. Fix: `cppo` preprocesses
-`extract/compat.cppo.ml` with `-V OCAML:%{ocaml_version}`, selecting a
-version-specific branch at build time. The preprocessed `compat.ml`
-lands in `_build/default/extract/`; the source tarball on opam ships
-only `compat.cppo.ml` and the rule, so cppo re-runs on the end user's
-machine against their switch. Every `dune build` triggers it, whether
-local, CI, release, or user install.
+`Types.type_expr`, `Typedtree.expression`, `Typedtree.fp_kind`,
+`Types.row_field_repr`, etc. These shapes drift across OCaml minors
+without semver. Fix: `cppo` preprocesses `extract/compat.cppo.ml`
+with `-V OCAML:%{ocaml_version}` and a top-level `#error` guard
+fails the build on an unsupported switch (currently 5.4.1 only).
+Future drift adds `#if OCAML_VERSION >= (5, 5, 0)` branches
+in that single file; nothing else in `extract/` should know about
+OCaml versions.
 
 **hamlet (soft coupling).** The walker doesn't link hamlet. It reads
 `.cmt` files of projects that use hamlet and matches on string-shaped
-data: dotted paths like `Hamlet.Combinators.catch`, handler argument
-positions, the three type parameters of `('a, 'e, 'r) Hamlet.t`. Two
-hamlet vocabularies can coexist in the same walker; just extend the
-pattern list (`| "catch" | "recover" -> Catch`). No `#if` needed; this
-is runtime-soft matching, not compile-time-hard type destructuring.
+data: dotted paths like `Hamlet.Combinators.catch`, the three type
+parameters of `('a, 'e, 'r) Hamlet.t`, the labels `~f` / `~h`. New
+hamlet vocabulary is just one more pattern in `classify.ml`.
 
-**When the soft coupling isn't enough.** "One more pattern" suffices
-for additive changes and renames. A **structural** hamlet change
-breaks the walker and requires code surgery, not a new pattern:
-
-- `Hamlet.t` gains a fourth type parameter →
-  `compat.cppo.ml:effect_type_row_lbs` destructures `[_a; e; r]` and
-  goes non-exhaustive. Migration.
-- Combinator argument order changes (`catch eff ~f:h` →
-  `catch ~f:h eff`, positional ↔ labelled swap) →
-  `walker.ml:concrete_of_apply` rewritten, per combinator.
-- Effect representation changes (rows → GADTs, first-class modules,
-  etc.) → `row_lower_bound` premise collapses. Walker redesign.
-- Combinator semantics change (e.g. a new `catch` variant that
-  legitimately re-raises its matched tag) → rule itself rewritten,
-  not just the walker.
-
-For cases (1) through (4), supporting both the old and the new hamlet simultaneously
-means dispatching inside the walker on which hamlet produced the
-`.cmt` (readable from `cmt_imports`). Feasible but costly. The
-pragmatic path is to drop old hamlet support at the walker's next
-major and move on.
+A **structural** hamlet change (e.g. `Hamlet.t` gains a fourth type
+parameter) requires touching `upstream.ml`'s `hamlet_slot` and
+`classify.ml`'s `mentions_hamlet_t`, but no `#if`. Migration is local
+and obvious.
 
 ---
 
-## 2. Concrete vs latent sites
-
-A call like
-
-```ocaml
-catch prog ~f:(function ...)
-```
-
-is **concrete** when the walker can read `in_lb` directly off `prog`'s
-inferred type. But when the programmer writes a wrapper
-
-```ocaml
-let wrap eff = catch eff ~f:(function ...)
-```
-
-the handler is syntactically present at `wrap`'s definition but the
-input effect is a free row variable parameter. The walker cannot
-compute `grew` at the definition site, because it depends on which `eff` the
-caller passes in. So the extractor records a **latent site** keyed by
-the enclosing function's `Path.t`, and every `Texp_apply` of that
-function as a **call site**. The analyzer joins latent arms against
-each call site's argument row lb; the finding always lands at the
-outer call, never at the handler's definition (whether a mixed
-discharge/forward handler is buggy depends on which `eff` the caller
-passes, and different calls can differ).
-
-Wrapper chains iterate naturally until they bottom out at a concrete
-call. Latent sites whose function has zero calls in the cmt set are
-silently dropped.
-
-### 2.1 A worked example
-
-```ocaml
-(* Wrapper function: handler is here, input effect is a free parameter *)
-let give_console eff =
-  Combinators.provide
-    (function
-      | #Console.Tag.r as w -> Console.Tag.give w "stdout"
-      | #Logger.Tag.r  as r -> Combinators.need r)
-    eff
-
-(* Call site A: eff has services lb = [Console] *)
-let a () = give_console (Combinators.summon Console.Tag.key `Console)
-
-(* Call site B: eff has services lb = [Console; Logger] *)
-let b () =
-  give_console
-    (let* c = Combinators.summon Console.Tag.key `Console in
-     let* _ = Combinators.summon Logger.Tag.key  `Logger  in
-     return c)
-```
-
-At `give_console`'s definition the walker records:
-
-- a latent site with `latent_in_function = "Mod.give_console"`,
-  handler arms `[(Console, Discharge); (Logger, Forward)]`,
-  `in_lb = None`.
-
-At each outer call it records a `call_site` record with the argument's
-services lb. The analyzer joins:
-
-- Call A: `in_lb = [Console]`, `out_lb = [Logger]` (the Logger forward
-  survives). `grew = [Logger]`, `Logger` arm is Forward,
-  **finding at A**.
-- Call B: `in_lb = [Console; Logger]`, `out_lb = [Logger]` (Console
-  discharged). `grew = []`, silent.
-
-Same wrapper, two different verdicts, each one landing at the right
-place.
-
----
-
-## 3. The analyzer in pseudocode
+## 2. The two binaries, the one contract
 
 ```
-def check(row, in_lb, loc):
-  if row is None or row.handler.has_wildcard_forward: return
-  for tag in set(row.out_lower_bound) - set(in_lb):
-    if any(tag in arm.body_introduces for arm in row.handler.arms):
-      continue                      # (b) legitimate body introducer
-    for arm in row.handler.arms:    # (a) stale forward
-      if arm.tag == tag and arm.action == Forward:
-        report(loc, arm, row)
-        break
-    # (c) otherwise silent
-
-for site in concrete_sites:
-  check(site.services, site.services.in_lb, site.loc)
-  check(site.errors,   site.errors.in_lb,   site.loc)
-
-for lat in latent_sites:
-  for call in calls where call.function_path == lat.latent_in_function:
-    check(lat.services, call.arg_services_lb, call.loc)
-    check(lat.errors,   call.arg_errors_lb,   call.loc)
-```
-
-Implementation in `analyzer/rule.ml`.
-
----
-
-## 4. Two binaries, one contract
-
-```
-                  ┌───────────────────────────┐
-  .cmt files ───▶ │   hamlet-lint-extract     │
-                  │   (compiler-libs-facing)  │
-                  └─────────────┬─────────────┘
-                                │  ND-JSON on stdout
-                                ▼
-                  ┌───────────────────────────┐
-                  │   hamlet-lint             │
-                  │   (pure OCaml, the rule)  │
-                  └─────────────┬─────────────┘
-                                │  pretty report on stdout
-                                ▼
-                            exit 0 / 1
+                ┌──────────────────────────┐
+.cmt files ───▶ │   hamlet-lint-extract    │
+                │   (compiler-libs side)   │
+                └────────────┬─────────────┘
+                             │  ND-JSON on stdout
+                             │  (one record per recognised call)
+                             ▼
+                ┌──────────────────────────┐
+                │   hamlet-lint            │
+                │   (rule + report,        │
+                │    pure OCaml)           │
+                └────────────┬─────────────┘
+                             │  pretty findings on stdout
+                             ▼
+                       exit 0 / 1
 ```
 
 `hamlet-lint-extract` (directory `extract/`) is the only part of the
-project that touches `compiler-libs`. Everything that might drift
-across OCaml minors is isolated in `extract/compat.cppo.ml`: row
-lower-bound extraction, `Path.t` printing, location conversion, and
-the effect-type parameter splitter. The file is preprocessed by `cppo`
-with `-V OCAML:%{ocaml_version}`, producing `compat.ml` in the build
-dir; version-sensitive bodies go behind `#if OCAML_VERSION >= (5, 5, 0)`
-branches. A top-of-file `#error` guard asserts the supported versions;
-v0.1 pins OCaml 5.4.1 exactly, so a wrong switch fails the
-preprocess, not the typechecker. When a future OCaml release breaks
-something, exactly one file is expected to change.
+project that touches `compiler-libs`. For every recognised
+`Hamlet.Combinators.catch` / `.provide` call it emits a
+`candidate` record carrying the handler's declared tag list and
+upstream's row tag list. The extractor itself does not apply the
+rule.
 
-`hamlet-lint` (directory `analyzer/`) is pure OCaml. It reads ND-JSON
-records, runs the rule, and prints findings. It does not link against
-`compiler-libs`, so it builds unchanged against any OCaml version the
-rest of the repo compiles on, and its tests can be written purely in
-terms of the schema without needing a compiled fixture.
+`hamlet-lint` (directory `analyzer/`) is pure OCaml. It reads
+ND-JSON records, applies the rule (`declared \ upstream ≠ ∅`), and
+prints findings. Its tests are pure — hand-built schema records, no
+fixtures needed.
 
-`hamlet_lint_schema` (directory `schema/`) is the shared contract:
-the OCaml types in `schema.ml` are the single source of truth and both
-binaries encode/decode the same definitions.
+`hamlet_lint_schema` (directory `schema/`) is the shared contract;
+the OCaml types in `schema.ml` are the single source of truth and
+both binaries encode/decode the same definitions.
 
-`hamlet_lint_config` (directory `config/`) is a small library that
-parses `.hamlet-lint.sexp` project config files. Both binaries read
-it independently (the extractor picks up `targets` and `exclude`; the
-analyzer picks up `mode`). No process spawning between them.
+`hamlet_lint_config` (directory `config/`) parses the
+`.hamlet-lint.sexp` project config. Both binaries read it
+independently (extractor: `targets`, `exclude`; analyzer: `mode`).
+No process spawning between them.
+
+### 2.1 Why a wire and not a single binary
+
+Two reasons to keep extractor and analyzer separated:
+
+1. **OCaml-version isolation.** The analyzer compiles unchanged
+   against any switch and its tests have no `compiler-libs` surface.
+   Rule changes never need a re-walk; walker changes never need a
+   rule re-test.
+2. **Inspection.** A user who wants to see what the walker actually
+   extracted from a fixture can pipe the extractor through `jq`. The
+   ND-JSON line format is friendly to grep and shell pipelines.
+
+The cost is a Yojson dependency on both sides and one extra process
+per run, both negligible.
 
 ---
 
-## 5. The ND-JSON contract
+## 3. The walker (`extract/walker.ml`)
+
+A `Tast_iterator` pass over each `Cmt_format.read_cmt`'s
+`Implementation` structure. For every `Texp_apply` whose callee
+classifies as `Catch` or `Provide` (see `classify.ml`), the walker:
+
+1. Pulls upstream from the first positional arg
+   (`extract_upstream`).
+2. Pulls the handler from the `~f` / `~h` labelled arg
+   (`extract_handler`).
+3. Asks `Handler.universe_tags` for the handler's declared tag
+   universe — five recognised shapes, see `RULE.md` §3.3.
+4. Asks `Upstream.row_tags` for upstream's row tag list — uses
+   `val_type` for `Texp_ident`, `exp_type` otherwise (the documented
+   limit, see `LIMITATIONS.md` §1).
+5. When both sides are recognised, emits one `S.candidate` record.
+
+Modules:
+
+- `tags.ml` — variant-tag enumeration through `Tvariant` /
+  `row_fields` / `row_more`.
+- `classify.ml` — callee identification: `Path.name` first, then a
+  structural fingerprint via `mentions_hamlet_t`.
+- `upstream.ml` — declaration-time type extraction + slot picking.
+- `handler.ml` — five-shape extractor for the handler's universe.
+- `walker.ml` — iterator setup + per-call dispatch.
+- `compat.cppo.ml` — version firewall (currently only an `#error`
+  guard).
+
+---
+
+## 4. The analyzer (`analyzer/`)
+
+Three modules:
+
+- `rule.ml` — the rule itself: `check : S.candidate → finding option`,
+  `analyze : S.record list → finding list`. Trivial list-set
+  difference; testable in isolation against hand-built schema records
+  (`test/test_rule.ml`).
+- `report.ml` — pretty-print findings to stdout, one multi-line block
+  per finding. Format mirrors the upstream PoC so its snapshot
+  expectations carry over.
+- `main.ml` — CLI (`cmdliner`), schema-version guard, exit code (0
+  clean, 1 findings, 2 malformed input).
+
+---
+
+## 5. The ND-JSON contract (`schema/schema.ml`)
 
 Output is **newline-delimited JSON**: one self-contained object per
-line with a `"kind"` discriminator. ND-JSON streams, concatenates
-trivially across parallel `.cmt` processing, and lets the analyzer
-process records incrementally.
-
-The first record of any output is a **header**:
+line with a `"kind"` discriminator. Every stream begins with a
+`header`:
 
 ```json
-{"kind":"header","schema_version":1,"ocaml_version":"5.4.1","generated_at":"canonical"}
+{"kind":"header","schema_version":1,"ocaml_version":"5.4.1","generated_at":"runtime"}
 ```
 
-`schema_version` is a single integer; the analyzer rejects any value
-other than the major version it was compiled against, exiting with
-code 2. `ocaml_version` is the extractor's compile-time
-`Sys.ocaml_version`, echoed for diagnostic purposes. `generated_at`
-is `"canonical"` when the extractor is run with `--canonical` (stable
-snapshot mode) and `"runtime"` otherwise.
+`schema_version` is a single integer (currently `1`); the analyzer
+exits 2 on missing or mismatched version. `ocaml_version` and
+`generated_at` are diagnostic-only.
 
-Subsequent records are **concrete_site**, **latent_site**, or
-**call_site**.
-
-### 5.1 concrete_site
+Subsequent records are `candidate`:
 
 ```json
 {
-  "kind": "concrete_site",
-  "loc":  {"file":"app.ml","line":42,"col":2},
-  "combinator": "Hamlet.Combinators.catch",
-  "services": null,
-  "errors": {
-    "in_lower_bound":  ["NotFound"],
-    "out_lower_bound": ["Forbidden","Timeout"],
-    "handler": {
-      "has_wildcard_forward": false,
-      "arms": [
-        {"tag":"NotFound", "action":"Discharge","body_introduces":[],"loc":{"file":"app.ml","line":43,"col":6}},
-        {"tag":"Timeout",  "action":"Forward",  "body_introduces":[],"loc":{"file":"app.ml","line":44,"col":6}},
-        {"tag":"Forbidden","action":"Forward",  "body_introduces":[],"loc":{"file":"app.ml","line":45,"col":6}}
-      ]
-    }
-  }
+  "kind": "candidate",
+  "site_kind": "catch",
+  "combinator": "catch",
+  "loc": {"file":"app.ml","line":42,"col":2},
+  "declared": ["Console_error","Database_error"],
+  "upstream": ["Console_error"]
 }
 ```
 
+- `site_kind`: `"catch"` (slot `'e`) or `"provide"` (slot `'r`).
+- `combinator`: short callee name (e.g. `"catch"`, `"map_error"`,
+  `"Layer.provide_to_effect"`), used by the report so the user sees
+  which combinator fired.
 - `loc`: the application site, where the finding will land.
-- `combinator`: exactly one of the strings from the `RULE.md` §1
-  table, or the PPX form `"<Mod>.Tag.provide"`.
-- `services` / `errors`: row records. Exactly one is populated on any
-  given call; the other is `null`. A future combinator touching both
-  rows would populate both and the analyzer would run the rule
-  independently on each.
-- `in_lower_bound`: the `Rpresent` tags of the row at the input, read
-  through `Types.row_repr`. Absent and `Reither` tags are deliberately
-  not part of the lower bound.
-- `out_lower_bound`: same, at the output.
-- `handler.has_wildcard_forward`: set when the handler has a `_ ->`
-  forwarding arm. When true, the analyzer shortcuts the diff (the
-  wildcard unifies `out_lb = in_lb`, so `grew` is empty by
-  construction, explicit documentation that a forward-all is
-  intentional).
-- `handler.arms[*].tag`: the polymorphic variant label, without the
-  leading backtick.
-- `handler.arms[*].action`: `"Discharge"` or `"Forward"`.
-- `handler.arms[*].body_introduces`: the lower bound of `'e` read
-  off the arm body's inferred `exp_type`. Used for legitimate-body
-  suppression. Always `[]` for services arms (the body is a
-  `provide_result`, which is not an effect).
+- `declared`: handler's declared universe in source order.
+- `upstream`: upstream's row tags in source order.
 
-### 5.2 latent_site
+The analyzer applies `declared \ upstream` and emits a finding when
+the difference is non-empty.
 
-Same shape as `concrete_site` but with `"kind":"latent_site"`,
-`in_lower_bound` set to `null` on every row record, and an extra field
-`"latent_in_function":"<Path.t>"` identifying the enclosing function.
-Must be joined against one or more `call_site` records for the same
-path.
+### 5.1 Canonical mode
 
-### 5.3 call_site
-
-```json
-{
-  "kind": "call_site",
-  "function_path": "App.give_console",
-  "loc":     {"file":"app.ml","line":101,"col":10},
-  "arg_loc": {"file":"app.ml","line":101,"col":24},
-  "arg_services_lb": ["Console"],
-  "arg_errors_lb":    null
-}
-```
-
-One record per `Texp_apply` of a function whose definition has at
-least one latent handler-site inside it. The analyzer looks these up
-by `function_path` when it processes a latent site and reads the
-argument's row lbs from this record.
-
-### 5.4 Canonical mode
-
-`hamlet-lint-extract --canonical` sorts concrete sites by
+`hamlet-lint-extract --canonical` sorts candidates by
 `(file, line, col)` and sets `generated_at="canonical"`, making the
-output stable across runs. Use it for snapshot tests. The normal mode
-preserves the traversal order and embeds a real timestamp.
+output stable across runs. Use it for snapshot tests.
 
 ---
 
-## 6. Walker coverage and limits
-
-### 6.1 What the walker recognises
-
-Seven of the eight combinators from `RULE.md` §1 are fully
-instrumented (all except row 2 `<Mod>.Tag.provide`, which is
-recognised but emits no site, being never stale by construction).
-
-**Handler reference shapes.** A combinator's handler argument can be:
-
-- an inline `function | … | …`;
-- a `Texp_ident` referring to a `let`-bound function in the same
-  module;
-- the same via an alias chain (`let h = h0 and h0 = …`);
-- a nested `let … in` RHS;
-- a cross-module `Pdot` reference resolved through a global table
-  pre-built from every cmt in the load set.
-
-Alias chains and nested `let`-in chasing are capped at resolution
-depth 5. Aliasing a combinator itself (e.g.
-`let my_provide = Combinators.provide`) is handled via a
-structure pre-scan, not via the chase.
-
-**Latent wrapper sites** are supported with multi-level chains,
-mutual recursion, and cross-module joining. Chains are resolved by a
-monotone fixed-point capped at `|fns_in_load_set| + 10` passes; the
-process exits non-zero if the cap is ever hit. Latent sites are keyed
-by the canonical dotted path of the enclosing function, so two modules
-that each define a `wrap` stay distinct.
-
-**Legitimate body-introducer suppression** on errors arms (see
-`RULE.md` §2 case (b)) is driven by a syntactic scan for:
-
-- direct ``Combinators.failure (`Tag …)``;
-- the PPX `<Mod>.Errors.make_<name>` constructor form, mapped by
-  strip-prefix-and-capitalise (`make_foo_error` becomes
-  `` `Foo_error ``);
-- inline ``Combinators.try_catch f (fun _ -> `Tag)`` exn handlers.
-
-The scanner follows transitive helper calls (same-module top-level,
-nested `let`, and cross-module), capped at depth 5 with a per-scan
-visited set so mutually recursive helpers terminate. On truncation
-the scanner contributes nothing for that path. Each arm's own
-pattern tags are subtracted from its `body_introduces`, so
-`` `T -> failure `T `` remains reportable as case (a).
-
-### 6.2 Not instrumented (deferred to v0.2)
-
-Handlers flowing through data structures (record fields, hashmaps,
-functor arguments, closures returned from functions) are not
-analysed. Adding them requires a small data-flow pass that the
-current walker doesn't have.
-
-### 6.3 Failure mode
+## 6. Failure mode
 
 The walker always fails in the safe direction: unrecognised shapes
-are skipped silently, with a `HAMLET_LINT_DEBUG=1` stderr diagnostic
-for investigation. False negatives only; never false positives.
+are skipped silently. The analyzer emits findings only when both
+declared and upstream were extracted, and the difference is
+non-empty. Net result: false negatives only, never false positives.
+
+The two known gaps (inline upstream, exotic handler shapes) are
+documented in `LIMITATIONS.md`.

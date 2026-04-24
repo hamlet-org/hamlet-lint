@@ -1,3 +1,0 @@
-(library
- (name hamlet_lint_fixture_errors_body_introducer_direct_clean)
- (libraries hamlet))

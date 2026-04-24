@@ -14,6 +14,72 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-24: pivot from stale forwarding arms to retroactive widening
+
+Wholesale replacement of the detection logic. The "stale forwarding
+arm" rule and its supporting machinery (8-combinator table, latent
+sites, fixed-point promotion, body-introducer scanning, transitive
+helper resolution) are gone. The new rule is the **retroactive
+widening** check ported from `hamlet-org/hamlet` PR #9 (branch
+`prototype/ppx-te-subset-probe`, dir `lint_poc/`).
+
+**The new rule.** For every `Hamlet.Combinators.catch` /
+`.provide` call, compare the handler's declared
+`[%hamlet.te ...]` / `[%hamlet.ts ...]` tag universe against
+upstream's effective row tags (read from `Texp_ident.val_type`
+when upstream is let-bound, fallback `exp_type`). Flag tags
+declared by the handler but absent from upstream. See
+`docs/RULE.md` for the formal statement.
+
+**Architecture.** Two binaries kept; wire contract simplified. The
+extractor walks `.cmt` files and emits one `candidate` ND-JSON
+record per recognised call (handler universe + upstream row).
+The analyzer applies the rule (`declared \ upstream ≠ ∅`) and
+prints findings. Schema bumped to a single `candidate` record
+type; `concrete_site` / `latent_site` / `call_site` records are
+gone. `schema_version = 1` (re-numbered, since the wire is
+incompatible with anything older).
+
+**Source layout.**
+
+- `extract/` — five modules: `tags.ml`, `classify.ml`,
+  `upstream.ml`, `handler.ml`, `walker.ml` + `main.ml` driver +
+  `compat.cppo.ml` firewall. Total ~250 LOC, mirroring the PoC.
+- `schema/` — single `candidate` record + header, `yojson`
+  encoders.
+- `analyzer/` — `rule.ml` (list-set difference), `report.ml`
+  (multi-line pretty), `main.ml` (CLI + exit codes).
+- `config/` — preserved unchanged (sexp project config, mode/
+  targets/exclude).
+
+**Recognised handler shapes (5).** Param-pat annotation,
+function-cases annotation, scrutinee annotation, named identifier,
+single apply-built handler. `~f` and `~h` labels both accepted.
+Callee detection: full `Path.name` match plus structural
+`Hamlet.t` fingerprint for `let module HC = ... in HC.catch`.
+
+**Tests.** Old `test/cases/` (31 fixtures) trashed and replaced
+with the 12 PoC fixtures (`widening_cases.ml` 5 cases,
+`edge_cases.ml` 10 cases). `test/support/` vendored 1:1 from
+`hamlet/test/support/` so PPX expansion stays identical.
+`test_rule.ml` rewritten as pure unit tests against hand-built
+schema records; `test_e2e.ml` rewritten as a table-driven
+runner that pipes extract → analyzer per fixture and asserts
+on the flagged line numbers.
+
+**Documented limit.** Inline upstream (no let-binding) is a
+known false negative: without a `Texp_ident` we fall back to
+the already-widened `exp_type`. Workaround: bind upstream
+first (`let eff = ... in catch eff ~f:...`). See
+`docs/LIMITATIONS.md` §1.
+
+**Dropped deps.** None — `yojson` stays (schema), `parsexp` /
+`sexplib0` stay (config), `cmdliner` stays (CLI). One config
+key (`format`) removed from the documented schema (was
+reserved, never used).
+
+`make build` clean; `dune runtest` green (5 unit + 2 e2e).
+
 ## 2026-04-15: cppo wired into extract, OCaml bound tightened to 5.4.1
 
 `extract/compat.ml` renamed to `extract/compat.cppo.ml` and preprocessed
