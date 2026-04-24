@@ -305,6 +305,24 @@ let fn2_open_aliased_failure_still_flagged =
       match x with
       | [%hamlet.propagate_e] -> .)
 
+(* fn4 - BAD (regression): inner catch handler uses [let fail =
+   Combinators.failure in ... fail e] — value-aliased failure with a
+   user-chosen name (Path.last = "fail", not "failure"). Detection
+   relies on val_type_matches_failure: input variable shared with
+   Hamlet.t errors slot. Pattern used in upstream hamlet tests. *)
+let fn4_value_aliased_fail_still_flagged =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  let fail = failure in
+  catch
+    (catch eff ~f:(fun (x : [%hamlet.te Console]) ->
+         match x with `Console_error _ as e -> fail e))
+    ~f:(fun (x : [%hamlet.te Console, Database]) ->
+      match x with [%hamlet.propagate_e] -> .)
+
 (* fn3 - BAD (regression): inner provide handler uses [let need =
    Hamlet.Dispatch.need in ... need w] — value-aliased need.
    Path.name = "need", but val_type codomain is Hamlet.Dispatch.t →

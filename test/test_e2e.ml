@@ -95,7 +95,7 @@ let cases =
          slot is correctly narrow); c1 silent (no widening anywhere);
          fp1, fp2 silent (regression: user-defined give wrappers must
          not be misclassified as discharges). *)
-      expected_lines = [ 43; 55; 75; 112; 136; 177; 273; 296; 319 ];
+      expected_lines = [ 43; 55; 75; 112; 136; 177; 273; 296; 320; 339 ];
     };
   ]
 

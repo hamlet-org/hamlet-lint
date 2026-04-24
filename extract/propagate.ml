@@ -219,23 +219,72 @@ let codomain_is_hamlet_t (ty : Types.type_expr) : bool =
       && Classify.path_root_is_hamlet path
   | _ -> false
 
-(** Recognise a callee that is [Hamlet.Combinators.failure] — either by
-    canonical [Path.name] (direct call) or by structural fingerprint
-    ([Path.last = "failure"] AND val_type codomain is [Hamlet.t]). The latter
-    handles [let open Hamlet.Combinators in ... failure e] and value aliases
-    [let fail = failure in ... fail e]. *)
-let is_failure_callee (path : Path.t) (vd : Types.value_description) : bool =
-  Path.name path = "Hamlet.Combinators.failure"
-  || (Path.last path = "failure" && codomain_is_hamlet_t vd.val_type)
+(** True when [ty] has exactly the structural shape of
+    [Hamlet.Combinators.failure]'s val_type: a single-arg function
+    [`'e -> ('a, 'e, 'r) Hamlet.t`] where the input type is the SAME type
+    variable as the codomain's second type argument (the errors row slot of
+    [Hamlet.t]). Generalisation preserves this identity, so [let fail = failure]
+    keeps the structural fingerprint even though the type variables are renamed.
+    A user [let my_func e = some_eff] whose first arg is unrelated to the
+    codomain's errors row fails this check. *)
+let val_type_matches_failure (ty : Types.type_expr) : bool =
+  let ty = Ctype.expand_head Env.empty ty in
+  match Types.get_desc ty with
+  | Tarrow (_, dom, codom, _) -> (
+      let dom = Ctype.expand_head Env.empty dom in
+      let codom = Ctype.expand_head Env.empty codom in
+      match (Types.get_desc dom, Types.get_desc codom) with
+      | Tvar _, Tconstr (path, args, _) ->
+          List.length args = 3
+          && Path.last path = "t"
+          && Classify.path_root_is_hamlet path
+          &&
+          (* the second type arg of Hamlet.t is the errors row 'e *)
+          let errors_arg = List.nth args 1 in
+          Types.eq_type dom errors_arg
+      | _ -> false)
+  | _ -> false
 
-(** Recognise a callee that is [Hamlet.Dispatch.need] — either canonical
-    [Path.name] or structural fingerprint ([Path.last = "need"] AND codomain is
-    [Hamlet.Dispatch.t]). Same aliasing-survives reasoning as
-    {!is_failure_callee}. *)
-let is_dispatch_need_callee (path : Path.t) (vd : Types.value_description) :
+(** True when [ty] has exactly the structural shape of [Hamlet.Dispatch.need]'s
+    val_type: [`'r -> 'r Hamlet.Dispatch.t`] where the input shares its type
+    variable with the dispatch row. Same generalisation-preserves-identity
+    rationale as {!val_type_matches_failure}. *)
+let val_type_matches_dispatch_need (ty : Types.type_expr) : bool =
+  let ty = Ctype.expand_head Env.empty ty in
+  match Types.get_desc ty with
+  | Tarrow (_, dom, codom, _) -> (
+      let dom = Ctype.expand_head Env.empty dom in
+      let codom = Ctype.expand_head Env.empty codom in
+      match (Types.get_desc dom, Types.get_desc codom) with
+      | Tvar _, Tconstr (path, args, _) ->
+          Path.last path = "t"
+          && Classify.path_root_is_hamlet path
+          && (match path with
+            | Path.Pdot (parent, _) -> Path.last parent = "Dispatch"
+            | _ -> false)
+          && List.length args >= 1
+          &&
+          let row_arg = List.hd args in
+          Types.eq_type dom row_arg
+      | _ -> false)
+  | _ -> false
+
+(** Recognise a callee that is [Hamlet.Combinators.failure] — either by
+    canonical [Path.name] (direct call) or by structural fingerprint on
+    [val_type] (generalised single-arg with the input variable shared with the
+    [Hamlet.t] errors slot). The latter handles
+    [let open Hamlet.Combinators in ... failure e], value aliases like
+    [let fail = failure in ... fail e], and any path shape OCaml materialises as
+    long as the val_type's structural identity is preserved. *)
+let is_failure_callee (_path : Path.t) (vd : Types.value_description) : bool =
+  val_type_matches_failure vd.val_type
+
+(** Recognise a callee that is [Hamlet.Dispatch.need] — same approach as
+    {!is_failure_callee} but matching the [Dispatch.need] signature fingerprint.
+*)
+let is_dispatch_need_callee (_path : Path.t) (vd : Types.value_description) :
     bool =
-  Path.name path = "Hamlet.Dispatch.need"
-  || (Path.last path = "need" && codomain_is_hamlet_dispatch vd.val_type)
+  val_type_matches_dispatch_need vd.val_type
 
 (** Result of classifying one provide handler arm. *)
 type provide_arm =
