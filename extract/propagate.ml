@@ -233,13 +233,18 @@ let val_type_matches_failure (ty : Types.type_expr) : bool =
   | Tarrow (_, dom, codom, _) -> (
       let dom = Ctype.expand_head Env.empty dom in
       let codom = Ctype.expand_head Env.empty codom in
-      match (Types.get_desc dom, Types.get_desc codom) with
-      | Tvar _, Tconstr (path, args, _) ->
+      match Types.get_desc codom with
+      | Tconstr (path, args, _) ->
           List.length args = 3
           && Path.last path = "t"
           && Classify.path_root_is_hamlet path
           &&
-          (* the second type arg of Hamlet.t is the errors row 'e *)
+          (* the second type arg of Hamlet.t is the errors row 'e —
+             check input type IS the same type (Tvar OR concrete)
+             as the codomain's errors slot. Allows typed aliases
+             [let fail_console : Console.Errors.error -> _ Hamlet.t
+               = failure] (both dom and errors_arg become
+             Console.Errors.error and Types.eq_type still holds). *)
           let errors_arg = List.nth args 1 in
           Types.eq_type dom errors_arg
       | _ -> false)
@@ -255,8 +260,8 @@ let val_type_matches_dispatch_need (ty : Types.type_expr) : bool =
   | Tarrow (_, dom, codom, _) -> (
       let dom = Ctype.expand_head Env.empty dom in
       let codom = Ctype.expand_head Env.empty codom in
-      match (Types.get_desc dom, Types.get_desc codom) with
-      | Tvar _, Tconstr (path, args, _) ->
+      match Types.get_desc codom with
+      | Tconstr (path, args, _) ->
           Path.last path = "t"
           && Classify.path_root_is_hamlet path
           && (match path with
