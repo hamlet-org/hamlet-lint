@@ -182,8 +182,12 @@ let test_analyzer_missing_input () =
           (Filename.quote analyze_bin)))
 
 (* A corrupt or non-cmt file passed to extract must not crash with an
-   uncaught Cmt_format.Error / Sys_error / End_of_file — it must exit 2
-   like every other documented user-error path. *)
+   uncaught Cmt_format.Error / Sys_error / End_of_file / Magic_numbers.* —
+   it must exit 2 like every other documented user-error path AND emit
+   the controlled "hamlet-lint-extract:" stderr prefix. The stderr check
+   is essential because OCaml uncaught exceptions also exit 2 by
+   convention, so the exit code alone can't distinguish a controlled
+   die_user_error from an uncaught Bad_cmt. *)
 let test_extract_corrupt_cmt () =
   let tmp = Filename.get_temp_dir_name () in
   let suffix = Printf.sprintf "hl-bad-cmt-%d" (Unix.getpid ()) in
@@ -193,15 +197,24 @@ let test_extract_corrupt_cmt () =
   let oc = open_out_bin bad in
   output_string oc "not a real cmt file at all";
   close_out oc;
-  let code =
-    exit_of_command
-      (Printf.sprintf "%s %s"
-         (Filename.quote extract_bin)
-         (Filename.quote root))
+  let stderr_path = Filename.concat root "stderr.txt" in
+  let cmd =
+    Printf.sprintf "%s %s 2> %s >/dev/null"
+      (Filename.quote extract_bin)
+      (Filename.quote root)
+      (Filename.quote stderr_path)
   in
+  let code = match Unix.system cmd with WEXITED n -> n | _ -> 255 in
+  let stderr_content = read_all (open_in stderr_path) in
+  Sys.remove stderr_path;
   Sys.remove bad;
   Unix.rmdir root;
-  Alcotest.(check int) "extract on corrupt .cmt → exit 2" 2 code
+  Alcotest.(check int) "extract on corrupt .cmt → exit 2" 2 code;
+  Alcotest.(check bool)
+    "controlled error message on stderr" true
+    (let prefix = "hamlet-lint-extract:" in
+     String.length stderr_content >= String.length prefix
+     && String.sub stderr_content 0 (String.length prefix) = prefix)
 
 (* The exclude-prefix bug surfaced by codex: `--exclude /a/foo` must
    not also exclude `/a/foobar`. We can't easily build a real

@@ -95,16 +95,19 @@ exception Bad_cmt of string * string
 (** Walk one [.cmt] file, accumulating candidates. Skips non-impl cmts
     (interfaces have no expressions to inspect). Raises {!Bad_cmt} when
     [Cmt_format.read_cmt] fails — caller is responsible for turning that into a
-    controlled user error. *)
+    controlled user error.
+
+    Catch-all on [Cmt_format.read_cmt] failures: the function chains through
+    [Cmt_format.read] → [Cmi_format] → [Magic_numbers], any of which can throw
+    its own exception type (including [Magic_numbers.Cmi.Error] for wrong-magic
+    files, [Sys_error] for unreadable ones, [End_of_file] for truncated ones,
+    [Cmt_format.Error] for non-typedtree payloads). Anything thrown there means
+    "this file is not a usable .cmt", so we wrap it uniformly as [Bad_cmt]
+    instead of trying to enumerate the exception surface. *)
 let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
   let cmt =
-    try Cmt_format.read_cmt path with
-    | Cmt_format.Error (Not_a_typedtree msg) -> raise (Bad_cmt (path, msg))
-    | Sys_error msg -> raise (Bad_cmt (path, msg))
-    | End_of_file ->
-        raise
-          (Bad_cmt (path, "unexpected end of file (truncated or empty .cmt)"))
-    | Failure msg -> raise (Bad_cmt (path, msg))
+    try Cmt_format.read_cmt path
+    with e -> raise (Bad_cmt (path, Printexc.to_string e))
   in
   match cmt.cmt_annots with
   | Implementation str ->
