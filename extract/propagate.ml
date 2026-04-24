@@ -149,147 +149,28 @@ let is_expose_of_var (e : expression) (v : Ident.t) : bool =
       | _ -> false)
   | _ -> false
 
-(** True when [ty]'s last-arrow codomain is a [Hamlet.Dispatch.t] (the
-    [_ dispatch] type from {!Hamlet.Combinators.summon} / [.give] / etc.). The
-    PPX-generated [Tag.give] / [Tag.need] always returns [_ dispatch], so this
-    is the structural fingerprint of "this is a real Hamlet dispatch primitive,
-    not an unrelated user helper named [give]". *)
-let codomain_is_hamlet_dispatch (ty : Types.type_expr) : bool =
-  let rec last_codom ty =
-    let ty = Ctype.expand_head Env.empty ty in
-    match Types.get_desc ty with
-    | Tarrow (_, _, codom, _) -> last_codom codom
-    | _ -> ty
-  in
-  let codom = last_codom ty in
-  match Types.get_desc codom with
-  | Tconstr (path, _, _) -> (
-      Path.last path = "t"
-      && Classify.path_root_is_hamlet path
-      &&
-      (* parent module's last segment is "Dispatch" — narrows from "any
-         Hamlet-rooted t" to specifically Dispatch.t. *)
-      match path with
-      | Path.Pdot (parent, _) -> Path.last parent = "Dispatch"
-      | _ -> false)
+(** Recognise [Hamlet.Combinators.failure] by canonical [Path.name]. User
+    aliases ([let fail = failure], [let open Hamlet.Combinators]) are
+    intentionally unsupported — see LIMITATIONS §6. *)
+let is_failure_callee (path : Path.t) : bool =
+  Path.name path = "Hamlet.Combinators.failure"
+
+(** Recognise [Hamlet.Dispatch.need] by canonical [Path.name]. Aliases
+    intentionally unsupported (LIMITATIONS §6). *)
+let is_dispatch_need_callee (path : Path.t) : bool =
+  Path.name path = "Hamlet.Dispatch.need"
+
+(** Recognise PPX-generated [<X>.Tag.give] by structural shape:
+    [Path.last = "give"] AND parent module's last segment is ["Tag"]. The
+    [%hamlet.service] PPX always wraps give in a module called Tag (one per
+    declared service). Pathological wrappers (user-defined `module Tag = struct
+    let give = ... end`) are out of scope. *)
+let is_tag_give_callee (path : Path.t) : bool =
+  Path.last path = "give"
+  &&
+  match path with
+  | Path.Pdot (parent, _) -> Path.last parent = "Tag"
   | _ -> false
-
-(** True when [ty]'s first-arrow domain is a [Tconstr] whose [Path.last] is
-    ["r"]. PPX-generated [Tag.give] is [fun (_ : r) impl -> ...] (see
-    ppx_hamlet.ml around the give/need/summon/provide generation): the first
-    argument's annotation pins its type to the local [r] (the Tag module's
-    polyvariant tag-row type), so the val_type's first-arg domain is a [Tconstr]
-    resolving to some [<...>.r]. A user-written wrapper without that annotation
-    gets a generic [Tvar] for the first arg, which fails this check.
-
-    Combined with {!codomain_is_hamlet_dispatch}, this filters non-PPX [give]
-    helpers reliably without depending on the parent module's name (which would
-    break legitimate module aliases like
-    [let module T = Console.Tag in T.give w impl] — there the path's parent
-    segment is [T], not [Tag], but the val_type's first arg is still
-    [Console.Tag.r]). *)
-let first_arg_is_tag_r (ty : Types.type_expr) : bool =
-  let ty = Ctype.expand_head Env.empty ty in
-  match Types.get_desc ty with
-  | Tarrow (_, dom, _, _) -> (
-      let dom = Ctype.expand_head Env.empty dom in
-      match Types.get_desc dom with
-      | Tconstr (path, _, _) -> Path.last path = "r"
-      | _ -> false)
-  | _ -> false
-
-(** True when [ty]'s last-arrow codomain is a 3-arg Hamlet-rooted [t] (i.e.
-    [(_, _, _) Hamlet.t]). Used to recognise [Hamlet.Combinators.failure] across
-    path aliasing — failure's signature is [`'e -> ('a, 'e, 'r) h`]
-    (signatures.mli COMBINATORS sig), so its codomain is always [Hamlet.t]. A
-    user [let fail = failure] preserves the same [val_type] even though
-    [Path.name] becomes the local name. *)
-let codomain_is_hamlet_t (ty : Types.type_expr) : bool =
-  let rec last_codom ty =
-    let ty = Ctype.expand_head Env.empty ty in
-    match Types.get_desc ty with
-    | Tarrow (_, _, codom, _) -> last_codom codom
-    | _ -> ty
-  in
-  let codom = last_codom ty in
-  match Types.get_desc codom with
-  | Tconstr (path, args, _) ->
-      List.length args = 3
-      && Path.last path = "t"
-      && Classify.path_root_is_hamlet path
-  | _ -> false
-
-(** True when [ty] has exactly the structural shape of
-    [Hamlet.Combinators.failure]'s val_type: a single-arg function
-    [`'e -> ('a, 'e, 'r) Hamlet.t`] where the input type is the SAME type
-    variable as the codomain's second type argument (the errors row slot of
-    [Hamlet.t]). Generalisation preserves this identity, so [let fail = failure]
-    keeps the structural fingerprint even though the type variables are renamed.
-    A user [let my_func e = some_eff] whose first arg is unrelated to the
-    codomain's errors row fails this check. *)
-let val_type_matches_failure (ty : Types.type_expr) : bool =
-  let ty = Ctype.expand_head Env.empty ty in
-  match Types.get_desc ty with
-  | Tarrow (_, dom, codom, _) -> (
-      let dom = Ctype.expand_head Env.empty dom in
-      let codom = Ctype.expand_head Env.empty codom in
-      match Types.get_desc codom with
-      | Tconstr (path, args, _) ->
-          List.length args = 3
-          && Path.last path = "t"
-          && Classify.path_root_is_hamlet path
-          &&
-          (* the second type arg of Hamlet.t is the errors row 'e —
-             check input type IS the same type (Tvar OR concrete)
-             as the codomain's errors slot. Allows typed aliases
-             [let fail_console : Console.Errors.error -> _ Hamlet.t
-               = failure] (both dom and errors_arg become
-             Console.Errors.error and Types.eq_type still holds). *)
-          let errors_arg = List.nth args 1 in
-          Types.eq_type dom errors_arg
-      | _ -> false)
-  | _ -> false
-
-(** True when [ty] has exactly the structural shape of [Hamlet.Dispatch.need]'s
-    val_type: [`'r -> 'r Hamlet.Dispatch.t`] where the input shares its type
-    variable with the dispatch row. Same generalisation-preserves-identity
-    rationale as {!val_type_matches_failure}. *)
-let val_type_matches_dispatch_need (ty : Types.type_expr) : bool =
-  let ty = Ctype.expand_head Env.empty ty in
-  match Types.get_desc ty with
-  | Tarrow (_, dom, codom, _) -> (
-      let dom = Ctype.expand_head Env.empty dom in
-      let codom = Ctype.expand_head Env.empty codom in
-      match Types.get_desc codom with
-      | Tconstr (path, args, _) ->
-          Path.last path = "t"
-          && Classify.path_root_is_hamlet path
-          && (match path with
-            | Path.Pdot (parent, _) -> Path.last parent = "Dispatch"
-            | _ -> false)
-          && List.length args >= 1
-          &&
-          let row_arg = List.hd args in
-          Types.eq_type dom row_arg
-      | _ -> false)
-  | _ -> false
-
-(** Recognise a callee that is [Hamlet.Combinators.failure] — either by
-    canonical [Path.name] (direct call) or by structural fingerprint on
-    [val_type] (generalised single-arg with the input variable shared with the
-    [Hamlet.t] errors slot). The latter handles
-    [let open Hamlet.Combinators in ... failure e], value aliases like
-    [let fail = failure in ... fail e], and any path shape OCaml materialises as
-    long as the val_type's structural identity is preserved. *)
-let is_failure_callee (_path : Path.t) (vd : Types.value_description) : bool =
-  val_type_matches_failure vd.val_type
-
-(** Recognise a callee that is [Hamlet.Dispatch.need] — same approach as
-    {!is_failure_callee} but matching the [Dispatch.need] signature fingerprint.
-*)
-let is_dispatch_need_callee (_path : Path.t) (vd : Types.value_description) :
-    bool =
-  val_type_matches_dispatch_need vd.val_type
 
 (** Result of classifying one provide handler arm. *)
 type provide_arm =
@@ -299,20 +180,12 @@ type provide_arm =
   | Pa_unknown
       (** anything else: the handler is not pure-propagate / pure-discharge *)
 
-(** Classify the RHS of one provide handler arm. The RHS shapes we recognise
-    (see ppx_hamlet.ml gen_rest_arm and widening_cases.ml lines 53/66 dump):
-    - [Texp_apply (Hamlet.Dispatch.need, [Nolabel, Arg (Texp_ident alias)])] →
-      Pa_need
-    - [Texp_apply (<X>.Tag.give, (Nolabel, Arg (Texp_ident alias)) :: _)] →
-      Pa_give (one or more tags from the matching pattern)
+(** Classify the RHS of one provide handler arm. Two recognised shapes:
+    - [Texp_apply (Hamlet.Dispatch.need, [Arg (Texp_ident alias)])] → Pa_need
+    - [Texp_apply (<X>.Tag.give, [Arg (Texp_ident alias); _])] → Pa_give
 
-    Both classifications are gated on the callee's [val_type]'s last-arrow
-    codomain being [Hamlet.Dispatch.t]. Without that gate any user-defined
-    helper called [give] (e.g. [let give w _ = ()]) could make an inline inner
-    combinator look narrower than it really is and introduce a false-positive
-    finding on the outer step.
-
-    Tags are taken from the case pattern via [collect_variant_tags]. *)
+    Aliased forms ([let need = Dispatch.need], [let open ...], etc.) are out of
+    scope (LIMITATIONS §6). Tags are taken from the case pattern. *)
 let classify_provide_arm (Arm (lhs, guard, rhs) : arm) : provide_arm =
   if guard <> None then Pa_unknown
   else
@@ -326,28 +199,12 @@ let classify_provide_arm (Arm (lhs, guard, rhs) : arm) : provide_arm =
         if not first_arg_is_var then Pa_unknown
         else
           match callee.exp_desc with
-          | Texp_ident (path, _, vd) -> (
+          | Texp_ident (path, _, _) -> (
               match collect_variant_tags lhs with
               | None -> Pa_unknown
               | Some tags ->
-                  if is_dispatch_need_callee path vd then Pa_need tags
-                  else if
-                    (* PPX-generated <X>.Tag.give signature pinned by
-                       structural fingerprint: codomain is
-                       [Hamlet.Dispatch.t] AND first-arg is a [Tconstr]
-                       to some [<...>.r]. A user-defined helper named
-                       [give] without an explicit [r] annotation has a
-                       generic [Tvar] first arg and fails. The parent
-                       module's name is intentionally NOT checked,
-                       because legitimate module aliases like
-                       [let module T = Console.Tag in T.give w impl]
-                       give a path whose parent segment is [T], not
-                       [Tag], even though val_type still resolves the
-                       first arg to [Console.Tag.r]. *)
-                    Path.last path = "give"
-                    && codomain_is_hamlet_dispatch vd.val_type
-                    && first_arg_is_tag_r vd.val_type
-                  then Pa_give tags
+                  if is_dispatch_need_callee path then Pa_need tags
+                  else if is_tag_give_callee path then Pa_give tags
                   else Pa_unknown)
           | _ -> Pa_unknown)
     | _ -> Pa_unknown
@@ -385,7 +242,7 @@ let classify_catch_handler ~peel (h : expression) : catch_handler =
                 ->
                   let path_is_failure =
                     match callee.exp_desc with
-                    | Texp_ident (path, _, vd) -> is_failure_callee path vd
+                    | Texp_ident (path, _, _) -> is_failure_callee path
                     | _ -> false
                   in
                   path_is_failure
