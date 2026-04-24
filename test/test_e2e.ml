@@ -77,7 +77,7 @@ let cases =
     {
       fixture = "Layer_cases";
       expected_exit = 1;
-      expected_lines = [ 33; 68; 134; 157 ];
+      expected_lines = [ 34; 59; 94; 160; 183 ];
     };
   ]
 

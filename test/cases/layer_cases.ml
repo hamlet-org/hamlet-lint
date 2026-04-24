@@ -11,6 +11,32 @@
 
 open Hamlet_test_services
 
+(* ========== Layer.catch ========== *)
+
+(* lc1 - GOOD: Layer.catch handler covers exactly upstream's errors *)
+let lc1_layer_catch_narrow () =
+  let lay =
+    Hamlet.Layer.make Console.Tag.key
+      (Hamlet.Combinators.failure (`Console_error "boom"))
+  in
+  Hamlet.Layer.catch lay ~f:(fun (x : [%hamlet.te Console]) ->
+      match x with
+      | `Console_error _ ->
+          Hamlet.Layer.make Console.Tag.key
+            (Hamlet.Combinators.failure (`Console_error "fallback")))
+
+(* lc2 - BAD: Layer.catch handler declares Console + Database; upstream emits only Console *)
+let lc2_layer_catch_widening () =
+  let lay =
+    Hamlet.Layer.make Console.Tag.key
+      (Hamlet.Combinators.failure (`Console_error "boom"))
+  in
+  Hamlet.Layer.catch lay ~f:(fun (x : [%hamlet.te Console, Database]) ->
+      match x with
+      | `Console_error _ | `Connection_error _ | `Query_error _ ->
+          Hamlet.Layer.make Console.Tag.key
+            (Hamlet.Combinators.failure (`Console_error "fallback")))
+
 (* ========== Combinators.map_error ========== *)
 
 (* m1 - GOOD: handler declares only what upstream emits *)
