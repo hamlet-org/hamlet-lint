@@ -187,6 +187,42 @@ let lpe1_chained_layer_provide_outer_widening () =
 (* lpe2 - GOOD: same shape as lpe1 but the outer's handler declares
    exactly the residual (Database only, since inner already discharged
    Console and only re-needed Database). *)
+(* fp1 - GOOD (regression): user-defined helpers named [give] / [expose_*]
+   in an inline inner combinator must NOT make the residual look narrower
+   than it really is. Without provenance gates on the give/expose
+   detectors a bogus outer finding would appear here. *)
+module User_helpers_for_fp_test = struct
+  let give w _ =
+    Hamlet.Dispatch.need w (* same shape as Tag.give but user-defined *)
+  let expose_x e = e (* user-defined non-hamlet expose *)
+  let _ = expose_x (* suppress unused warning *)
+end
+
+let fp1_user_give_no_false_positive =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    let* (module D) = Database.Tag.summon () in
+    let* () = C.print_endline "go" in
+    D.connect "x"
+  in
+  (* outer provide declares Console+Database. Inner provide uses a
+     USER-DEFINED [give] (re-needs the tag instead of discharging). The
+     residual on slot 2 = upstream slot 2 = [Console; Database]. Since
+     outer == upstream, no finding. With the old over-permissive
+     give detector, the user-defined [give] would have been classified
+     as a discharge → residual narrowed → bogus outer finding. *)
+  provide
+    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+         match x with
+         | #Console.Tag.r as w -> User_helpers_for_fp_test.give w (failwith "C")
+         | #Database.Tag.r as w ->
+             User_helpers_for_fp_test.give w (failwith "D")))
+    ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+      match x with
+      | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
+      | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
+
 let lpe2_chained_layer_provide_narrow () =
   let open Hamlet.Combinators in
   let eff =
