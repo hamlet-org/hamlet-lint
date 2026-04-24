@@ -90,9 +90,12 @@ let cases =
       (* c2 outer (pipe), c3 outer (nested), c4 outer (triple-pipe),
          p2 outer (nested provide chain), x1 outer catch over inner
          provide, lpe1 outer Layer.provide_to_effect over inner
-         Combinators.provide. p1, x2, lpe2 silent (handler-driven
-         slot is correctly narrow); c1 silent (no widening anywhere). *)
-      expected_lines = [ 43; 55; 75; 112; 136; 177 ];
+         Combinators.provide, fn1 outer with module-aliased
+         <Alias>.give in inner. p1, x2, lpe2 silent (handler-driven
+         slot is correctly narrow); c1 silent (no widening anywhere);
+         fp1, fp2 silent (regression: user-defined give wrappers must
+         not be misclassified as discharges). *)
+      expected_lines = [ 43; 55; 75; 112; 136; 177; 273 ];
     };
   ]
 

@@ -223,6 +223,65 @@ let fp1_user_give_no_false_positive =
       | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
       | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
 
+(* fp2 - GOOD (regression): a user-defined [Tag.give] (parent module
+   literally called "Tag" but the give is hand-written and re-needs
+   instead of discharging). The first-arg-is-Tconstr-r gate catches
+   this: the user's give has no [r] annotation, so its val_type's first
+   arg is a generic [Tvar], not a [Tconstr] to [<...>.r]. *)
+module User_helpers_with_tag_module = struct
+  module Tag = struct
+    let give w _ = Hamlet.Dispatch.need w
+  end
+end
+
+let fp2_user_tag_module_no_false_positive =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    let* (module D) = Database.Tag.summon () in
+    let* () = C.print_endline "go" in
+    D.connect "x"
+  in
+  provide
+    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+         match x with
+         | #Console.Tag.r as w ->
+             User_helpers_with_tag_module.Tag.give w (failwith "C")
+         | #Database.Tag.r as w ->
+             User_helpers_with_tag_module.Tag.give w (failwith "D")))
+    ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+      match x with
+      | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
+      | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
+
+(* fn1 - BAD (regression): module-aliased Tag.give must STILL be
+   detected as discharge so chained inline provide flagging keeps
+   working. The gate intentionally avoids checking the parent module's
+   name (which would be [CT]/[DT], not [Tag], in this scenario) and
+   relies on val_type structure instead. *)
+module CT = Console.Tag
+module DT = Database.Tag
+
+let fn1_module_alias_tag_give_still_flagged =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    let* (module D) = Database.Tag.summon () in
+    let* () = C.print_endline "go" in
+    D.connect "x"
+  in
+  provide
+    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+         match x with
+         | #Console.Tag.r as w -> CT.give w (failwith "C")
+         | #Database.Tag.r as w -> DT.give w (failwith "D")))
+    ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+      (* outer declares Console+Database but residual after inner =
+         empty (inner discharged both). Flag. *)
+      match x with
+      | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
+      | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
+
 let lpe2_chained_layer_provide_narrow () =
   let open Hamlet.Combinators in
   let eff =

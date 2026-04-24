@@ -174,6 +174,30 @@ let codomain_is_hamlet_dispatch (ty : Types.type_expr) : bool =
       | _ -> false)
   | _ -> false
 
+(** True when [ty]'s first-arrow domain is a [Tconstr] whose [Path.last] is
+    ["r"]. PPX-generated [Tag.give] is [fun (_ : r) impl -> ...] (see
+    ppx_hamlet.ml around the give/need/summon/provide generation): the first
+    argument's annotation pins its type to the local [r] (the Tag module's
+    polyvariant tag-row type), so the val_type's first-arg domain is a [Tconstr]
+    resolving to some [<...>.r]. A user-written wrapper without that annotation
+    gets a generic [Tvar] for the first arg, which fails this check.
+
+    Combined with {!codomain_is_hamlet_dispatch}, this filters non-PPX [give]
+    helpers reliably without depending on the parent module's name (which would
+    break legitimate module aliases like
+    [let module T = Console.Tag in T.give w impl] — there the path's parent
+    segment is [T], not [Tag], but the val_type's first arg is still
+    [Console.Tag.r]). *)
+let first_arg_is_tag_r (ty : Types.type_expr) : bool =
+  let ty = Ctype.expand_head Env.empty ty in
+  match Types.get_desc ty with
+  | Tarrow (_, dom, _, _) -> (
+      let dom = Ctype.expand_head Env.empty dom in
+      match Types.get_desc dom with
+      | Tconstr (path, _, _) -> Path.last path = "r"
+      | _ -> false)
+  | _ -> false
+
 (** Result of classifying one provide handler arm. *)
 type provide_arm =
   | Pa_give of string list
@@ -216,15 +240,21 @@ let classify_provide_arm (Arm (lhs, guard, rhs) : arm) : provide_arm =
                   let n = Path.name path in
                   if n = "Hamlet.Dispatch.need" then Pa_need tags
                   else if
+                    (* PPX-generated <X>.Tag.give signature pinned by
+                       structural fingerprint: codomain is
+                       [Hamlet.Dispatch.t] AND first-arg is a [Tconstr]
+                       to some [<...>.r]. A user-defined helper named
+                       [give] without an explicit [r] annotation has a
+                       generic [Tvar] first arg and fails. The parent
+                       module's name is intentionally NOT checked,
+                       because legitimate module aliases like
+                       [let module T = Console.Tag in T.give w impl]
+                       give a path whose parent segment is [T], not
+                       [Tag], even though val_type still resolves the
+                       first arg to [Console.Tag.r]. *)
                     Path.last path = "give"
-                    (* PPX-generated Tag.give lives inside a module
-                          called "Tag". This filters out user-defined
-                          [let give w _ = ...] helpers that happen to
-                          have the same codomain type. *)
-                    && (match path with
-                      | Path.Pdot (parent, _) -> Path.last parent = "Tag"
-                      | _ -> false)
                     && codomain_is_hamlet_dispatch vd.val_type
+                    && first_arg_is_tag_r vd.val_type
                   then Pa_give tags
                   else Pa_unknown)
           | _ -> Pa_unknown)
