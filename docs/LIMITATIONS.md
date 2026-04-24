@@ -29,31 +29,31 @@ catch eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 Same root cause when chaining: if the inner `catch`/`provide` is
 not let-bound, the outer one's upstream is a `Texp_apply` (not a
 `Texp_ident`) and falls back to the already-widened `exp_type`.
+This applies equally to the pipe form, since `|>` is `%revapply`
+and rewrites to direct application at typedtree level.
 
 **Outer catch silent** (Database widening on the outer is missed):
 
 ```ocaml
 let eff = ... in
-catch
-  (catch eff ~f:(fun (x : [%hamlet.te Console]) -> ...))
-  ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+eff
+|> catch ~f:(fun (x : [%hamlet.te Console]) -> ...)
+|> catch ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-**Workaround** — bind the intermediate result:
+**Workaround** — let-bind every step, shadowing the previous name:
 
 ```ocaml
 let eff = ... in
-let after_first =
-  catch eff ~f:(fun (x : [%hamlet.te Console]) -> ...)
-in
-catch after_first
-  ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
-(* now the outer catch is flagged *)
+let eff = catch eff ~f:(fun (x : [%hamlet.te Console]) -> ...) in
+let eff = catch eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...) in
+eff
+(* now every catch in the chain is flagged correctly *)
 ```
 
-The inner `catch` is always checked correctly because its own
-upstream (`eff`) is let-bound — only the outer arm of the chain
-is silent.
+Reads top-to-bottom like a pipeline but each step is a `Texp_ident`
+to the next, so the linter sees the narrow `val_type` instead of
+the widened `exp_type`.
 
 ## 2. Handlers built by code the walker does not pattern-match
 
