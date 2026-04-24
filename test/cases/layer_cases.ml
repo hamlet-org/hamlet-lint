@@ -71,3 +71,56 @@ let lpe2_provide_to_effect_widening () =
       | #Console.Tag.r as w -> Console.Tag.give w impl
       | [%hamlet.propagate_s] -> .)
     eff
+
+(* ========== Layer.provide_to_layer / provide_merge_to_layer ==========
+   These two combinators take the same curried handler shape as
+   provide_to_effect but the upstream is a target Layer.t (not a
+   Hamlet.t). When the target is built via Layer.make, OCaml's value
+   restriction leaves its row variables weak ('_r) and the typechecker
+   widens them to the handler's annotation BEFORE the linter reads
+   val_type — same fundamental limit as inline upstream
+   (see docs/LIMITATIONS.md §1).
+
+   Result: the classifier correctly dispatches to these combinators
+   (Curried-Provide), the candidate is emitted, but declared = upstream
+   so no finding fires. The two GOOD fixtures below prove the dispatch
+   doesn't false-positive; a BAD fixture cannot be constructed without
+   a real service implementation pinning the row. *)
+
+let lpl_provide_to_layer_narrow () =
+  let target =
+    Hamlet.Layer.make Logger.Tag.key
+      (let open Hamlet.Combinators in
+       let* (module C) = Console.Tag.summon () in
+       let* () = C.print_endline "build logger" in
+       Hamlet.Combinators.return (failwith "L"))
+  in
+  let dep =
+    Hamlet.Layer.make Console.Tag.key
+      (Hamlet.Combinators.return (failwith "C"))
+  in
+  Hamlet.Layer.provide_to_layer ~s:dep
+    ~h:(fun impl (x : [%hamlet.ts Console]) ->
+      match x with #Console.Tag.r as w -> Console.Tag.give w impl)
+    target
+
+let lpm_provide_merge_to_layer_narrow () =
+  let target =
+    Hamlet.Layer.make Logger.Tag.key
+      (let open Hamlet.Combinators in
+       let* (module C) = Console.Tag.summon () in
+       let* () = C.print_endline "build logger" in
+       Hamlet.Combinators.return (failwith "L"))
+  in
+  let env_build =
+    let open Hamlet.Combinators in
+    return
+      (object
+         method console : (module Console.S) = failwith "C"
+      end)
+  in
+  Hamlet.Layer.provide_merge_to_layer ~s:env_build
+    ~h:(fun env (x : [%hamlet.ts Console]) ->
+      match x with
+      | #Console.Tag.r as w -> Console.Tag.give w env#console)
+    target

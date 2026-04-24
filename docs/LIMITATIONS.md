@@ -2,7 +2,13 @@
 
 What hamlet-lint does *not* catch today, and why.
 
-## 1. Inline upstream (false negative)
+## 1. Upstream row widened at let-binding (false negative)
+
+Two situations produce the same root cause: by the time the linter
+reads upstream's row, OCaml has already widened it to match the
+handler's annotation, so `declared = upstream` and no finding fires.
+
+### 1.1 Inline upstream
 
 Calls where the upstream effect is built inline rather than
 let-bound:
@@ -26,6 +32,30 @@ and emits no finding. See `docs/RULE.md` §5.
 let eff = let* (module C) = ... in C.print_endline "go" in
 catch eff ~f:...
 ```
+
+### 1.2 `Layer.t` upstream built via `Layer.make`
+
+`Layer.provide_to_layer ~s:dep ~h:(fun impl x -> ...) target` and
+`Layer.provide_merge_to_layer ~s:env ~h:(...) target`: when `target`
+was built with `Layer.make key build`, OCaml's value restriction
+gives it weak row variables (`'_r`). The handler's annotation
+unifies `target`'s `'_r` to its declared universe BEFORE the
+linter reads `Texp_ident.val_type`, so widening becomes invisible.
+
+The classifier still recognises both combinators (the candidate is
+emitted, just always with `declared = upstream`). The two GOOD
+fixtures `lpl_provide_to_layer_narrow` and
+`lpm_provide_merge_to_layer_narrow` in
+`test/cases/layer_cases.ml` lock in that no false positive fires.
+
+**No clean workaround**: pinning `target`'s row via an explicit
+type annotation would make OCaml itself reject the widening at
+compile time, defeating the linter's purpose. In practice this
+limit only matters for layers built and then immediately consumed
+in the same scope; a layer constructed in one module and consumed
+in another typically has its row pinned by the consumer's
+signature, in which case `Combinators.provide` (with a let*-chain
+upstream) catches the widening.
 
 ## 2. Handlers built by code the walker does not pattern-match
 
