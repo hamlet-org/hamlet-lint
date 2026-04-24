@@ -88,6 +88,45 @@ combinator eff ~f:...
 Idiomatic Hamlet does not write callees this way; if it became
 common we would extend the classifier.
 
+## 6. Local aliasing and partial application of the combinator
+
+The walker only classifies an outer `Texp_apply` whose callee is a
+direct `Texp_ident` resolving to a known combinator. Two related
+shapes escape detection: re-binding the combinator to a local name,
+and applying it in stages with the handler arriving on a second
+call.
+
+**Not flagged** (local rebinding — callee `c` is a user-bound
+identifier, not a Hamlet path):
+
+```ocaml
+let c = Hamlet.Combinators.catch in
+c eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+```
+
+**Not flagged** (staged application — outer apply's callee is itself
+a `Texp_apply`, not a `Texp_ident`):
+
+```ocaml
+let p = Hamlet.Combinators.catch eff in
+p ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+```
+
+**Workaround** — call the combinator in one application against a
+let-bound upstream:
+
+```ocaml
+let eff = ... in
+Hamlet.Combinators.catch eff
+  ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+(* now flagged correctly *)
+```
+
+Following values across `let`-bindings would require a typed-tree
+binding-tracker that is real scope creep relative to the rule;
+neither shape is idiomatic Hamlet, so the linter stays narrow on
+purpose.
+
 ---
 
 ## Verified to work (no longer limits)

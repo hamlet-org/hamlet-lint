@@ -178,11 +178,15 @@ Two typical fixes:
 
 ## 7. Troubleshooting
 
-**`missing header record`**: the extractor produced empty output
-(no `.cmt` files at the given paths) or you piped the wrong thing
-to `hamlet-lint`. Check with
-`hamlet-lint-extract _build/default/lib | head -1`: it should start
-with `{"kind":"header"`.
+**`missing header record`**: the analyzer was fed something that
+isn't extractor output. The extractor always emits a `header` line
+first, even when no `.cmt` files matched, so this means either you
+forgot to pipe `hamlet-lint-extract` into `hamlet-lint`, or the
+extractor crashed before writing anything (in which case extractor
+stderr will tell you why; it exits 2 on every controlled error
+path — missing inputs, unreadable directories, corrupt `.cmt`).
+Check with `hamlet-lint-extract _build/default/lib | head -1`: it
+should start with `{"kind":"header"`.
 
 **`unsupported schema_version`**: the extractor and analyzer come
 from different hamlet-lint installs. Re-install both to the same

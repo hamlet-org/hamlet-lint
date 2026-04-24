@@ -121,7 +121,12 @@ let () =
   in
   let cmts_files = List.filter (fun f -> not (is_excluded f)) cmts_files in
   let acc = ref [] in
-  List.iter (fun p -> Walker.walk_cmt p acc) cmts_files;
+  List.iter
+    (fun p ->
+      try Walker.walk_cmt p acc
+      with Walker.Bad_cmt (file, msg) ->
+        die_user_error (Printf.sprintf "cannot read %s: %s" file msg))
+    cmts_files;
   let candidates =
     let cs = List.rev !acc in
     if !canonical then canonicalise cs else cs

@@ -181,6 +181,28 @@ let test_analyzer_missing_input () =
        (Printf.sprintf "%s --input /tmp/hamlet-lint-test-does-not-exist-XYZ"
           (Filename.quote analyze_bin)))
 
+(* A corrupt or non-cmt file passed to extract must not crash with an
+   uncaught Cmt_format.Error / Sys_error / End_of_file — it must exit 2
+   like every other documented user-error path. *)
+let test_extract_corrupt_cmt () =
+  let tmp = Filename.get_temp_dir_name () in
+  let suffix = Printf.sprintf "hl-bad-cmt-%d" (Unix.getpid ()) in
+  let root = Filename.concat tmp suffix in
+  Unix.mkdir root 0o755;
+  let bad = Filename.concat root "broken.cmt" in
+  let oc = open_out_bin bad in
+  output_string oc "not a real cmt file at all";
+  close_out oc;
+  let code =
+    exit_of_command
+      (Printf.sprintf "%s %s"
+         (Filename.quote extract_bin)
+         (Filename.quote root))
+  in
+  Sys.remove bad;
+  Unix.rmdir root;
+  Alcotest.(check int) "extract on corrupt .cmt → exit 2" 2 code
+
 (* The exclude-prefix bug surfaced by codex: `--exclude /a/foo` must
    not also exclude `/a/foobar`. We can't easily build a real
    directory tree of cmts in the test, but we can check that the
@@ -256,6 +278,8 @@ let () =
             test_extract_missing_exclude;
           Alcotest.test_case "analyzer: missing --input path" `Quick
             test_analyzer_missing_input;
+          Alcotest.test_case "extract: corrupt .cmt" `Quick
+            test_extract_corrupt_cmt;
           Alcotest.test_case "exclude prefix is path-segment-aware" `Quick
             test_exclude_prefix_word_boundary;
         ] );

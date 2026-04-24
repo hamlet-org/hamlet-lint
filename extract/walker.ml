@@ -86,10 +86,26 @@ let short_name (path : Path.t) : string =
     then String.sub after_root cl (String.length after_root - cl)
     else after_root
 
+(** Raised by {!walk_cmt} when [Cmt_format.read_cmt] cannot parse [path] —
+    corrupt, truncated, or built by an incompatible compiler. The driver in
+    [extract/main.ml] catches this and exits 2 with the original message,
+    keeping the documented 0/1/2 exit-code discipline. *)
+exception Bad_cmt of string * string
+
 (** Walk one [.cmt] file, accumulating candidates. Skips non-impl cmts
-    (interfaces have no expressions to inspect). *)
+    (interfaces have no expressions to inspect). Raises {!Bad_cmt} when
+    [Cmt_format.read_cmt] fails — caller is responsible for turning that into a
+    controlled user error. *)
 let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
-  let cmt = Cmt_format.read_cmt path in
+  let cmt =
+    try Cmt_format.read_cmt path with
+    | Cmt_format.Error (Not_a_typedtree msg) -> raise (Bad_cmt (path, msg))
+    | Sys_error msg -> raise (Bad_cmt (path, msg))
+    | End_of_file ->
+        raise
+          (Bad_cmt (path, "unexpected end of file (truncated or empty .cmt)"))
+    | Failure msg -> raise (Bad_cmt (path, msg))
+  in
   match cmt.cmt_annots with
   | Implementation str ->
       let check_expr self (e : expression) =
