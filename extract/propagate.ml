@@ -198,6 +198,45 @@ let first_arg_is_tag_r (ty : Types.type_expr) : bool =
       | _ -> false)
   | _ -> false
 
+(** True when [ty]'s last-arrow codomain is a 3-arg Hamlet-rooted [t] (i.e.
+    [(_, _, _) Hamlet.t]). Used to recognise [Hamlet.Combinators.failure] across
+    path aliasing — failure's signature is [`'e -> ('a, 'e, 'r) h`]
+    (signatures.mli COMBINATORS sig), so its codomain is always [Hamlet.t]. A
+    user [let fail = failure] preserves the same [val_type] even though
+    [Path.name] becomes the local name. *)
+let codomain_is_hamlet_t (ty : Types.type_expr) : bool =
+  let rec last_codom ty =
+    let ty = Ctype.expand_head Env.empty ty in
+    match Types.get_desc ty with
+    | Tarrow (_, _, codom, _) -> last_codom codom
+    | _ -> ty
+  in
+  let codom = last_codom ty in
+  match Types.get_desc codom with
+  | Tconstr (path, args, _) ->
+      List.length args = 3
+      && Path.last path = "t"
+      && Classify.path_root_is_hamlet path
+  | _ -> false
+
+(** Recognise a callee that is [Hamlet.Combinators.failure] — either by
+    canonical [Path.name] (direct call) or by structural fingerprint
+    ([Path.last = "failure"] AND val_type codomain is [Hamlet.t]). The latter
+    handles [let open Hamlet.Combinators in ... failure e] and value aliases
+    [let fail = failure in ... fail e]. *)
+let is_failure_callee (path : Path.t) (vd : Types.value_description) : bool =
+  Path.name path = "Hamlet.Combinators.failure"
+  || (Path.last path = "failure" && codomain_is_hamlet_t vd.val_type)
+
+(** Recognise a callee that is [Hamlet.Dispatch.need] — either canonical
+    [Path.name] or structural fingerprint ([Path.last = "need"] AND codomain is
+    [Hamlet.Dispatch.t]). Same aliasing-survives reasoning as
+    {!is_failure_callee}. *)
+let is_dispatch_need_callee (path : Path.t) (vd : Types.value_description) :
+    bool =
+  Path.name path = "Hamlet.Dispatch.need"
+  || (Path.last path = "need" && codomain_is_hamlet_dispatch vd.val_type)
+
 (** Result of classifying one provide handler arm. *)
 type provide_arm =
   | Pa_give of string list
@@ -237,8 +276,7 @@ let classify_provide_arm (Arm (lhs, guard, rhs) : arm) : provide_arm =
               match collect_variant_tags lhs with
               | None -> Pa_unknown
               | Some tags ->
-                  let n = Path.name path in
-                  if n = "Hamlet.Dispatch.need" then Pa_need tags
+                  if is_dispatch_need_callee path vd then Pa_need tags
                   else if
                     (* PPX-generated <X>.Tag.give signature pinned by
                        structural fingerprint: codomain is
@@ -293,8 +331,7 @@ let classify_catch_handler ~peel (h : expression) : catch_handler =
                 ->
                   let path_is_failure =
                     match callee.exp_desc with
-                    | Texp_ident (path, _, _) ->
-                        Path.name path = "Hamlet.Combinators.failure"
+                    | Texp_ident (path, _, vd) -> is_failure_callee path vd
                     | _ -> false
                   in
                   path_is_failure

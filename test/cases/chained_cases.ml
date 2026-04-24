@@ -282,6 +282,55 @@ let fn1_module_alias_tag_give_still_flagged =
       | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
       | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
 
+(* fn2 - BAD (regression): inner catch handler uses [let open
+   Hamlet.Combinators in failure] — Path.name = "failure" (not the
+   canonical "Hamlet.Combinators.failure"), so the exact-name check
+   would miss it and fall back to widened. The is_failure_callee
+   structural fingerprint (codomain = Hamlet.t) catches this. *)
+let fn2_open_aliased_failure_still_flagged =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  catch
+    (catch eff ~f:(fun (x : [%hamlet.te Console]) ->
+         (* deliberately uses opened [failure] (no Hamlet.Combinators
+            prefix) — Path.name = "failure" only *)
+         match x with
+         | `Console_error _ as e -> failure e))
+    ~f:(fun (x : [%hamlet.te Console, Database]) ->
+      (* outer declares 3 tags, residual through inner = 1 (Console_error
+         re-emitted by the aliased failure). Flag the outer. *)
+      match x with
+      | [%hamlet.propagate_e] -> .)
+
+(* fn3 - BAD (regression): inner provide handler uses [let need =
+   Hamlet.Dispatch.need in ... need w] — value-aliased need.
+   Path.name = "need", but val_type codomain is Hamlet.Dispatch.t →
+   is_dispatch_need_callee passes via the structural fingerprint. *)
+let fn3_value_aliased_need_still_flagged =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    let* (module D) = Database.Tag.summon () in
+    let* () = C.print_endline "go" in
+    D.connect "x"
+  in
+  let need = Hamlet.Dispatch.need in
+  provide
+    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+         match x with
+         | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
+         | #Database.Tag.r as w -> need w))
+    ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+      (* inner discharges Console, re-needs Database (via aliased
+         [need]). residual = [Database]. Outer declares Console+Database
+         → Console is extra. Flag. *)
+      match x with
+      | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
+      | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
+
 let lpe2_chained_layer_provide_narrow () =
   let open Hamlet.Combinators in
   let eff =
