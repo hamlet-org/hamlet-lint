@@ -38,11 +38,13 @@ let loc_to_schema (l : Location.t) : S.loc =
 
 (** Try to build a candidate for one application. [None] when either side could
     not be recognised — e.g. handler is a literal closure we don't
-    pattern-match, or upstream is not a [Hamlet.t] value. *)
-let try_candidate ~kind ~loc args : S.candidate option =
+    pattern-match, or upstream is not a [Hamlet.t] / [Layer.t] value. [~peel] is
+    the number of outer handler parameters to skip (used for curried handlers in
+    [Layer.provide_to_*]). *)
+let try_candidate ~kind ~peel ~loc args : S.candidate option =
   match (extract_upstream args, extract_handler args) with
   | Some up, Some h -> (
-      match (Handler.universe_tags h, Upstream.row_tags up ~kind) with
+      match (Handler.universe_tags ~peel h, Upstream.row_tags up ~kind) with
       | Some declared, Some upstream ->
           let site_kind : S.kind =
             match kind with `Catch -> Catch | `Provide -> Provide
@@ -62,12 +64,15 @@ let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
         | Texp_apply (fn, args) -> (
             match fn.exp_desc with
             | Texp_ident (pth, _, vd) -> (
+                let push kind peel =
+                  match try_candidate ~kind ~peel ~loc:e.exp_loc args with
+                  | Some c -> acc := c :: !acc
+                  | None -> ()
+                in
                 match Classify.classify_path pth vd.val_type with
-                | (`Catch | `Provide) as kind -> (
-                    match try_candidate ~kind ~loc:e.exp_loc args with
-                    | Some c -> acc := c :: !acc
-                    | None -> ())
-                | `Other -> ())
+                | Single kind -> push kind 0
+                | Curried kind -> push kind 1
+                | Other -> ())
             | _ -> ())
         | _ -> ());
         Tast_iterator.default_iterator.expr self e

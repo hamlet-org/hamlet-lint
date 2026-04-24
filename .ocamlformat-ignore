@@ -1,6 +1,7 @@
 extract/compat.cppo.ml
 test/cases/widening_cases.ml
 test/cases/edge_cases.ml
+test/cases/layer_cases.ml
 test/support/hamlet_test_services.ml
 test/support/metrics_sink.ml
 test/support/remote_cache.ml

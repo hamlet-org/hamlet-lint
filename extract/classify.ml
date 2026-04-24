@@ -15,8 +15,41 @@
     type constructor anywhere in its surface — a structural signature unique to
     combinators. *)
 
-let catch_path = "Hamlet.Combinators.catch"
-let provide_path = "Hamlet.Combinators.provide"
+(** All combinators we monitor. For each: which slot of the upstream's
+    [Hamlet.t] / [Layer.t] carries the row to compare against ([`Catch] = slot 1
+    = errors row, [`Provide] = slot 2 = services row), and whether the handler
+    is single-arg or curried (curried handlers like
+    [Layer.provide_to_effect ~h:(fun impl (x : [%hamlet.ts ...]) -> ...)] have
+    the annotation on the SECOND parameter). *)
+
+let single_arg_paths : (string * [ `Catch | `Provide ]) list =
+  [
+    ("Hamlet.Combinators.catch", `Catch);
+    ("Hamlet.Combinators.provide", `Provide);
+    ("Hamlet.Combinators.map_error", `Catch);
+    ("Hamlet.Layer.catch", `Catch);
+  ]
+
+let curried_paths : (string * [ `Catch | `Provide ]) list =
+  [
+    ("Hamlet.Layer.provide_to_effect", `Provide);
+    ("Hamlet.Layer.provide_to_layer", `Provide);
+    ("Hamlet.Layer.provide_merge_to_layer", `Provide);
+  ]
+
+(* For the structural fingerprint fallback: the bare name → kind / arity.
+   [Path.last] gives just the function name (no module prefix); we still
+   gate on [mentions_hamlet_t val_type] in [classify_path] to avoid
+   matching unrelated APIs. *)
+let single_arg_lasts : (string * [ `Catch | `Provide ]) list =
+  [ ("catch", `Catch); ("provide", `Provide); ("map_error", `Catch) ]
+
+let curried_lasts : (string * [ `Catch | `Provide ]) list =
+  [
+    ("provide_to_effect", `Provide);
+    ("provide_to_layer", `Provide);
+    ("provide_merge_to_layer", `Provide);
+  ]
 
 (** Walk a [Path.t] up to its root identifier and check whether that identifier
     is exactly the Hamlet library — either [Hamlet] (the canonical name) or
@@ -57,17 +90,30 @@ let mentions_hamlet_t (ty : Types.type_expr) : bool =
   in
   go ty
 
-(** Resolve a callee to one of [`Catch | `Provide | `Other]. The bare
-    [Path.last] fallback ([catch] / [provide] without the [Hamlet.Combinators.]
-    prefix, e.g. inside [let open]) requires the structural Hamlet fingerprint
-    on [val_type] to avoid grabbing unrelated [catch] / [provide] symbols from
-    other libraries. *)
+(** Result of classifying a callee: which slot to inspect ([`Catch] = errors,
+    [`Provide] = services), and whether the handler is curried (annotation on
+    the second parameter, as in [Layer.provide_to_effect]). *)
+type classification =
+  | Single of [ `Catch | `Provide ]
+  | Curried of [ `Catch | `Provide ]
+  | Other
+
+(** Resolve a callee to a {!classification}. The bare [Path.last] fallback (e.g.
+    [catch] without the [Hamlet.Combinators.] prefix inside a [let open])
+    requires the structural Hamlet fingerprint on [val_type] to avoid grabbing
+    unrelated symbols from other libraries. *)
 let classify_path (path : Path.t) (val_type : Types.type_expr) =
   let n = Path.name path in
-  if n = catch_path then `Catch
-  else if n = provide_path then `Provide
-  else
-    match Path.last path with
-    | "catch" when mentions_hamlet_t val_type -> `Catch
-    | "provide" when mentions_hamlet_t val_type -> `Provide
-    | _ -> `Other
+  match List.assoc_opt n single_arg_paths with
+  | Some kind -> Single kind
+  | None -> (
+      match List.assoc_opt n curried_paths with
+      | Some kind -> Curried kind
+      | None -> (
+          let last = Path.last path in
+          match List.assoc_opt last single_arg_lasts with
+          | Some kind when mentions_hamlet_t val_type -> Single kind
+          | _ -> (
+              match List.assoc_opt last curried_lasts with
+              | Some kind when mentions_hamlet_t val_type -> Curried kind
+              | _ -> Other)))

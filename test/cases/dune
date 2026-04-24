@@ -10,7 +10,7 @@
   (:standard -w -18-26-27-32-33-37-60-69))
  (preprocess
   (pps ppx_hamlet))
- (modules widening_cases edge_cases))
+ (modules widening_cases edge_cases layer_cases))
 
 ; Tag the build outputs so test/dune can depend on the whole tree
 ; via (alias_rec cases/all).

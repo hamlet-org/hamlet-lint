@@ -25,13 +25,26 @@ runs after compilation on the typechecker's `.cmt` output.
 
 ## 2. Combinator surface
 
-| Combinator                       | Slot inspected | PPX key             |
-|----------------------------------|----------------|---------------------|
-| `Hamlet.Combinators.catch`       | `'e` (errors)  | `[%hamlet.te ...]`  |
-| `Hamlet.Combinators.provide`     | `'r` (services)| `[%hamlet.ts ...]`  |
+Two slot families (`'e` errors / `'r` services) and two handler arities
+(single-arg `~f` / `~h:(x -> ...)` and curried `~h:(svc -> x -> ...)`):
+
+| Combinator                                | Slot           | Handler arity | PPX key            |
+|-------------------------------------------|----------------|---------------|--------------------|
+| `Hamlet.Combinators.catch`                | `'e` (errors)  | single        | `[%hamlet.te ...]` |
+| `Hamlet.Combinators.map_error`            | `'e` (errors)  | single        | `[%hamlet.te ...]` |
+| `Hamlet.Combinators.provide`              | `'r` (services)| single        | `[%hamlet.ts ...]` |
+| `Hamlet.Layer.catch`                      | `'e` (errors)  | single        | `[%hamlet.te ...]` |
+| `Hamlet.Layer.provide_to_effect`          | `'r` (services)| curried       | `[%hamlet.ts ...]` |
+| `Hamlet.Layer.provide_to_layer`           | `'r` (services)| curried       | `[%hamlet.ts ...]` |
+| `Hamlet.Layer.provide_merge_to_layer`     | `'r` (services)| curried       | `[%hamlet.ts ...]` |
 
 `'a` (the success type) is never inspected — widening on `'a` is
 a different bug class and out of scope here.
+
+**Curried handlers**: the `Layer.provide_to_*` combinators take
+`~h:(svc -> r_in -> dispatch)`. The row annotation sits on the
+*second* parameter; the linter strips one outer
+`Texp_function` layer before applying the five-shape extractor.
 
 ## 3. Recognised shapes
 
