@@ -98,11 +98,27 @@ type classification =
   | Curried of [ `Catch | `Provide ]
   | Other
 
-(** Resolve a callee to a {!classification}. The bare [Path.last] fallback (e.g.
-    [catch] without the [Hamlet.Combinators.] prefix inside a [let open])
-    requires the structural Hamlet fingerprint on [val_type] to avoid grabbing
-    unrelated symbols from other libraries. *)
-let classify_path (path : Path.t) (val_type : Types.type_expr) =
+(** Returns [true] when [vd.val_loc] points to Hamlet's published surface (the
+    top-level [hamlet.mli] / [hamlet.ml] re-exports). Used to disambiguate the
+    [let module HC = Hamlet.Combinators in HC.catch] alias case from a
+    user-defined [let catch eff ~f = ...]: both have a non-Hamlet [Path.t] root,
+    but only the former's [val_loc] points at [hamlet.mli]. *)
+let val_loc_in_hamlet_surface (vd : Types.value_description) : bool =
+  let f = Filename.basename vd.val_loc.loc_start.pos_fname in
+  f = "hamlet.mli" || f = "hamlet.ml"
+
+(** Resolve a callee to a {!classification}. The bare [Path.last] fallback fires
+    only when the callee provably comes from Hamlet — either the path itself is
+    rooted in [Hamlet] / [Hamlet__*] (covers [let open]) or the value's
+    definition site is in Hamlet's surface module (covers
+    [let module HC = Hamlet.Combinators in HC.catch] where the path root is the
+    local alias). Without one of these signals a user-defined helper named
+    [catch] / [provide] / [map_error] / [provide_to_*] could be misclassified as
+    the real combinator (regression: [edge_cases.ml::e11]). *)
+let classify_path
+    (path : Path.t)
+    (val_type : Types.type_expr)
+    (vd : Types.value_description) =
   let n = Path.name path in
   match List.assoc_opt n single_arg_paths with
   | Some kind -> Single kind
@@ -110,10 +126,13 @@ let classify_path (path : Path.t) (val_type : Types.type_expr) =
       match List.assoc_opt n curried_paths with
       | Some kind -> Curried kind
       | None -> (
-          let last = Path.last path in
-          match List.assoc_opt last single_arg_lasts with
-          | Some kind when mentions_hamlet_t val_type -> Single kind
-          | _ -> (
-              match List.assoc_opt last curried_lasts with
-              | Some kind when mentions_hamlet_t val_type -> Curried kind
-              | _ -> Other)))
+          if not (path_root_is_hamlet path || val_loc_in_hamlet_surface vd) then
+            Other
+          else
+            let last = Path.last path in
+            match List.assoc_opt last single_arg_lasts with
+            | Some kind when mentions_hamlet_t val_type -> Single kind
+            | _ -> (
+                match List.assoc_opt last curried_lasts with
+                | Some kind when mentions_hamlet_t val_type -> Curried kind
+                | _ -> Other)))

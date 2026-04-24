@@ -109,11 +109,16 @@ the rule and prints findings. Schema:
 {
   "kind": "candidate",
   "site_kind": "catch" | "provide",
+  "combinator": "catch" | "map_error" | "Layer.catch" | "Layer.provide_to_effect" | ...,
   "loc": { "file": "...", "line": N, "col": N },
   "declared": ["Tag1", "Tag2", ...],
   "upstream": ["Tag1", ...]
 }
 ```
+
+`site_kind` tells you which slot was inspected (`'e` for catch, `'r`
+for provide). `combinator` is the short name of the actual callee, so
+the report can name precisely which combinator fired.
 
 A leading `header` record carries `schema_version`. The analyzer
 exits 2 on a missing or version-mismatched header.

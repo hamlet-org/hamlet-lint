@@ -105,7 +105,7 @@ let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
                   | Some c -> acc := c :: !acc
                   | None -> ()
                 in
-                match Classify.classify_path pth vd.val_type with
+                match Classify.classify_path pth vd.val_type vd with
                 | Single kind -> push kind 0
                 | Curried kind -> push kind 1
                 | Other -> ())

@@ -101,3 +101,23 @@ let e10_named_handler_bad =
     C.print_endline "go"
   in
   catch eff ~f:handle_wide_te
+
+(* E11 - GOOD (negative): a user-defined wrapper named `catch` operating on
+   Hamlet.t must NOT be misclassified as Hamlet.Combinators.catch. The Path.last
+   = "catch" + structural Hamlet.t fingerprint matches what Combinators.catch
+   looks like, but the callee path is NOT rooted in Hamlet, so the classifier
+   must skip it (no candidate emitted). Regression for codex round 8. *)
+module User_helpers = struct
+  let catch (eff : ('a, 'e, 'r) Hamlet.t)
+      ~f:(_ : [ `Anything ] -> ('a, 'f, 'r) Hamlet.t) =
+    eff
+end
+
+let e11_user_helper_no_false_positive =
+  let eff =
+    let open Hamlet.Combinators in
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  User_helpers.catch eff ~f:(fun `Anything ->
+      Hamlet.Combinators.failure (`Console_error "x"))
