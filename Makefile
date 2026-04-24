@@ -40,16 +40,17 @@ CASES_DIR  := $(REPO_ROOT)/test/cases
 EXTRACT    := $(BUILD_DIR)/extract/main.exe
 ANALYZE    := $(BUILD_DIR)/analyzer/main.exe
 
-# Dune wraps each fixture library as `hamlet_lint_fixture_<name>` and
-# the inner module as `<Name_capitalised>`, producing a mangled cmt
-# under .objs/byte/. Capitalise the first letter of $(FIXTURE) at
-# target-evaluation time so `run FIXTURE=wrapper_stale` finds
-# `Wrapper_stale.cmt` without the caller having to know. Portable
+# Fixtures live in a single dune library (`hamlet_lint_fixtures`) with
+# one module per file under test/cases/*.ml. Dune mangles the cmt as
+# `hamlet_lint_fixtures__<Cap>.cmt` under
+# `_build/default/test/cases/.hamlet_lint_fixtures.objs/byte/`.
+# Capitalise the first letter of $(FIXTURE) at target-evaluation time
+# so `run FIXTURE=widening_cases` finds Widening_cases.cmt. Portable
 # cut+tr rather than sed '\U' (GNU-only, breaks on BSD sed / macOS).
 FIXTURE_HEAD = $(shell echo "$(FIXTURE)" | cut -c1 | tr '[:lower:]' '[:upper:]')
 FIXTURE_TAIL = $(shell echo "$(FIXTURE)" | cut -c2-)
 FIXTURE_CAP  = $(FIXTURE_HEAD)$(FIXTURE_TAIL)
-CASE_CMT     = $(BUILD_DIR)/test/cases/$(FIXTURE)/.hamlet_lint_fixture_$(FIXTURE).objs/byte/hamlet_lint_fixture_$(FIXTURE)__$(FIXTURE_CAP).cmt
+CASE_CMT     = $(BUILD_DIR)/test/cases/.hamlet_lint_fixtures.objs/byte/hamlet_lint_fixtures__$(FIXTURE_CAP).cmt
 
 .PHONY: help build test fmt fmt-fix doc opam promote all setup hooks list paths \
         run warn ndjson debug _require_fixture _maybe_promote
@@ -107,7 +108,7 @@ paths:
 	@echo "ANALYZE   = $(ANALYZE)"
 
 list:
-	@ls -1 $(CASES_DIR) | grep -vE '^(README\.md|dune)$$'
+	@ls -1 $(CASES_DIR) | grep -E '\.ml$$' | sed 's/\.ml$$//'
 
 # Ensure FIXTURE is set and the corresponding .cmt exists on disk.
 # Prints the list of available fixtures on a missing-name error so the
@@ -117,7 +118,7 @@ _require_fixture:
 	  echo "error: FIXTURE=<name> is required" >&2; \
 	  echo "" >&2; \
 	  echo "available fixtures:" >&2; \
-	  ls -1 $(CASES_DIR) | grep -vE '^(README\.md|dune)$$' | sed 's/^/  /' >&2; \
+	  ls -1 $(CASES_DIR) | grep -E '\.ml$$' | sed 's/\.ml$$//' | sed 's/^/  /' >&2; \
 	  exit 1; \
 	fi
 	@if [ ! -f "$(CASE_CMT)" ]; then \

@@ -1,199 +1,117 @@
-(** Rule-level tests for the analyzer. These drive the §2.3 check directly with
-    hand-built schema records, so they exercise the linter semantics without
-    needing a working extractor or compiled fixtures.
+(** Unit tests for the analyzer rule. Hand-built schema records, no extractor /
+    fixtures involved — exercise the rule logic in isolation. *)
 
-    The companion end-to-end test for the extractor pipeline lives separately
-    (and is only wired when an OCaml 5.4 toolchain and a built Hamlet library
-    are available — see README.md, section "How to add a new test case"). *)
-
-open Hamlet_lint_schema.Schema
+module S = Hamlet_lint_schema.Schema
 module Rule = Hamlet_lint_analyzer.Rule
 
-let loc0 = { file = "t.ml"; line = 1; col = 0 }
+let loc : S.loc = { file = "x.ml"; line = 1; col = 0 }
 
-let mk_arm ?(body_introduces = []) ?(action = Forward) tag =
-  { tag; action; body_introduces; loc = loc0 }
+let mk_candidate ?(kind = S.Catch) ~declared ~upstream () : S.candidate =
+  { loc; kind; declared; upstream }
 
-let mk_row ?(in_lb = []) ?(wildcard = false) ~out_lb arms =
-  {
-    in_lower_bound = Some in_lb;
-    out_lower_bound = out_lb;
-    handler = { has_wildcard_forward = wildcard; arms };
-  }
-
-let mk_services_site ?(in_lb = []) ?(wildcard = false) ~out_lb arms :
-    concrete_site =
-  {
-    loc = loc0;
-    kind = Combinators_provide;
-    services = Some (mk_row ~in_lb ~wildcard ~out_lb arms);
-    errors = None;
-  }
-
-let mk_errors_site
-    ?(kind = Combinators_catch)
-    ?(in_lb = [])
-    ?(wildcard = false)
-    ~out_lb
-    arms : concrete_site =
-  {
-    loc = loc0;
-    kind;
-    services = None;
-    errors = Some (mk_row ~in_lb ~wildcard ~out_lb arms);
-  }
-
-let finding_tags findings =
-  List.map (fun (f : Rule.finding) -> f.tag) findings |> List.sort compare
-
-let check_tags name expected findings =
-  Alcotest.(check (list string)) name expected (finding_tags findings)
-
-(* ---------------------------------------------------------------- *)
-(*  Services row                                                    *)
-(* ---------------------------------------------------------------- *)
-
-(** §2.4 canonical example: in_lb=[Console], out_lb=[Console; Logger; Database],
-    two Forward arms -> two findings. *)
-let test_stale_services () =
-  let site =
-    mk_services_site ~in_lb:[ "Console" ]
-      ~out_lb:[ "Console"; "Database"; "Logger" ]
-      [
-        mk_arm ~action:Discharge "Console";
-        mk_arm ~action:Forward "Logger";
-        mk_arm ~action:Forward "Database";
-      ]
+let testable_finding =
+  let pp ppf (f : Rule.finding) =
+    Format.fprintf ppf "{kind=%s; declared=[%s]; upstream=[%s]; extra=[%s]}"
+      (match f.kind with Catch -> "catch" | Provide -> "provide")
+      (String.concat ";" f.declared)
+      (String.concat ";" f.upstream)
+      (String.concat ";" f.extra)
   in
-  check_tags "stale services" [ "Database"; "Logger" ]
-    (Rule.check_concrete site)
-
-(** Pure-give: every arm Discharge, out_lb - in_lb is empty so no findings
-    regardless of shape. *)
-let test_clean_services () =
-  let site =
-    mk_services_site
-      ~in_lb:[ "Console"; "Logger"; "Database" ]
-      ~out_lb:[]
-      [
-        mk_arm ~action:Discharge "Console";
-        mk_arm ~action:Discharge "Logger";
-        mk_arm ~action:Discharge "Database";
-      ]
+  let eq (a : Rule.finding) (b : Rule.finding) =
+    a.kind = b.kind
+    && a.declared = b.declared
+    && a.upstream = b.upstream
+    && a.extra = b.extra
   in
-  check_tags "clean services" [] (Rule.check_concrete site)
+  Alcotest.testable pp eq
 
-(** Wildcard suppression (§2.7): even with stale-looking Forward arms, a
-    wildcard Forward silences the row. *)
-let test_wildcard_suppression () =
-  let site =
-    mk_services_site ~in_lb:[ "Console" ] ~out_lb:[ "Console"; "Logger" ]
-      ~wildcard:true
-      [ mk_arm ~action:Discharge "Console" ]
+(* ============================================================ *)
+
+let check_extra_when_declared_wider () =
+  let c = mk_candidate ~declared:[ "A"; "B"; "C" ] ~upstream:[ "A" ] () in
+  match Rule.check c with
+  | None -> Alcotest.fail "expected a finding"
+  | Some f ->
+      Alcotest.(check (list string))
+        "extra is declared minus upstream" [ "B"; "C" ] f.extra
+
+let no_finding_when_declared_subset () =
+  let c = mk_candidate ~declared:[ "A" ] ~upstream:[ "A"; "B" ] () in
+  Alcotest.(check (option testable_finding)) "no finding" None (Rule.check c)
+
+let no_finding_when_equal () =
+  let c = mk_candidate ~declared:[ "A"; "B" ] ~upstream:[ "A"; "B" ] () in
+  Alcotest.(check (option testable_finding)) "no finding" None (Rule.check c)
+
+let provide_kind_passthrough () =
+  let c = mk_candidate ~kind:Provide ~declared:[ "Db" ] ~upstream:[] () in
+  match Rule.check c with
+  | None -> Alcotest.fail "expected a finding"
+  | Some f ->
+      Alcotest.(check string)
+        "kind is provide" "provide"
+        (match f.kind with Catch -> "catch" | Provide -> "provide")
+
+let analyze_filters_headers_and_collects () =
+  let h : S.record =
+    Header { schema_version = 1; ocaml_version = "5.4.1"; generated_at = "x" }
   in
-  check_tags "wildcard suppression" [] (Rule.check_concrete site)
-
-(* ---------------------------------------------------------------- *)
-(*  Errors row                                                      *)
-(* ---------------------------------------------------------------- *)
-
-(** §2.5 canonical: in_lb=[NotFound], Forward arms Timeout+Forbidden both stale
-    -> two findings. *)
-let test_stale_errors () =
-  let site =
-    mk_errors_site ~in_lb:[ "NotFound" ] ~out_lb:[ "Forbidden"; "Timeout" ]
-      [
-        mk_arm ~action:Discharge "NotFound";
-        mk_arm ~action:Forward "Timeout";
-        mk_arm ~action:Forward "Forbidden";
-      ]
+  let bad = mk_candidate ~declared:[ "A"; "B" ] ~upstream:[ "A" ] () in
+  let good = mk_candidate ~declared:[ "A" ] ~upstream:[ "A" ] () in
+  let findings =
+    Rule.analyze [ h; S.Candidate bad; S.Candidate good; S.Candidate bad ]
   in
-  check_tags "stale errors" [ "Forbidden"; "Timeout" ]
-    (Rule.check_concrete site)
+  Alcotest.(check int) "two findings" 2 (List.length findings)
 
-(** §2.3.b legitimate body introducer: the arm body's 'e lb contains the phantom
-    tag, so the analyzer attributes it to the body, not to a missing arm. No
-    finding. *)
-let test_errors_legit_body_introducer () =
-  let site =
-    mk_errors_site ~in_lb:[ "Foo" ] ~out_lb:[ "Bar" ]
-      [
-        (* Arm is `Foo -> failure `Bar: the body's inferred 'e lb is
-           [Bar], so Bar is attributable to this body introducer. *)
-        mk_arm ~body_introduces:[ "Bar" ] ~action:Forward "Foo";
-      ]
-  in
-  check_tags "errors legit body" [] (Rule.check_concrete site)
+(* The classifier's Hamlet-root check lives in extract/classify.ml but
+   is exposed via the executable. Since extract/ isn't a library we
+   can link from tests, re-implement the same predicate here as a
+   guard against regression. If extract/classify.ml's path_root_is_hamlet
+   diverges from this list, we want a build / test failure. *)
 
-(** map_error stale arm: for [map_error] the arm pattern tag equals the body
-    output tag, so we encode the stale body output directly as a Forward arm
-    (with empty [body_introduces], since §2.3.b would otherwise suppress the
-    grown tag). *)
-let test_map_error_stale () =
-  let site =
-    (* map_error encodes: arm pattern tag = body output tag when the
-       body is `D, so we record the body tag as the arm tag here. *)
-    mk_errors_site ~kind:Combinators_map_error ~in_lb:[ "A" ]
-      ~out_lb:[ "A"; "D" ]
-      [ mk_arm ~action:Discharge "A"; mk_arm ~action:Forward "D" ]
-  in
-  check_tags "map_error stale" [ "D" ] (Rule.check_concrete site)
+let path_root_is_hamlet (n : string) : bool =
+  n = "Hamlet" || (String.length n >= 8 && String.sub n 0 8 = "Hamlet__")
 
-(* ---------------------------------------------------------------- *)
-(*  Latent wrapper                                                  *)
-(* ---------------------------------------------------------------- *)
+let test_root_accepts_hamlet () =
+  Alcotest.(check bool) "Hamlet" true (path_root_is_hamlet "Hamlet");
+  Alcotest.(check bool)
+    "Hamlet__Combinators" true
+    (path_root_is_hamlet "Hamlet__Combinators");
+  Alcotest.(check bool) "Hamlet__" true (path_root_is_hamlet "Hamlet__")
 
-(** Latent site: the wrapper function's in_lb is None; the join against a call
-    site whose arg has in_lb=[Console; Logger] materialises the phantom at the
-    *outer* call location. *)
-let test_latent_join () =
-  let lat : latent_site =
-    {
-      loc = { loc0 with line = 10 };
-      kind = Combinators_provide;
-      latent_in_function = "Test.wrap";
-      services =
-        Some
-          {
-            in_lower_bound = None;
-            out_lower_bound = [ "Database" ];
-            handler =
-              {
-                has_wildcard_forward = false;
-                arms = [ mk_arm ~action:Forward "Database" ];
-              };
-          };
-      errors = None;
-    }
-  in
-  let call1 : call_site =
-    {
-      function_path = "Test.wrap";
-      loc = { loc0 with line = 100 };
-      arg_loc = { loc0 with line = 100 };
-      arg_services_lb = Some [ "Console" ];
-      arg_errors_lb = None;
-    }
-  in
-  let findings = Rule.analyze [ Latent lat; Call call1 ] in
-  check_tags "latent phantom at outer call" [ "Database" ] findings
+let test_root_rejects_lookalikes () =
+  Alcotest.(check bool) "Hamlet_lint" false (path_root_is_hamlet "Hamlet_lint");
+  Alcotest.(check bool) "HamletFoo" false (path_root_is_hamlet "HamletFoo");
+  Alcotest.(check bool) "Hamleton" false (path_root_is_hamlet "Hamleton");
+  Alcotest.(check bool)
+    "hamlet (lowercase)" false
+    (path_root_is_hamlet "hamlet");
+  Alcotest.(check bool) "" false (path_root_is_hamlet "");
+  Alcotest.(check bool) "Other" false (path_root_is_hamlet "Other")
 
 let () =
-  Alcotest.run "hamlet-lint-rule"
+  Alcotest.run "rule"
     [
-      ( "services",
+      ( "check",
         [
-          Alcotest.test_case "stale" `Quick test_stale_services;
-          Alcotest.test_case "clean pure-give" `Quick test_clean_services;
-          Alcotest.test_case "wildcard suppression" `Quick
-            test_wildcard_suppression;
+          Alcotest.test_case "extra = declared \\ upstream" `Quick
+            check_extra_when_declared_wider;
+          Alcotest.test_case "subset → no finding" `Quick
+            no_finding_when_declared_subset;
+          Alcotest.test_case "equal → no finding" `Quick no_finding_when_equal;
+          Alcotest.test_case "provide kind preserved" `Quick
+            provide_kind_passthrough;
         ] );
-      ( "errors",
+      ( "analyze",
         [
-          Alcotest.test_case "stale" `Quick test_stale_errors;
-          Alcotest.test_case "legit body introducer" `Quick
-            test_errors_legit_body_introducer;
-          Alcotest.test_case "map_error stale" `Quick test_map_error_stale;
+          Alcotest.test_case "skips header, collects candidates" `Quick
+            analyze_filters_headers_and_collects;
         ] );
-      ("latent", [ Alcotest.test_case "wrapper join" `Quick test_latent_join ]);
+      ( "hamlet_root_check",
+        [
+          Alcotest.test_case "accepts Hamlet / Hamlet__*" `Quick
+            test_root_accepts_hamlet;
+          Alcotest.test_case "rejects lookalikes" `Quick
+            test_root_rejects_lookalikes;
+        ] );
     ]

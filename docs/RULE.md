@@ -1,115 +1,131 @@
-# The rule
+# The retroactive-widening rule
 
-What hamlet-lint analyses, what it reports, and why. Read this after
-the README intro, before `ARCHITECTURE.md`.
+## 1. Statement
 
----
+For every application of `Hamlet.Combinators.catch` or
+`.provide` whose handler the linter can recognise, let:
 
-## 1. The eight combinators
+- `declared` = the set of tags in the handler's
+  `[%hamlet.te ...]` (catch) or `[%hamlet.ts ...]` (provide)
+  annotation, after the PPX has expanded it into a closed row;
+- `upstream` = the set of tags actually carried by upstream's
+  effect at the slot relevant to the combinator
+  (`'e` for catch, `'r` for provide), read from the
+  upstream value's *declaration-time* type when possible
+  (see §3.2).
 
-hamlet-lint reasons about eight handler-style combinators from
-`lib/hamlet.mli`, the only places where a row is narrowed. Everything
-else (`chain`, `map`, `return`, `summon`, `failure`, `or_die`, `give`,
-`need`, …) is a pass-through, an introducer, or a wipe, and is out of
-scope.
+The rule is the list-set difference:
 
-| # | Combinator                | Row       | Handler shape                                                                      | What "stale" means                                                              |
-|---|---------------------------|-----------|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|
-| 1 | `Combinators.provide`     | services  | `'r_in -> 'r_out provide_result` via inline `function`                              | An arm's pattern tag is not in the input services lb and the body is `need r`   |
-| 2 | `<Mod>.Tag.provide` (PPX) | services  | one-arm `#r as w -> give w impl` (always pure, never reportable, row-tracker only)  | Never stale by construction; present only so the row tracker drops its tag     |
-| 3 | `Layer.provide`           | services  | `'svc -> 'r_in -> 'r_out provide_result`                                            | Same as row 1 after peeling the leading `svc ->` lambda                         |
-| 4 | `Layer.provide_layer`     | services  | `'svc_dep -> 'r_in -> 'r_out provide_result`; subject is a **layer**, not an effect | Same as row 1; rows are read off the layer type's third parameter               |
-| 5 | `Layer.provide_all`       | services  | `'env -> 'r_in -> 'r_out provide_result`                                            | Same as row 1 after peeling the leading `env ->` lambda                         |
-| 6 | `Combinators.catch`       | errors    | `~f:('e -> ('a, 'f, 'r) t)`                                                         | Arm body is `failure tag'` or a helper raising a tag not in the input errors lb |
-| 7 | `Combinators.map_error`   | errors    | `~f:('e -> 'f)` (pure, not an effect)                                               | Arm body is a poly variant value whose head tag is not in the input errors lb   |
-| 8 | `Layer.catch`             | errors    | `~f:('e -> ('svc, 'f, 'r) layer)`                                                   | Same as row 6; row diff is on the layer's second type parameter                 |
+> if `declared \ upstream ≠ ∅`, the call is a finding; the
+> extra tags are reported.
 
-Rows 1 and 3 through 8 are instrumented. Row 2 is recognised but
-emits no site (never stale by construction). Handlers may be an inline
-`function | … | …` or a `Texp_ident` referring to a `let`-bound
-function; see `ARCHITECTURE.md` §6 for the full list of supported
-reference shapes and the resolution depth. Unrecognised shapes are
-skipped silently with a `HAMLET_LINT_DEBUG=1` stderr diagnostic.
+OCaml's row subtyping cannot reject this at compile time given
+hamlet's covariant `('a, 'e, 'r) Hamlet.t` design. The check
+runs after compilation on the typechecker's `.cmt` output.
 
----
+## 2. Combinator surface
 
-## 2. Informal rule
+| Combinator                       | Slot inspected | PPX key             |
+|----------------------------------|----------------|---------------------|
+| `Hamlet.Combinators.catch`       | `'e` (errors)  | `[%hamlet.te ...]`  |
+| `Hamlet.Combinators.provide`     | `'r` (services)| `[%hamlet.ts ...]`  |
 
-Every handler-style call has an input effect and an output effect.
-Each row of each effect has a **lower bound**: the set of polymorphic
-variant tags definitely present in the row, as opposed to the ones the
-row is merely open to. Call `in_lb` and `out_lb` the lower bounds of
-the row of interest at the call's input and output. The *growth* of
-the row at that call is
+`'a` (the success type) is never inspected — widening on `'a` is
+a different bug class and out of scope here.
 
+## 3. Recognised shapes
+
+### 3.1 Callee
+
+The callee is recognised when either:
+
+1. `Path.name` of the called identifier equals
+   `Hamlet.Combinators.catch` (or `.provide`), or
+2. the last segment of the path is `catch` / `provide` *and*
+   the value's type structurally mentions a 3-arg
+   `Hamlet.t` constructor anywhere in its surface — used as a
+   structural fingerprint when the path is shortened by
+   `let open Hamlet.Combinators in ...` or aliased through
+   `let module HC = Hamlet.Combinators in HC.catch`.
+
+### 3.2 Upstream
+
+Upstream is the first positional argument of the application.
+Its row tags are read from:
+
+- The `Texp_ident`'s `value_description.val_type` when upstream
+  is a let-bound variable. This is the **pre-widening** narrow
+  row, before any covariant subtyping mutated `exp_type` at the
+  call site.
+- The expression's `exp_type` otherwise (inline upstream).
+  This is already widened — see §5.
+
+### 3.3 Handler
+
+The handler is the `~f` or `~h` labelled argument. Five shapes
+are tried in order; first to yield a non-empty universe wins:
+
+1. **Param-pat annotation.**
+   `fun (x : [%hamlet.te A, B]) -> ...`
+   The PPX has expanded the attribute into a closed-row
+   `pat_type` on the first parameter pattern.
+
+2. **Function-cases annotation.**
+   `function | ... | ... : [%hamlet.te A, B] -> _`
+   Read tags from the first case's `c_lhs.pat_type`.
+
+3. **Scrutinee annotation.**
+   `fun x -> match (x : [%hamlet.te A, B]) with ...`
+   Read tags from the first match case's `c_lhs.pat_type`.
+
+4. **Named handler.**
+   `~f:handle_wide` or `~f:Module.handle`
+   Walk `val_type`, take the first arrow's domain row.
+
+5. **Apply-built handler.**
+   `~f:(make_handler args)`
+   Same as 4 but on `exp_type`.
+
+## 4. Wire format
+
+The extractor emits one ND-JSON `candidate` record per recognised
+call, regardless of whether the rule fires. The analyzer applies
+the rule and prints findings. Schema:
+
+```json
+{
+  "kind": "candidate",
+  "site_kind": "catch" | "provide",
+  "loc": { "file": "...", "line": N, "col": N },
+  "declared": ["Tag1", "Tag2", ...],
+  "upstream": ["Tag1", ...]
+}
 ```
-grew  =  out_lb  \  in_lb
+
+A leading `header` record carries `schema_version`. The analyzer
+exits 2 on a missing or version-mismatched header.
+
+## 5. Known limit: inline upstream
+
+Inline upstream (no let-binding) has no `Texp_ident`, so we
+fall back to `exp_type`. By the time the typechecker stored
+`exp_type` the row has already been widened to satisfy the
+handler's annotation — declared and upstream will compare
+equal and no finding is emitted. **This is a documented
+false negative.** The workaround is trivial: bind the
+upstream:
+
+```ocaml
+let eff = ... in catch eff ~f:...
 ```
 
-For each tag `T` in `grew`, there must exist a *source* that
-introduced it. The rule classifies that source into three cases.
+Once let-bound, `Texp_ident.val_type` carries the narrow row
+and the rule fires correctly.
 
-### (a) Stale forwarding arm (reportable)
+## 6. Tag enumeration semantics
 
-`T` appears in `grew` because the handler has an arm of shape
-`` | `T -> need `T `` (services), `` | `T -> failure `T `` (errors),
-or `` | `T -> `T `` (map_error). The arm pattern-matches `T` and its
-body re-introduces `T`. `T` was never on the input side, so the arm
-only keeps a phantom tag alive. **This is the bug hamlet-lint
-reports.**
-
-### (b) Legitimate body introducer (silent)
-
-`T` appears in some arm's body `body_introduces` set, meaning the arm
-legitimately produces `T` via a direct `failure` / `need` / variant
-expression, a PPX `<Mod>.Errors.make_*` constructor, an inline
-`try_catch`, or a transitive helper call the walker could resolve. The
-tag was introduced on purpose. The rule stays silent.
-
-Services arm bodies are `provide_result` values that cannot carry
-errors, so `body_introduces` is always `[]` for them; case (b) is
-errors-only.
-
-### (c) Unattributable (silent)
-
-`T` is in `grew`, no arm pattern-matches `T`, and no arm's body is
-known to introduce `T`. The walker cannot explain where `T` came from
-(it may have flowed through an inner sub-expression, or the handler
-uses a shape the walker does not understand). The rule stays silent.
-
-### How to distinguish (a) from (c)
-
-Both can appear to "not find `T`" at a glance, but:
-
-- **(a)** requires an arm whose **pattern is exactly `T`** and whose
-  **body re-introduces `T`**. Pattern and body both about `T`.
-- **(c)** is the fall-through when no such arm exists. No pattern
-  matches `T`, no body introduces `T`.
-
-The rule checks (b) first; if satisfied, (a) for that same `T` is
-suppressed to avoid reporting arms on tags that legitimately flow
-through the handler.
-
----
-
-## 3. Wildcard suppression
-
-A wildcard forwarding arm (`_ -> need r`, `_ -> failure e`, etc.)
-makes the inferencer unify `out_lb = in_lb`, so `grew` is always
-empty at that call. The extractor records
-`has_wildcard_forward: true` on the handler and the analyzer
-shortcuts the diff. This is explicit documentation that a genuine
-forward-all handler is intentional.
-
----
-
-## 4. Latent sites
-
-When the handler lives in a wrapper function whose subject effect is
-a free row-variable parameter, the walker cannot compute `grew` at
-the definition, because it depends on which effect the caller passes
-in. The extractor records a **latent site** keyed by the wrapper's
-`Path.t` and every `Texp_apply` of that wrapper as a **call site**;
-the analyzer joins the two at report time, so findings always land at
-the outer call. See `ARCHITECTURE.md` §2 for the worked example and
-the analyzer pseudocode.
+Tags counted as "present in the row" are those whose
+`row_field_repr` is `Rpresent _` or `Reither _`. `Rabsent` is
+ignored. `Reither` counts as present because in our context it
+means the row structurally allows the tag, even if conjunctive
+constraints have not finalised it.

@@ -1,8 +1,8 @@
 # Using hamlet-lint
 
 End-user reference: install, configure, run, integrate into CI.
-For the release process see `RELEASING.md`; for the architecture and
-rule semantics see `README.md`.
+For the rule semantics see `RULE.md`; for the architecture see
+`ARCHITECTURE.md`; for the release process see `RELEASING.md`.
 
 ---
 
@@ -14,17 +14,17 @@ opam install hamlet-lint
 
 opam picks the right package for your active switch automatically.
 Packages are versioned `<hamlet_version>~<ocaml_patch>`, e.g.
-`hamlet-lint.0.1.0~5.4.1` is the linter for users of `hamlet.0.1.0` on
-OCaml 5.4.1. Each package pins its matching hamlet and OCaml versions
-exactly.
-Installs `hamlet-lint-extract` and `hamlet-lint` on `PATH`.
+`hamlet-lint.0.2.0~5.4.1` is the linter for users of `hamlet.0.2.0`
+on OCaml 5.4.1. Each package pins its matching hamlet and OCaml
+versions exactly. Installs `hamlet-lint-extract` and `hamlet-lint`
+on `PATH`.
 
 As a **project dev dependency**, pin the exact version matching the
 hamlet~ocaml releases you depend on:
 
 ```
 depends: [
-  "hamlet-lint" {with-dev-setup & = "0.1.0~5.4.1"}
+  "hamlet-lint" {with-dev-setup & = "0.2.0~5.4.1"}
 ]
 ```
 
@@ -64,7 +64,6 @@ Schema of the config:
 | `targets` | list of paths   | yes      | (none)   | Directories or `.cmt` files to walk    |
 | `exclude` | list of paths   | no       | `()`     | Path prefixes to skip                  |
 | `mode`    | `fail` / `warn` | no       | `fail`   | `warn` forces analyzer exit 0          |
-| `format`  | `pretty`        | no       | `pretty` | Reserved for future reporters          |
 
 Unknown top-level forms are rejected, so typos are caught loudly
 rather than silently ignored.
@@ -117,7 +116,6 @@ lint:
   Repeatable.
 - `--config FILE`: explicit config path; overrides auto-discovery.
 - `--canonical`: sort records for stable snapshots.
-- `HAMLET_LINT_DEBUG=1` (env): stderr diagnostics for skipped sites.
 
 **`hamlet-lint`**
 
@@ -153,23 +151,28 @@ For gradual adoption (findings visible but non-blocking), set
 ## 6. Reading findings
 
 ```
-src/foo.ml:42:14: stale forwarding arm for tag `Logger in services row:
-  input effect has no such dependency, this arm resurrects it
-  (Hamlet.Combinators.provide)
-  arm at src/foo.ml:35:50
+File "src/foo.ml", line 42, characters 14-14:
+  hamlet-lint WARNING: catch handler declares [%hamlet.te ...] tags not present in upstream.
+    declared  : [Console_error; Connection_error; Query_error]
+    upstream  : [Console_error]
+    extra tags not emitted : [Connection_error; Query_error]
 ```
 
-- First line: the location of the combinator call (`provide`,
-  `catch`, `map_error`, `Layer.*`, or a `Tag.provide`).
-- `arm at …`: the stale arm itself.
+- First line: the location of the `catch` / `provide` call.
+- `declared`: the handler's declared tag universe (from
+  `[%hamlet.te ...]` for catch, `[%hamlet.ts ...]` for provide).
+- `upstream`: tags actually carried by the upstream effect's row at
+  the relevant slot.
+- `extra tag(s) not emitted`: `declared \ upstream` — the tags the
+  handler claims to cover that upstream provably does not raise /
+  require.
 
-Three typical fixes:
+Two typical fixes:
 
-1. The arm is dead; remove it (wrong copy-paste).
-2. The input is missing a `summon` for the forwarded tag; add the
-   real dependency.
-3. The arm legitimately raises the tag via a helper the walker
-   could not see; file a bug and use `--warn-only` as a workaround.
+1. The annotation is wider than it should be: shrink it to the tags
+   upstream actually carries.
+2. Upstream is meant to carry those tags but a `summon` / `failure`
+   for them is missing: add the real producer.
 
 ---
 
@@ -181,26 +184,30 @@ to `hamlet-lint`. Check with
 `hamlet-lint-extract _build/default/lib | head -1`: it should start
 with `{"kind":"header"`.
 
+**`unsupported schema_version`**: the extractor and analyzer come
+from different hamlet-lint installs. Re-install both to the same
+version.
+
 **`no available version`** on `opam install`: your exact OCaml patch
 has no hamlet-lint release yet (we patch-pin via tilde, e.g.
-`hamlet-lint.0.1.0~5.4.1`). Check `opam list -A hamlet-lint` and
+`hamlet-lint.0.2.0~5.4.1`). Check `opam list -A hamlet-lint` and
 file an issue if you need your patch supported.
 
-**Finding you expected is silent**: try `HAMLET_LINT_DEBUG=1
-hamlet-lint-extract …` on stderr to see which sites the walker
-skipped. The walker always fails in the safe direction: false
-negatives on shapes it cannot analyse, zero false positives on the
-shapes it understands.
+**Finding you expected is silent**: most often the upstream is
+inline (no let-binding). Bind it first — see `LIMITATIONS.md` §1
+for the workaround.
 
 ---
 
-## 8. Known limits (v0.1)
+## 8. Known limits
 
-- Handlers flowing through data structures (record fields, hashmaps,
-  closures returned from functions) are not analysed. Deferred to
-  v0.2, which will add data-flow analysis.
-- Pre-installed opam libraries are invisible: the linter walks
-  `.cmt` files, and opam ships only `.cmti`. Library authors should
-  run hamlet-lint in their own CI before releasing. See
-  `ARCHITECTURE.md` §1.2 for the mechanism and `LIMITATIONS.md` for
-  the full list of what hamlet-lint does not catch.
+See `LIMITATIONS.md` for the full list. Headline items:
+
+- **Inline upstream** (no let-binding) is a documented false
+  negative; bind upstream to expose the narrow row.
+- **Pre-installed opam libraries** are invisible: opam ships only
+  `.cmti`, the walker needs `.cmt`. Library authors should run
+  hamlet-lint in their own CI before releasing.
+- **Exotic handler shapes** beyond the five recognised ones (param
+  pat, function-cases, scrutinee, named ident, single-apply build)
+  are silently skipped.

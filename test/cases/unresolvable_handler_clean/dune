@@ -1,3 +1,0 @@
-(library
- (name hamlet_lint_fixture_unresolvable_handler_clean)
- (libraries hamlet))

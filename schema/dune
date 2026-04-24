@@ -1,3 +1,7 @@
+; ND-JSON wire contract between hamlet-lint-extract (compiler-libs side)
+; and hamlet-lint (analyzer side). Schema-versioned; bump
+; [schema_version] in schema.ml on any breaking change.
+
 (library
  (name hamlet_lint_schema)
  (public_name hamlet-lint.schema)

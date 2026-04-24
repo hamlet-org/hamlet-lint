@@ -1,3 +1,11 @@
+; The compiler-libs side of hamlet-lint. Walks .cmt files, classifies
+; calls to Hamlet.Combinators.catch / .provide, extracts handler and
+; upstream tag rows, and emits per-call ND-JSON candidate records on
+; stdout. The analyzer (sibling [analyzer/] dir) consumes them.
+;
+; Only [compat.cppo.ml] gates on ocaml_version — every other module
+; uses standard 5.x compiler-libs APIs through the firewall.
+
 (executable
  (name main)
  (public_name hamlet-lint-extract)
@@ -8,11 +16,6 @@
   compiler-libs.common
   yojson
   unix))
-
-; compat.ml is generated from compat.cppo.ml by cppo, with the current
-; OCaml version threaded in as -V OCAML:<version>. This is the only file
-; in the project that gates on ocaml_version — the rest of extract/ is
-; pure OCaml linking against compiler-libs.common.
 
 (rule
  (targets compat.ml)

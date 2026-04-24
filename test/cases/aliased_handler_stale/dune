@@ -1,3 +1,0 @@
-(library
- (name hamlet_lint_fixture_aliased_handler_stale)
- (libraries hamlet))

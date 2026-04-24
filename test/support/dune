@@ -1,0 +1,9 @@
+; Hamlet test services — copied 1:1 from hamlet/test/support/. Provides
+; the Console / Database / Logger / Foo / Cache / RemoteCache /
+; MetricsSink service modules that the fixtures import.
+
+(library
+ (name hamlet_test_services)
+ (libraries hamlet)
+ (preprocess
+  (pps ppx_hamlet)))
