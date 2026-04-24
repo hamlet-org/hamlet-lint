@@ -24,6 +24,37 @@ catch eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 (* now flagged: Database is extra *)
 ```
 
+### 1.1 Chained `catch` / `provide` without intermediate `let`
+
+Same root cause when chaining: if the inner `catch`/`provide` is
+not let-bound, the outer one's upstream is a `Texp_apply` (not a
+`Texp_ident`) and falls back to the already-widened `exp_type`.
+
+**Outer catch silent** (Database widening on the outer is missed):
+
+```ocaml
+let eff = ... in
+catch
+  (catch eff ~f:(fun (x : [%hamlet.te Console]) -> ...))
+  ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+```
+
+**Workaround** — bind the intermediate result:
+
+```ocaml
+let eff = ... in
+let after_first =
+  catch eff ~f:(fun (x : [%hamlet.te Console]) -> ...)
+in
+catch after_first
+  ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+(* now the outer catch is flagged *)
+```
+
+The inner `catch` is always checked correctly because its own
+upstream (`eff`) is let-bound — only the outer arm of the chain
+is silent.
+
 ## 2. Handlers built by code the walker does not pattern-match
 
 The five recognised handler shapes (param-pat annotation,
@@ -127,20 +158,3 @@ binding-tracker that is real scope creep relative to the rule;
 neither shape is idiomatic Hamlet, so the linter stays narrow on
 purpose.
 
----
-
-## Verified to work (no longer limits)
-
-The following were caveats in earlier drafts but are now covered
-end-to-end:
-
-- **Cross-CU services with `[@@rest_cross_cu]`**. The linter walks
-  the consumer's `.cmt` and reads the upstream's `val_type` even
-  when the row was assembled via the producer's synthesised
-  `__Hamlet_rest_*` aliases. Exercised by
-  `test/cases/cross_cu_cases.ml` (xc1–xc4).
-- **`Layer.t` upstream built via `Layer.make`**. Hamlet `d62acb7`
-  made `Layer.t` covariant in `'e` / `'r`; the typechecker now
-  keeps the layer's row narrow at `val_type` while widening at
-  the call site. Exercised by `lc2`, `lpe2`, `lpl2`, `lpm2` in
-  `test/cases/layer_cases.ml`.
