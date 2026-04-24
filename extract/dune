@@ -20,7 +20,7 @@
   compiler-libs.common
   yojson
   unix)
- (modules tags classify upstream handler walker compat))
+ (modules tags classify propagate upstream handler walker compat))
 
 (executable
  (name main)

@@ -2,14 +2,19 @@
 
 What hamlet-lint does *not* catch today, and why.
 
-## 1. Inline upstream (false negative)
+## 1. Inline upstream that is not itself a monitored combinator (false negative)
 
-When upstream is built inline (no `let` binding) the linter has
-no `Texp_ident` to read a narrow `val_type` from, falls back to
-`exp_type`, and that has already been widened to match the
-handler's annotation. Result: `declared = upstream`, no finding.
+When upstream is built inline (no `let` binding) and isn't a call to one
+of the seven monitored combinators (`Combinators.catch` / `.map_error` /
+`.provide`, `Layer.catch`, `Layer.provide_to_effect` / `_to_layer` /
+`_merge_to_layer`), the linter has no `Texp_ident` to read a narrow
+`val_type` from and the recursive residual machinery has no inner-known
+combinator to descend into. It falls back to `exp_type`, which has
+already been widened to match the handler's annotation. Result:
+`declared = upstream`, no finding.
 
-**Not flagged:**
+**Not flagged** (upstream is `let*` desugared to `chain`, an unmonitored
+combinator):
 
 ```ocaml
 catch (let* (module C) = Console.Tag.summon () in C.print_endline "go")
@@ -24,36 +29,46 @@ catch eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 (* now flagged: Database is extra *)
 ```
 
-### 1.1 Chained `catch` / `provide` without intermediate `let`
+### 1.1 Chained `catch` / `provide` without intermediate `let` — covered
 
-Same root cause when chaining: if the inner `catch`/`provide` is
-not let-bound, the outer one's upstream is a `Texp_apply` (not a
-`Texp_ident`) and falls back to the already-widened `exp_type`.
-This applies equally to the pipe form, since `|>` is `%revapply`
-and rewrites to direct application at typedtree level.
+This used to be a limitation; it is now substantially solved.
 
-**Outer catch silent** (Database widening on the outer is missed):
+When the upstream of a `catch` / `provide` / `Layer.provide_*` is itself
+a call to one of the seven monitored combinators, the walker recursively
+computes the inner combinator's residual row from typed-tree information
+that survives covariant widening:
+
+- **catch** with a pure-propagate handler (every arm is `failure (alias)`,
+  the `[%hamlet.propagate_e]` expansion or hand-rolled equivalent) is a
+  row no-op — residual = inner upstream's row.
+- **provide** whose handler arms are all `Dispatch.give` (discharge) or
+  `Dispatch.need` (re-emit, the `[%hamlet.propagate_s]` expansion) gets
+  residual = inner upstream's row minus the union of give-tags. Mixed
+  give+need handlers are the common idiom and are fully supported.
+- **slot pass-through** is unconditional: an outer `catch` over an inner
+  `provide` sees the inner provide as a slot-1 (errors) pass-through and
+  recurses, and vice versa.
+
+Both **pipe form** (`eff |> catch ~f:...`) and **nested form**
+(`catch (catch eff ~f:...) ~f:...`) are recognised — the pipe form's
+staged `Texp_apply` (partial-then-apply) is unstaged into a canonical
+direct call shape before classification.
+
+**Now flagged** (pipe form, outer catch widens past the inner's actual
+emissions):
 
 ```ocaml
-let eff = ... in
+let eff = ... (* emits Console_error *) in
 eff
-|> catch ~f:(fun (x : [%hamlet.te Console]) -> ...)
-|> catch ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
+|> catch ~f:(fun (x : [%hamlet.te Console]) -> ...)        (* narrow, silent *)
+|> catch ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)  (* flagged *)
 ```
 
-**Workaround** — let-bind every step, shadowing the previous name:
-
-```ocaml
-let eff = ... in
-let eff = catch eff ~f:(fun (x : [%hamlet.te Console]) -> ...) in
-let eff = catch eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...) in
-eff
-(* now every catch in the chain is flagged correctly *)
-```
-
-Reads top-to-bottom like a pipeline but each step is a `Texp_ident`
-to the next, so the linter sees the narrow `val_type` instead of
-the widened `exp_type`.
+**Still NOT flagged** (catch shape that escapes the pure-propagate
+detector — e.g. handler that re-throws as a *different* tag, or
+`map_error` whose handler returns a tag value rather than a `failure`
+call): falls back to widened `exp_type`. Workaround is the same as §1
+above (bind the inner step).
 
 ## 2. Handlers built by code the walker does not pattern-match
 
@@ -119,13 +134,12 @@ combinator eff ~f:...
 Idiomatic Hamlet does not write callees this way; if it became
 common we would extend the classifier.
 
-## 6. Local aliasing and partial application of the combinator
+## 6. Local aliasing and let-bound partial application
 
-The walker only classifies an outer `Texp_apply` whose callee is a
-direct `Texp_ident` resolving to a known combinator. Two related
-shapes escape detection: re-binding the combinator to a local name,
-and applying it in stages with the handler arriving on a second
-call.
+The walker classifies a callee via `Path.t` resolution. A combinator
+bound to a local name loses the Hamlet-rooted path, escaping detection.
+The same applies to a partial application held in a `let`-bound name
+between the partial and the final argument.
 
 **Not flagged** (local rebinding — callee `c` is a user-bound
 identifier, not a Hamlet path):
@@ -135,22 +149,27 @@ let c = Hamlet.Combinators.catch in
 c eff ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-**Not flagged** (staged application — outer apply's callee is itself
-a `Texp_apply`, not a `Texp_ident`):
+**Not flagged** (let-bound partial — outer apply's callee is `p`, a
+`Texp_ident` to a user-bound name; the walker has no binding-tracker
+to follow `p` back to the partial `catch eff`):
 
 ```ocaml
 let p = Hamlet.Combinators.catch eff in
 p ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-**Workaround** — call the combinator in one application against a
-let-bound upstream:
+**Workaround** — call the combinator directly, or use pipe form (which
+the walker now unstages — see §1.1):
 
 ```ocaml
 let eff = ... in
 Hamlet.Combinators.catch eff
   ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 (* now flagged correctly *)
+
+(* or pipe form — also flagged *)
+eff |> Hamlet.Combinators.catch
+       ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
 Following values across `let`-bindings would require a typed-tree
@@ -158,3 +177,8 @@ binding-tracker that is real scope creep relative to the rule;
 neither shape is idiomatic Hamlet, so the linter stays narrow on
 purpose.
 
+Note: an inline partial-then-apply chain — the shape produced by `|>`
+on a partially-applied combinator, e.g. `eff |> catch ~f:H` — is **no
+longer a limitation**. The walker unstages it before classification, so
+any call that would be flagged in direct form is also flagged in pipe
+form.

@@ -84,6 +84,16 @@ let cases =
       expected_exit = 1;
       expected_lines = [ 40; 71 ];
     };
+    {
+      fixture = "Chained_cases";
+      expected_exit = 1;
+      (* c2 outer (pipe), c3 outer (nested), c4 outer (triple-pipe),
+         p2 outer (nested provide chain), x1 outer catch over inner
+         provide, lpe1 outer Layer.provide_to_effect over inner
+         Combinators.provide. p1, x2, lpe2 silent (handler-driven
+         slot is correctly narrow); c1 silent (no widening anywhere). *)
+      expected_lines = [ 43; 55; 75; 112; 136; 177 ];
+    };
   ]
 
 (* ============================================================ *)
