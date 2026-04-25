@@ -13,22 +13,15 @@
 open Typedtree
 module S = Hamlet_lint_schema.Schema
 
-(** Pull out the unlabeled (positional) first argument — upstream effect. *)
-let extract_upstream args =
-  List.find_map
-    (fun (lbl, a) ->
-      match (lbl, a) with Asttypes.Nolabel, Arg e -> Some e | _ -> None)
-    args
+(** Pull out the unlabeled (positional) first argument — upstream effect.
+    Re-exported from {!Upstream.extract_upstream} so the recursive residual
+    logic and the walker share one canonical extractor. *)
+let extract_upstream = Upstream.extract_upstream
 
 (** Pull out the labeled handler. Both [~f] and [~h] are accepted because
-    Hamlet's combinator surface uses both labels in different places. *)
-let extract_handler args =
-  List.find_map
-    (fun (lbl, a) ->
-      match (lbl, a) with
-      | Asttypes.Labelled ("f" | "h"), Arg e -> Some e
-      | _ -> None)
-    args
+    Hamlet's combinator surface uses both labels in different places.
+    Re-exported from {!Upstream.extract_handler}. *)
+let extract_handler = Upstream.extract_handler
 
 (** Convert [Location.t] → wire-friendly {!S.loc}. The PoC used
     [pos_cnum - pos_bol] for the column; we mirror it for output parity. *)
@@ -111,23 +104,43 @@ let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
   in
   match cmt.cmt_annots with
   | Implementation str ->
+      let process_call ~loc ~callee ~args =
+        match callee.exp_desc with
+        | Texp_ident (pth, _, vd) -> (
+            let combinator = short_name pth in
+            let push kind peel =
+              match try_candidate ~kind ~peel ~combinator ~loc args with
+              | Some c -> acc := c :: !acc
+              | None -> ()
+            in
+            match Classify.classify_path pth vd.val_type vd with
+            | Single kind -> push kind 0
+            | Curried kind -> push kind 1
+            | Other -> ())
+        | _ -> ()
+      in
       let check_expr self (e : expression) =
         (match e.exp_desc with
         | Texp_apply (fn, args) -> (
             match fn.exp_desc with
-            | Texp_ident (pth, _, vd) -> (
-                let combinator = short_name pth in
-                let push kind peel =
-                  match
-                    try_candidate ~kind ~peel ~combinator ~loc:e.exp_loc args
-                  with
-                  | Some c -> acc := c :: !acc
-                  | None -> ()
-                in
-                match Classify.classify_path pth vd.val_type vd with
-                | Single kind -> push kind 0
-                | Curried kind -> push kind 1
-                | Other -> ())
+            | Texp_ident _ -> process_call ~loc:e.exp_loc ~callee:fn ~args
+            | Texp_apply (inner_callee, _) -> (
+                (* Pipe form [eff |> catch ~f:H] and other staged
+                   partial-then-apply shapes: the inner partial holds the
+                   real callee + named args, the outer holds the
+                   positional upstream. {!Upstream.unstage_apply}
+                   combines them into a canonical full-arg list, after
+                   which classification is identical to the direct form.
+
+                   Reports the finding at the inner partial's location
+                   (the actual [catch] keyword), not at the outer apply
+                   (the start of the chain), so e2e expectations stay
+                   precise. *)
+                match Upstream.unstage_apply e with
+                | Some (real_callee, combined_args) ->
+                    process_call ~loc:inner_callee.exp_loc ~callee:real_callee
+                      ~args:combined_args
+                | None -> ())
             | _ -> ())
         | _ -> ());
         Tast_iterator.default_iterator.expr self e
