@@ -30,8 +30,12 @@ directory at once, named `hamlet-lint.<hamlet>~<ocaml>` (e.g.
 `[new release] hamlet-lint (<pair>)` for one, or
 `(<N> packages)` for several.
 
-The rendered `ocaml` constraint is `{= "<patch>"}` (exact pin):
-`extract/compat.cppo.ml`'s `#error` guard accepts exactly that patch.
+The rendered `ocaml` constraint is `{= "<patch>"}` (exact pin),
+matching the patch in the package suffix one-to-one. The
+`extract/compat.cppo.ml` `#error` guard accepts a minor-range
+starting at the first supported patch (currently
+`>= 5.4.1 < 5.5.0`); the per-package opam pin narrows to one patch
+at install time.
 
 Use `./release/run.sh`; do not paste JSON into the Actions UI by hand.
 
@@ -77,9 +81,11 @@ from the UI is equally safe.
 
 `OCAML_PATCHES` in `release/versions.sh` is the supported-patches
 list (full opam version strings, including prereleases). It mirrors:
-the `#error` guard in `extract/compat.cppo.ml`, the `(ocaml ...)`
-bound in `dune-project`, and the matrix in
-`.github/workflows/ci.yml` — all four agree on the same patches.
+the minor-range `#error` guard in `extract/compat.cppo.ml`, the
+narrower `(ocaml ...)` bound in `dune-project` (single patch
+during dev), and the matrix in `.github/workflows/ci.yml`. The
+mirroring is conventional, not enforced — you must keep them in
+sync when adding/removing patches.
 
 There is no `HAMLET_VERSION` in `versions.sh`: pass it on the CLI.
 
@@ -119,9 +125,12 @@ hamlet release installable on it.
    `## YYYY-MM-DD: OCaml <NEW> target added [<NEW> only]`.
 4. **Run `./release/run.sh --all`**. The script crosses every past
    hamlet with `OCAML_PATCHES` (now including `<NEW>`), skips merged
-   pairs, dispatches one workflow run per missing pair. On a fresh
-   backfill: `N × 1` new runs.
-5. **Monitor the opam-repo PRs**. Each is independent.
+   pairs, and dispatches **one** workflow run that bundles every
+   surviving pair (the `build` job then matrix-fans-out internally).
+   On a fresh backfill: one workflow run carrying `N × 1` pairs.
+5. **Monitor the bundled opam-repo PR**. One PR carries every
+   surviving pair (each pair = one independent package directory
+   inside the PR).
 
 A backfill that passes CI is a real test of the walker against that
 patch's `Typedtree`/`Cmt_format`. Not busywork.
@@ -180,7 +189,11 @@ The manual `gh`-based flow in `release.yml` is ~40 lines of shell.
 - [ ] `gh auth` access to `hamlet-org/hamlet-lint` and
       `ocaml/opam-repository`.
 
-Then **Actions → release → Run workflow → fill inputs → go**.
+Then run `./release/run.sh <hamlet-version>` (or `--all` for
+backfill). The script computes the surviving pairs and dispatches
+one workflow run with all of them. Fall back to **Actions → release
+→ Run workflow** only when you need to force-dispatch a specific
+pair list bypassing the in-flight-PR skip.
 
 ## 9. Related files
 

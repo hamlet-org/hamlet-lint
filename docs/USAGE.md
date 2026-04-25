@@ -80,8 +80,8 @@ records).
   with: { ocaml-compiler: "5.4" }
 - run: opam install . --deps-only --with-dev-setup
 - run: opam install hamlet-lint
-- run: make build
-- run: make lint
+- run: opam exec -- dune build
+- run: opam exec -- bash -c "hamlet-lint-extract | hamlet-lint"
 ```
 
 For non-blocking adoption: `(mode warn)` in config, or
