@@ -13,8 +13,11 @@ Two release events:
   **latest** hamlet only, from current `main`. Past hamlet releases
   are NOT backfilled (see §5).
 
-Both use the same workflow; they differ only in which axis is
-enumerated.
+Both invoke `./release/run.sh <hamlet-version>` and enumerate
+`OCAML_PATCHES`; the only difference is which hamlet you pass — a
+freshly-released one (hamlet pass) or the current latest (OCaml
+pass). Already-published pairs are filtered out, so an OCaml pass
+naturally narrows to the missing pair(s).
 
 ## 1. Per-pair release artifacts
 
