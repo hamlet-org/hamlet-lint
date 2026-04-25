@@ -1,204 +1,106 @@
 # hamlet-lint architecture
 
-Internal reference for the walker, the analyzer, and the wire contract
-between them. For the rule statement and recognised shapes see
-`RULE.md`; for install / config / CI see `USAGE.md`; for release
-mechanics see `RELEASING.md`.
+Internal reference. Rule statement in `RULE.md`. Install/CI in
+`USAGE.md`. Release process in `RELEASING.md`.
 
----
+## 1. Why `.cmt`
 
-## 1. Why `.cmt` files
+The retroactive-widening bug is invisible at source level: PPX
+expands `[%hamlet.te ...]` into a closed row on the handler's pattern;
+covariant subtyping then mutates upstream's `exp_type` at the call
+site to satisfy that row. Both sides become structurally compatible
+and the typechecker accepts.
 
-The retroactive-widening bug is invisible at the source level: the PPX
-expands `[%hamlet.te ...]` and `[%hamlet.ts ...]` into closed rows on
-the handler's parameter pattern, but covariant subtyping mutates
-upstream's `exp_type` at the call site to satisfy the handler's
-universe. Both sides end up structurally compatible — exactly what
-hamlet's `('a, +'e, +'r) Hamlet.t` design is meant to allow — and the
-typechecker raises no error.
+What survives into `.cmt` and we need:
 
-The information the linter needs lives in two places that survive
-into `.cmt` files:
+- handler param's `pat_type` (the closed row PPX produced).
+- let-bound upstream's `Texp_ident.value_description.val_type` (the
+  *narrow*, pre-widening row).
 
-- the handler parameter pattern's `pat_type` (the closed row the PPX
-  produced), and
-- a let-bound upstream's `Texp_ident.value_description.val_type` (the
-  *narrow*, pre-widening row the upstream had at its definition).
+`compiler-libs.Cmt_format.read_cmt` parses `.cmt`. The walker is
+version-locked to `compiler-libs` (drift across OCaml minors without
+semver).
 
-`.cmt` files are the typed AST the compiler emits under
-`_build/default/**/*.cmt`; `compiler-libs` provides
-`Cmt_format.read_cmt` to parse them back. The tool is therefore
-version-locked against `compiler-libs` (`Typedtree`, `Types`, and
-friends drift across OCaml minors without semver); `README.md` §2
-covers the version-support policy.
+**`.cmt` vs `.cmti`**: walker reads `.cmt` only — sees through `.mli`
+abstraction.
 
-### 1.1 `.cmt` vs `.cmti`
+**Pre-installed opam libs invisible**: opam ships `.cmti` not `.cmt`.
+Library authors should run hamlet-lint in their own CI.
 
-The extractor walks `.cmt` only. Consequence: the linter sees through
-`.mli` abstraction. An opaque `.mli` that hides or narrows a row does
-not hide the implementation's raw `catch` / `provide` calls from
-hamlet-lint.
-
-### 1.2 Pre-installed libraries are invisible
-
-opam ships `.cmi` / `.cmti` / `.cmxa` into `_opam/lib/<pkg>/` but not
-`.cmt`, so anything installed from opam is invisible to the walker.
-This is shared with every typed-AST tool (merlin, mdx, ppxlib linters,
-...).
-
-For **library users**: the linter analyses your own code and passes
-silently over opam dependencies. For **library authors**: if your
-package uses Hamlet internally and you want a no-widening guarantee,
-run hamlet-lint in your own CI before releasing.
-
-### 1.3 Two couplings, two firewalls
-
-The walker is coupled to two moving targets (`compiler-libs` and
-hamlet's surface API), but only one needs a compile-time firewall.
-
-**`compiler-libs` (hard coupling).** The walker destructures
-`Types.type_expr`, `Typedtree.expression`, `Typedtree.fp_kind`,
-`Types.row_field_repr`, etc. These shapes drift across OCaml minors
-without semver. Fix: `cppo` preprocesses `extract/compat.cppo.ml`
-with `-V OCAML:%{ocaml_version}` and a top-level `#error` guard
-fails the build on an unsupported switch (currently 5.4.1 only).
-Future drift adds `#if OCAML_VERSION >= (5, 5, 0)` branches
-in that single file; nothing else in `extract/` should know about
-OCaml versions.
-
-**hamlet (soft coupling).** The walker doesn't link hamlet. It reads
-`.cmt` files of projects that use hamlet and matches on string-shaped
-data: dotted paths like `Hamlet.Combinators.catch`, the three type
-parameters of `('a, 'e, 'r) Hamlet.t`, the labels `~f` / `~h`. New
-hamlet vocabulary is just one more pattern in `classify.ml`.
-
-A **structural** hamlet change (e.g. `Hamlet.t` gains a fourth type
-parameter) requires touching `upstream.ml`'s `hamlet_slot` and
-`classify.ml`'s `mentions_hamlet_t`, but no `#if`. Migration is local
-and obvious.
-
----
-
-## 2. The two binaries, the one contract
+## 2. Two binaries, one wire
 
 ```
-                ┌──────────────────────────┐
-.cmt files ───▶ │   hamlet-lint-extract    │
-                │   (compiler-libs side)   │
-                └────────────┬─────────────┘
-                             │  ND-JSON on stdout
-                             │  (one record per recognised call)
-                             ▼
-                ┌──────────────────────────┐
-                │   hamlet-lint            │
-                │   (rule + report,        │
-                │    pure OCaml)           │
-                └────────────┬─────────────┘
-                             │  pretty findings on stdout
-                             ▼
-                       exit 0 / 1
+.cmt → hamlet-lint-extract → ND-JSON stdout → hamlet-lint → findings + exit 0/1
+       (compiler-libs side)                   (pure OCaml)
 ```
 
-`hamlet-lint-extract` (directory `extract/`) is the only part of the
-project that touches `compiler-libs`. For every recognised
-`Hamlet.Combinators.catch` / `.provide` call it emits a
-`candidate` record carrying the handler's declared tag list and
-upstream's row tag list. The extractor itself does not apply the
-rule.
+- **`extract/`** (lib `hamlet_lint_extract` + exe `hamlet-lint-extract`):
+  the only `compiler-libs` consumer. Walks `.cmt`, classifies calls,
+  emits `candidate` records. Does NOT apply the rule.
+- **`analyzer/`** (lib `hamlet_lint_analyzer` + exe `hamlet-lint`):
+  pure OCaml. Reads ND-JSON, applies `declared \ upstream`, prints
+  findings.
+- **`schema/`**: the wire contract (`header` + `candidate`), Yojson
+  codecs, single source of truth for both binaries.
+- **`config/`**: parses `.hamlet-lint.sexp`. Both binaries read it
+  independently (no IPC).
 
-`hamlet-lint` (directory `analyzer/`) is pure OCaml. It reads
-ND-JSON records, applies the rule (`declared \ upstream ≠ ∅`), and
-prints findings. Its tests are pure — hand-built schema records, no
-fixtures needed.
+**Why split**: OCaml-version isolation (analyzer compiles unchanged
+on any switch; rule changes need no re-walk), and inspection (`jq` on
+the ND-JSON for debugging fixtures).
 
-`hamlet_lint_schema` (directory `schema/`) is the shared contract;
-the OCaml types in `schema.ml` are the single source of truth and
-both binaries encode/decode the same definitions.
+## 3. Walker (`extract/`)
 
-`hamlet_lint_config` (directory `config/`) parses the
-`.hamlet-lint.sexp` project config. Both binaries read it
-independently (extractor: `targets`, `exclude`; analyzer: `mode`).
-No process spawning between them.
+`Tast_iterator` over each `Cmt_format.read_cmt`'s `Implementation`.
+For every `Texp_apply` whose callee classifies as `Catch` / `Provide`:
 
-### 2.1 Why a wire and not a single binary
-
-Two reasons to keep extractor and analyzer separated:
-
-1. **OCaml-version isolation.** The analyzer compiles unchanged
-   against any switch and its tests have no `compiler-libs` surface.
-   Rule changes never need a re-walk; walker changes never need a
-   rule re-test.
-2. **Inspection.** A user who wants to see what the walker actually
-   extracted from a fixture can pipe the extractor through `jq`. The
-   ND-JSON line format is friendly to grep and shell pipelines.
-
-The cost is a Yojson dependency on both sides and one extra process
-per run, both negligible.
-
----
-
-## 3. The walker (`extract/walker.ml`)
-
-A `Tast_iterator` pass over each `Cmt_format.read_cmt`'s
-`Implementation` structure. For every `Texp_apply` whose callee
-classifies as `Catch` or `Provide` (see `classify.ml`), the walker:
-
-1. Pulls upstream from the first positional arg
-   (`extract_upstream`).
-2. Pulls the handler from the `~f` / `~h` labelled arg
-   (`extract_handler`).
-3. Asks `Handler.universe_tags` for the handler's declared tag
-   universe — five recognised shapes, see `RULE.md` §3.3.
-4. Asks `Upstream.row_tags` for upstream's row tag list — uses
-   `val_type` for `Texp_ident`, `exp_type` otherwise (the documented
-   limit, see `LIMITATIONS.md` §1).
-5. When both sides are recognised, emits one `S.candidate` record.
+1. `extract_upstream` — first positional arg.
+2. `extract_handler` — `~f` / `~h` arg.
+3. `Handler.universe_tags` — handler's declared tags (5 shapes, see
+   `RULE.md` §3.3).
+4. `Upstream.row_tags` — upstream's row tags. Uses `val_type` for
+   `Texp_ident`, recursive residual for chained inline monitored
+   combinators (see `RULE.md` §3.4), `exp_type` otherwise.
+5. Emits one `Schema.candidate`.
 
 Modules:
 
-- `tags.ml` — variant-tag enumeration through `Tvariant` /
-  `row_fields` / `row_more`.
-- `classify.ml` — callee identification: `Path.name` first, then a
-  structural fingerprint via `mentions_hamlet_t`.
-- `upstream.ml` — declaration-time type extraction + slot picking.
-- `handler.ml` — five-shape extractor for the handler's universe.
-- `walker.ml` — iterator setup + per-call dispatch.
-- `compat.cppo.ml` — version firewall (currently only an `#error`
-  guard).
+| File             | Responsibility                                                           |
+|------------------|--------------------------------------------------------------------------|
+| `tags.ml`        | Variant-tag enumeration via `Tvariant` / `row_fields` / `row_more`       |
+| `classify.ml`    | Callee identification: canonical `Path.name` + structural fingerprint    |
+| `propagate.ml`   | Pure-propagate detectors (catch `failure`, provide `give`/`need`)        |
+| `upstream.ml`    | `val_type` extraction, slot picking, `residual` recursion, `unstage_apply` |
+| `handler.ml`     | Five-shape extractor for handler universe                                |
+| `walker.ml`      | Tast iterator + per-call dispatch (direct + unstaged)                    |
+| `compat.cppo.ml` | OCaml-version firewall (`#error` guard, currently 5.4.1 only)            |
 
----
+The pipe form `eff |> catch ~f:H` produces a staged `Texp_apply`
+(partial-then-apply with `Omitted` slots). `unstage_apply` splices
+outer positional args into inner `Omitted` slots so classification
+works on both direct and pipe forms.
 
-## 4. The analyzer (`analyzer/`)
+## 4. Analyzer (`analyzer/`)
 
-Three modules:
+| File         | Responsibility                                                          |
+|--------------|-------------------------------------------------------------------------|
+| `rule.ml`    | `check : candidate → finding option` = list-set difference              |
+| `report.ml`  | Pretty-print findings, mirrors upstream PoC format                      |
+| `main.ml`    | CLI (`cmdliner`), schema-version guard, exit codes 0/1/2                |
 
-- `rule.ml` — the rule itself: `check : S.candidate → finding option`,
-  `analyze : S.record list → finding list`. Trivial list-set
-  difference; testable in isolation against hand-built schema records
-  (`test/test_rule.ml`).
-- `report.ml` — pretty-print findings to stdout, one multi-line block
-  per finding. Format mirrors the upstream PoC so its snapshot
-  expectations carry over.
-- `main.ml` — CLI (`cmdliner`), schema-version guard, exit code (0
-  clean, 1 findings, 2 malformed input).
+Trivially testable in isolation against hand-built schema records
+(`test/test_rule.ml`) — no fixtures needed.
 
----
+## 5. Wire contract (`schema/`)
 
-## 5. The ND-JSON contract (`schema/schema.ml`)
-
-Output is **newline-delimited JSON**: one self-contained object per
-line with a `"kind"` discriminator. Every stream begins with a
-`header`:
+ND-JSON. One self-contained record per line, `"kind"` discriminator.
+Header always first:
 
 ```json
 {"kind":"header","schema_version":1,"ocaml_version":"5.4.1","generated_at":"runtime"}
 ```
 
-`schema_version` is a single integer (currently `1`); the analyzer
-exits 2 on missing or mismatched version. `ocaml_version` and
-`generated_at` are diagnostic-only.
-
-Subsequent records are `candidate`:
+Then `candidate` records:
 
 ```json
 {
@@ -211,31 +113,28 @@ Subsequent records are `candidate`:
 }
 ```
 
-- `site_kind`: `"catch"` (slot `'e`) or `"provide"` (slot `'r`).
-- `combinator`: short callee name (e.g. `"catch"`, `"map_error"`,
-  `"Layer.provide_to_effect"`), used by the report so the user sees
-  which combinator fired.
-- `loc`: the application site, where the finding will land.
-- `declared`: handler's declared universe in source order.
-- `upstream`: upstream's row tags in source order.
+`schema_version` integer; analyzer exits 2 on missing/mismatched.
+`--canonical` sorts by `(file, line, col)` and sets
+`generated_at="canonical"` for stable snapshots.
 
-The analyzer applies `declared \ upstream` and emits a finding when
-the difference is non-empty.
+## 6. Two couplings, one firewall
 
-### 5.1 Canonical mode
+**`compiler-libs` (hard)**: walker destructures `Types.type_expr`,
+`Typedtree.expression`, etc. — drifts across OCaml minors.
+`extract/compat.cppo.ml` is the firewall: cppo with
+`-V OCAML:%{ocaml_version}` + top-level `#error` guard. Future drift
+adds `#if OCAML_VERSION >= (5, 5, 0)` branches there only.
 
-`hamlet-lint-extract --canonical` sorts candidates by
-`(file, line, col)` and sets `generated_at="canonical"`, making the
-output stable across runs. Use it for snapshot tests.
+**hamlet (soft)**: walker doesn't link hamlet. Reads `.cmt` of
+projects that use it, matches on string-shaped data (paths, type
+parameter counts, label names). New combinators = one more pattern
+in `classify.ml`. A *structural* hamlet change (e.g. `Hamlet.t` gains
+a 4th param) touches `upstream.ml::hamlet_slot` and
+`classify.ml::mentions_hamlet_t` — local and obvious, no `#if`.
 
----
+## 7. Failure mode
 
-## 6. Failure mode
-
-The walker always fails in the safe direction: unrecognised shapes
-are skipped silently. The analyzer emits findings only when both
-declared and upstream were extracted, and the difference is
-non-empty. Net result: false negatives only, never false positives.
-
-The two known gaps (inline upstream, exotic handler shapes) are
-documented in `LIMITATIONS.md`.
+Walker fails safely: unrecognised shapes are skipped silently.
+Analyzer emits findings only when both sides were extracted and the
+difference is non-empty. **False negatives only, never false
+positives.** Known gaps in `LIMITATIONS.md`.
