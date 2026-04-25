@@ -78,33 +78,105 @@ Five shapes, tried in order; first non-empty wins:
 
 ### 3.4 Recursive residual (chained inline)
 
-When upstream is itself a `Texp_apply` of a monitored combinator,
-the walker computes the inner's residual row instead of falling back
-to widened `exp_type`:
+#### The problem
 
-| Combinator | Slot 1 (errors)        | Slot 2 (services)            |
-|------------|------------------------|------------------------------|
-| catch      | handler-driven         | pass-through (recurse)       |
-| map_error  | handler codomain (n/a) | pass-through (recurse)       |
-| provide    | pass-through (recurse) | handler-driven               |
-| Layer.*    | (same as above)        | (same as above)              |
+§3.2 says we read upstream's narrow row from `Texp_ident.val_type`.
+That trick depends on upstream being a let-bound name. When upstream
+is built **inline** as another monitored call, there's no
+`Texp_ident` to read — we have a `Texp_apply`, and its `exp_type`
+has already been widened by the outer's annotation. So this used to
+escape detection:
 
-Handler-driven cases recognised:
+```ocaml
+(* outer declares Console+Database; inner only re-emits Console.
+   Without recursion: linter sees upstream = [Console, Database]
+   (widened) and finds nothing extra. *)
+catch
+  (catch eff ~f:(fun (x : [%hamlet.te Console]) ->
+       match x with [%hamlet.propagate_e] -> .))
+  ~f:(fun (x : [%hamlet.te Console, Database]) ->
+       match x with [%hamlet.propagate_e] -> .)
+```
 
-- **catch** with pure-propagate handler (every arm is `failure(alias)`,
-  including cross-CU `failure(<__Hamlet_rest_*>.expose_X (alias :> _))`):
-  residual = inner upstream's row.
-- **provide** with handler whose every arm is `Dispatch.need(alias)`
-  (re-emit) or `<X>.Tag.give(alias) _` (discharge): residual = inner
-  upstream's row ∖ (union of give-tags). Mixed give+need is the
-  common idiom and works.
+Same for the pipe form `eff |> catch ~f:H1 |> catch ~f:H2`: the
+outer's upstream is a `Texp_apply`, not a `Texp_ident`.
 
-The pipe form `eff |> catch ~f:H` produces a staged `Texp_apply`
-(partial-then-apply with `Omitted` slots); the walker unstages it
-into the canonical direct shape before classification.
+#### The fix
 
-Anything else → fallback to widened `exp_type`. Sound posture:
-false negatives only, never false positives.
+When upstream is a `Texp_apply` of a monitored combinator, recurse:
+ask "what row would the inner combinator actually produce on the slot
+the outer cares about?" — call this the **residual** of the inner.
+
+Recursion stops at:
+
+- a `Texp_ident` → read `val_type` as in §3.2.
+- anything else → fall back to widened `exp_type` (same as before).
+
+What residual the inner produces depends on whether the inner's own
+operation touches the slot the outer cares about:
+
+- **Pass-through slot**: the inner combinator doesn't touch this
+  slot. `provide` doesn't change errors; `catch` doesn't change
+  services. So the residual on a pass-through slot is just the
+  inner upstream's residual on the same slot — recurse on the
+  inner's positional arg.
+- **Touched slot**: the inner combinator's handler determines what
+  comes out. We can compute residual exactly only when the handler
+  matches one of two known shapes (below); otherwise fall back to
+  widened.
+
+Per-combinator slot effect:
+
+| Combinator | Slot 1 (errors)        | Slot 2 (services)         |
+|------------|------------------------|---------------------------|
+| catch      | touched                | pass-through              |
+| map_error  | touched (not handled)  | pass-through              |
+| provide    | pass-through           | touched                   |
+| Layer.*    | (same as above)        | (same as above)           |
+
+#### Recognised handler shapes for touched slots
+
+**catch with pure-propagate handler.** Every arm is
+`failure(<the alias bound by the pattern>)` — i.e. "match the tag,
+re-raise it unchanged". Semantically a row no-op: the handler emits
+exactly what it receives. Residual = inner upstream's residual.
+
+This is exactly what `[%hamlet.propagate_e]` PPX-expands to. The
+cross-CU expansion wraps the alias in `<__Hamlet_rest_X>.expose_Y
+(alias :> _)` before passing to `failure`; the walker recognises both
+shapes.
+
+**provide with give/need handler.** Every arm is one of:
+
+- `<X>.Tag.give(alias) impl` — "discharge this service by handing in
+  an implementation". Removes the matched tag from the residual.
+- `Hamlet.Dispatch.need(alias)` — "I still need this service,
+  forward it". Pass-through, contributes nothing.
+
+Residual on slot 2 = inner upstream's residual on slot 2 ∖ (union of
+tags discharged by `give` arms). Mixed give+need is the common idiom
+(provide some services, propagate the rest); it works.
+
+`[%hamlet.propagate_s]` expands to all-need arms; explicit
+`X.Tag.give w impl` arms come from user code.
+
+#### Pipe form
+
+`eff |> catch ~f:H` does NOT inline at typedtree level when `catch`
+is partially applied: it produces a staged `Texp_apply` whose callee
+is itself a `Texp_apply` of `catch` with the upstream slot marked
+`Omitted`. The walker unstages this — splices the outer's positional
+arg into the inner partial's `Omitted` slot — to get a canonical
+direct call shape, then classifies as usual. So pipe and nested
+forms are handled identically.
+
+#### Soundness
+
+If the handler shape isn't recognised → fallback to widened
+`exp_type`. The widened type is an upper bound on what's actually
+emitted, so `declared ∖ upstream` is a lower bound on real extras.
+**False negatives only, never false positives.** This invariant
+holds across the whole recursion.
 
 ## 4. Wire format
 
