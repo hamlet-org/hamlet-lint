@@ -73,14 +73,18 @@ divergent source history. When `hamlet-lint.0.2.0~5.4.1` and
 were built from the same `main` commit; the only differences are the
 pinned hamlet version and the fixture compilation target.
 
-**Two mandatory axes.** Every hamlet release (lockstep) and every
-supported OCaml patch (compat firewall, since the extractor links
-`compiler-libs`) triggers a release pass from the current `main`. New
-hamlet: publish one package per supported OCaml. New OCaml: backfill
-one package per past hamlet. `main` only moves forward. The firewall
-lives in a single `cppo`-preprocessed file
-(`extract/compat.cppo.ml`) with a top-level `#error` guard. v0.2
-pins OCaml 5.4.1 exactly.
+**Two release triggers, asymmetric matrix.** Every hamlet release
+(lockstep) and every newly supported OCaml patch (compat firewall,
+since the extractor links `compiler-libs`) triggers a release pass
+from the current `main`. New hamlet: publish one package per
+supported OCaml. New OCaml: publish one package for the **latest**
+hamlet only — past hamlet releases are NOT backfilled. A user pinned
+to an older `hamlet.X.Y.Z` who upgrades OCaml must also upgrade
+hamlet to get linter coverage on the new patch; existing
+`<old-hamlet>~<old-ocaml>` packages stay available unchanged. `main`
+only moves forward. The firewall lives in a single
+`cppo`-preprocessed file (`extract/compat.cppo.ml`) with a top-level
+`#error` guard. v0.2 pins OCaml 5.4.1 exactly.
 
 See `docs/RELEASING.md` for the operational procedure and
 `docs/ARCHITECTURE.md` for why `compiler-libs` forces the OCaml axis.
@@ -128,8 +132,8 @@ so the analyzer can refuse mismatched input loudly. See
   why (notably: inline upstream without a let-binding).
 - `docs/ARCHITECTURE.md`: why `.cmt`, two-binary split, ND-JSON
   contract, walker coverage details.
-- `docs/RELEASING.md`: release workflow, CHANGELOG model, backfill
-  passes.
+- `docs/RELEASING.md`: release workflow, CHANGELOG model,
+  latest-hamlet-only policy on new OCaml patches.
 - `docs/CONTRIBUTING.md`: dev setup, adding tests, adding new
   OCaml targets.
 - `CHANGELOG.md`: chronological history.

@@ -8,9 +8,10 @@ Two release events:
 - **Hamlet release pass**: triggered by every new `hamlet.X.Y.Z` on
   opam-repository. Publishes `hamlet-lint.X.Y.Z~<ocaml>` for every
   supported OCaml patch, from current `main`.
-- **OCaml release pass (backfill)**: triggered when a new OCaml patch
-  starts being supported. Publishes `X.Y.Z~<new-ocaml>` for every
-  past hamlet release, from current `main`.
+- **OCaml release pass**: triggered when a new OCaml patch starts
+  being supported. Publishes `<latest-hamlet>~<new-ocaml>` for the
+  **latest** hamlet only, from current `main`. Past hamlet releases
+  are NOT backfilled (see §5).
 
 Both use the same workflow; they differ only in which axis is
 enumerated.
@@ -59,7 +60,8 @@ visible to users; new combinator recognition; fixed false positives or
 negatives; OCaml target changes (tag `[5.x only]`).
 
 **Skip** for: release passes when the walker was unchanged; pure
-refactoring; backfills whose compat work was already logged.
+refactoring; later passes whose compat work was already logged on
+the OCaml pass that introduced the patch.
 
 The release workflow does NOT grep `CHANGELOG.md`. Curation is
 manual.
@@ -90,10 +92,12 @@ sync when adding/removing patches.
 There is no `HAMLET_VERSION` in `versions.sh`: pass it on the CLI.
 
 ```sh
-./release/run.sh 0.1.0           # one hamlet, every patch
-./release/run.sh 0.1.0 0.2.0     # backfill several hamlets
-./release/run.sh --all           # every hamlet ever published
+./release/run.sh <hamlet-version>   # exactly one hamlet, every patch
 ```
+
+**Latest-hamlet-only policy.** A release pass always names a single
+hamlet — typically the latest one. Past hamlet releases are NOT
+re-built when a new OCaml patch lands. See §5.
 
 ## 4. Hamlet release pass (most common)
 
@@ -109,31 +113,31 @@ Hamlet just published `X.Y.Z`. Do this:
 4. **Run `./release/run.sh X.Y.Z`**.
 5. **Verify the opam-repo PR is green** and merge.
 
-## 5. OCaml release pass (backfill)
+## 5. OCaml release pass
 
-A new OCaml patch `<NEW>` is now supported, and you want every past
-hamlet release installable on it.
+A new OCaml patch `<NEW>` is now supported, and you want the
+**latest** hamlet release installable on it.
 
 1. **Pull `main`, verify green against `<NEW>`** locally. Fix any
    `compiler-libs` drift in `extract/compat.cppo.ml` (widen `#error`
    guard, add `#if OCAML_VERSION = (...)` branches as needed).
    Loosen `(ocaml ...)` in `dune-project`. Add `<NEW>` row to CI
    matrix.
-2. **Append `<NEW>` to `OCAML_PATCHES`** in `release/versions.sh` in
-   the same commit.
+2. **Append `<NEW>` to `OCAML_PATCHES`** in `release/versions.sh`
+   (same commit).
 3. **Add one `CHANGELOG.md` entry** titled
    `## YYYY-MM-DD: OCaml <NEW> target added [<NEW> only]`.
-4. **Run `./release/run.sh --all`**. The script crosses every past
-   hamlet with `OCAML_PATCHES` (now including `<NEW>`), skips merged
-   pairs, and dispatches **one** workflow run that bundles every
-   surviving pair (the `build` job then matrix-fans-out internally).
-   On a fresh backfill: one workflow run carrying `N × 1` pairs.
-5. **Monitor the bundled opam-repo PR**. One PR carries every
-   surviving pair (each pair = one independent package directory
-   inside the PR).
+4. **Run `./release/run.sh <latest-hamlet>`**. The script skips the
+   pair that already exists for the previous patch and queues the
+   new `<latest-hamlet>~<NEW>` pair (plus any other patch missing
+   for `<latest-hamlet>`).
+5. **Monitor the bundled opam-repo PR**.
 
-A backfill that passes CI is a real test of the walker against that
-patch's `Typedtree`/`Cmt_format`. Not busywork.
+**Why no backfill** for past hamlet releases: hamlet-lint's policy
+is "latest hamlet only". A user pinned to an older `hamlet.X.Y.Z`
+who upgrades OCaml must also upgrade hamlet to get linter coverage
+on the new patch. Existing `<old-hamlet>~<old-ocaml>` packages
+remain available on opam-repository unchanged.
 
 ## 6. Workflow anatomy (`.github/workflows/release.yml`)
 
@@ -172,8 +176,8 @@ Three mismatches with our scheme:
 
 1. Version strings contain `~` (`0.1.0~5.4.1`); `dune-release`'s
    parser doesn't handle it as we want.
-2. We publish many packages from one commit (lockstep backfill);
-   `dune-release` assumes one tag = one package.
+2. We publish many packages from one commit (one hamlet × N OCaml
+   patches per pass); `dune-release` assumes one tag = one package.
 3. Our changelog is decoupled from release events; the workflow
    doesn't grep it.
 
@@ -189,11 +193,11 @@ The manual `gh`-based flow in `release.yml` is ~40 lines of shell.
 - [ ] `gh auth` access to `hamlet-org/hamlet-lint` and
       `ocaml/opam-repository`.
 
-Then run `./release/run.sh <hamlet-version>` (or `--all` for
-backfill). The script computes the surviving pairs and dispatches
-one workflow run with all of them. Fall back to **Actions → release
-→ Run workflow** only when you need to force-dispatch a specific
-pair list bypassing the in-flight-PR skip.
+Then run `./release/run.sh <hamlet-version>`. The script computes
+the surviving pairs and dispatches one workflow run with all of
+them. Fall back to **Actions → release → Run workflow** only when
+you need to force-dispatch a specific pair list bypassing the
+in-flight-PR skip.
 
 ## 9. Related files
 

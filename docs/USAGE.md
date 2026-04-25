@@ -19,6 +19,13 @@ As a project dev dep:
 depends: [ "hamlet-lint" {with-dev-setup & = "0.2.0~5.4.1"} ]
 ```
 
+**Latest-hamlet-only policy on new OCaml patches.** When a new OCaml
+patch is supported, only the **latest** hamlet release gets a build
+for it. If you're pinned to an older `hamlet.X.Y.Z` and upgrade
+OCaml, you must also upgrade hamlet to get linter coverage on the
+new patch. Existing `<old-hamlet>~<old-ocaml>` packages stay
+available unchanged.
+
 ## 2. Run
 
 ### With a config (recommended)

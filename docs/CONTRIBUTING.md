@@ -77,4 +77,6 @@ When patch `<NEW>` starts being supported (today only `5.4.1` in
 3. Loosen `(ocaml ...)` in `dune-project`.
 4. Add a CI matrix row in `.github/workflows/ci.yml`.
 5. Append `<NEW>` to `OCAML_PATCHES` in `release/versions.sh`.
-6. Run the backfill release pass (`docs/RELEASING.md` §5).
+6. Run `./release/run.sh <latest-hamlet>` to publish the new
+   `<latest-hamlet>~<NEW>` package (latest-hamlet-only policy; past
+   hamlet releases are not backfilled — see `docs/RELEASING.md` §5).
