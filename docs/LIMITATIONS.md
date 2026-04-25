@@ -2,18 +2,25 @@
 
 What hamlet-lint does *not* catch.
 
-## 1. Inline upstream that is not a monitored combinator
+## 1. Inline upstream built from non-monitored operations
 
-If upstream is built inline (no `let`) and isn't itself a call to one of
-the seven monitored combinators, the linter falls back to widened
+When an inline upstream is constructed from anything **other than** the
+seven monitored combinators (`let*`/`chain`, `bind`, `try_catch`,
+`pure`, `Layer.make`, etc.), the linter falls back to widened
 `exp_type`. No finding.
 
+(Chains of monitored combinators inline — `eff |> catch ~f:H |> catch
+~f:H`, `provide (provide eff ~h:...) ~h:...`, mixed
+`catch∘provide`/`Layer.provide_to_*` — ARE detected via the recursive
+residual.)
+
 ```ocaml
+(* not detected: let* expands to `chain`, not monitored *)
 catch (let* (module C) = Console.Tag.summon () in C.print_endline "go")
   ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-**Fix:** bind upstream first.
+**Fix:** bind the non-monitored upstream first.
 
 ```ocaml
 let eff = let* (module C) = Console.Tag.summon () in C.print_endline "go" in
