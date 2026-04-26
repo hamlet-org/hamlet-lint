@@ -14,6 +14,36 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-26: hamlet PPX uptake — `Tag.r` carries `t Hamlet.P.t`, path-qualified labels
+
+Picked up two upstream commits in `hamlet-org/hamlet` (HEAD now at
+`0fc897c`): `7839263` qualifies the service Tag's poly-variant label
+with the enclosing module path using `__` as separator (top-level
+declarations unchanged; nested `Outer.Inner` now emits
+`` [`Outer__Inner …] ``); `0fc897c` (#14) makes the Tag's row
+carry a `t Hamlet.P.t` payload — `[`Console of t Hamlet.P.t]`
+rather than the previous empty `` [`Console] `` — to prevent two
+services with the same short name and different service types from
+silently aliasing at the row level.
+
+**Linter impact: none.** `extract/tags.ml`'s row enumeration is
+set-based on label *strings* and explicitly ignores payloads
+(`Rpresent _` / `Reither _` patterns discard the payload). The
+PPX-emitted handler shapes hamlet-lint matches against — pure-
+propagate `failure(alias)`, `Tag.give(alias) impl`,
+`Dispatch.need(alias)` — are structurally unchanged: only the
+*type* of `alias` changed (now an opaque payload-carrying value),
+not the call shape. Cross-CU `__Hamlet_rest_*` / `expose_*`
+machinery is untouched in PPX. `make build` clean, `dune runtest`
+green on all 20 cases: 7 unit/rule + 13 e2e (5 fixture suites —
+widening, edge, layer, cross-CU, chained — plus 3 wire-error and
+5 fs-error cases).
+
+The opam-pinned `HAMLET_VERSION` in `.github/workflows/ci.yml`
+remains `0.1.0`; bumping it requires a hamlet opam release that
+includes these PPX commits. Local dev (opam pin to the standalone
+hamlet checkout) follows the new HEAD automatically.
+
 ## 2026-04-24: pivot from stale forwarding arms to retroactive widening
 
 Wholesale replacement of the detection logic. The "stale forwarding
