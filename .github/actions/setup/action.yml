@@ -23,6 +23,14 @@ inputs:
     description: Git ref for the git branch; ignored when hamlet-source=opam
     required: false
     default: main
+  with-test:
+    description: "Install [with-test] deps (alcotest etc.). Default: true."
+    required: false
+    default: "true"
+  with-doc:
+    description: "Install [with-doc] deps (odoc etc.). Default: false — only the lint-doc job needs them."
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -44,6 +52,17 @@ runs:
       shell: bash
       run: opam install -y "hamlet.${{ inputs.hamlet-version }}" "ppx_hamlet.${{ inputs.hamlet-version }}"
 
+    # Build the deps-install flag string. Each opt-in flag adds its
+    # transitive deps; omitting them skips the corresponding sub-tree
+    # (e.g. odoc + its deps when with-doc=false). Saves macOS minutes
+    # in jobs that don't run @doc / @runtest.
     - name: Install linter deps
       shell: bash
-      run: opam install . --deps-only --with-test --with-doc -y
+      env:
+        WITH_TEST: ${{ inputs.with-test }}
+        WITH_DOC: ${{ inputs.with-doc }}
+      run: |
+        flags=""
+        [ "$WITH_TEST" = "true" ] && flags="$flags --with-test"
+        [ "$WITH_DOC" = "true" ]  && flags="$flags --with-doc"
+        opam install . --deps-only $flags -y

@@ -3,28 +3,16 @@ name: ci
 on:
   push:
     branches: [main]
-    # Docs-only / metadata-only changes don't affect build or tests.
-    # Skip CI for them to save runner minutes. `knowledge/` is the
-    # local knowledge base (git-ignored in this repo, but listed for
-    # safety in case anyone tracks it in a fork).
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE"
-      - "knowledge/**"
-      - ".github/dependabot.yml"
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE"
-      - "knowledge/**"
-      - ".github/dependabot.yml"
 
 # Auto-cancel superseded runs on the same branch/PR. On main we let
 # every push complete so individual commits remain independently
-# buildable; on PRs only the latest push is run.
+# buildable; on PRs only the latest push is run. The PR key uses the
+# pull-request NUMBER (not branch name) so two PRs from different
+# forks with the same source branch name don't cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Jobs only get read access to the repo: they cannot post comments,
@@ -32,14 +20,9 @@ concurrency:
 # action is ever compromised.
 permissions: read-all
 
-# How the linter obtains hamlet for fixture compilation.
-#
-#   git  — bootstrap mode: pin hamlet via `opam pin add` from git.
-#          Used until hamlet has had its first opam-repository release.
-#          See SWITCH-TO-OPAM.md at repo root.
-#   opam — steady state: install the matching hamlet version from opam.
-#          Flip the default here, delete SWITCH-TO-OPAM.md, and remove
-#          the HAMLET_GIT_* inputs below once hamlet is on opam.
+# How the linter obtains hamlet for fixture compilation. Used by the
+# `build` and `lint-doc` jobs (both compile or document hamlet-using
+# code); `lint-fmt` and `lint-opam` do not need hamlet installed.
 env:
   HAMLET_SOURCE: git
   HAMLET_GIT_URL: https://github.com/hamlet-org/hamlet.git
@@ -50,7 +33,90 @@ env:
   HAMLET_VERSION: 0.1.0
 
 jobs:
+  # First-pass change detector. Outputs `code=true` if at least one
+  # changed path is OUTSIDE the docs-only allowlist. Downstream jobs
+  # gate their expensive steps on this output, but always run to
+  # completion so the check name reports a status — required so
+  # branch-protection required-checks pass even on docs-only PRs.
+  #
+  # We do NOT use `paths-ignore:` at the workflow level: with that,
+  # a docs-only push wouldn't trigger ci.yml at all and required
+  # checks would stay forever pending. The conditional-gating pattern
+  # below avoids that without the dummy-workflow ambiguity that
+  # arises when a mixed-content PR matches both a `paths:` and a
+  # `paths-ignore:` workflow.
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so any push range (even multi-commit pushes
+          # to main where `github.event.before` is many commits back)
+          # is reachable without extra fetches.
+          fetch-depth: 0
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+        # Compute the diff range:
+        # - pull_request: explicit refspec fetch of the base branch into
+        #   refs/remotes/origin/<base>, then diff that..HEAD. The plain
+        #   `git fetch origin <base>` form only updates FETCH_HEAD, not
+        #   the remote-tracking ref, which makes the symbolic name
+        #   `origin/<base>` unreliable.
+        # - push: github.event.before is the parent at workflow trigger
+        #   time, so it covers the entire push (including multi-commit
+        #   pushes). The all-zeros sentinel (40 zeros) signals a freshly
+        #   created branch with no parent — fall back to full CI.
+        # If the diff fails or comes back empty (force-push to same SHA,
+        # tag push, etc.) we run full CI conservatively.
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin \
+              "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            range="origin/${BASE_REF}...HEAD"
+          else
+            zero="0000000000000000000000000000000000000000"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "$zero" ]; then
+              echo "first push to branch (no parent); running full CI"
+              echo "code=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            range="${BEFORE}...HEAD"
+          fi
+          changed=$(git diff --name-only "$range" || true)
+          if [ -z "$changed" ]; then
+            echo "empty diff for $range; running full CI conservatively"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Match every changed path against the docs-only allowlist.
+          # If even one path falls outside, this is a code change.
+          # `case` with `*` matches paths containing `/`, so `*.md`
+          # catches `docs/foo.md` too.
+          code=false
+          while IFS= read -r f; do
+            case "$f" in
+              *.md|LICENSE|knowledge/*|.github/dependabot.yml) ;;
+              *) code=true ;;
+            esac
+          done <<< "$changed"
+          echo "changed files:"
+          printf '  %s\n' $changed
+          echo "code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # Cross-OS build + test. fmt / odoc / opam-lint are NOT here — those
+  # checks don't need OS parity and run as ubuntu-only sibling jobs
+  # below to keep macOS minutes tied to actual OS-sensitive work
+  # (build flags, linker, fsevents, etc.). Job always runs (so the
+  # check fires); steps gate on `detect.outputs.code`.
   build:
+    needs: detect
     strategy:
       fail-fast: false
       matrix:
@@ -61,30 +127,93 @@ jobs:
         ocaml-compiler: ["5.4.1"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - if: needs.detect.outputs.code == 'true'
+        uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - if: needs.detect.outputs.code == 'true'
+        uses: ./.github/actions/setup
         with:
           ocaml-compiler: ${{ matrix.ocaml-compiler }}
           hamlet-source: ${{ env.HAMLET_SOURCE }}
           hamlet-version: ${{ env.HAMLET_VERSION }}
           hamlet-git-url: ${{ env.HAMLET_GIT_URL }}
           hamlet-git-ref: ${{ env.HAMLET_GIT_REF }}
+          # with-test defaults true; with-doc stays false (no @doc here).
 
-      # ocamlformat is a dev-only tool: not in dune-project depends
-      # (it would leak into the opam package's runtime deps). Pin to
-      # the version in .ocamlformat so CI matches local dev.
-      - name: Install ocamlformat
-        run: opam install -y ocamlformat.0.29.0
-
-      - name: Build
+      - if: needs.detect.outputs.code == 'true'
+        name: Build
         run: opam exec -- dune build
 
-      - name: Test
+      - if: needs.detect.outputs.code == 'true'
+        name: Test
         run: opam exec -- dune runtest
 
-      - name: Format & docs
-        run: opam exec -- dune build @fmt @doc
+      - if: needs.detect.outputs.code != 'true'
+        run: echo "docs-only change — skipping build + test."
 
-      - name: opam lint
+  # Format check: just ocamlformat + the project source. No hamlet, no
+  # @doc deps. Pin ocamlformat to the version in .ocamlformat so CI
+  # matches local dev.
+  lint-fmt:
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - if: needs.detect.outputs.code == 'true'
+        uses: actions/checkout@v4
+      - if: needs.detect.outputs.code == 'true'
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4.1"
+      - if: needs.detect.outputs.code == 'true'
+        name: Install ocamlformat
+        run: opam install -y ocamlformat.0.29.0
+      - if: needs.detect.outputs.code == 'true'
+        name: Format check
+        run: opam exec -- dune build @fmt
+      - if: needs.detect.outputs.code != 'true'
+        run: echo "docs-only change — skipping fmt check."
+
+  # opam metadata lint: pure file-level check. Still need an active
+  # opam binary, but no switch contents matter.
+  lint-opam:
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - if: needs.detect.outputs.code == 'true'
+        uses: actions/checkout@v4
+      - if: needs.detect.outputs.code == 'true'
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.4.1"
+      - if: needs.detect.outputs.code == 'true'
+        name: opam lint
         run: opam lint hamlet-lint.opam
+      - if: needs.detect.outputs.code != 'true'
+        run: echo "docs-only change — skipping opam lint."
+
+  # odoc check: dune build @doc compiles the linter's libraries before
+  # generating docs. hamlet-lint.opam has hamlet as an unconditional
+  # dep, so the setup action installs it; the linter's own libraries
+  # don't link against hamlet, but opam resolution still needs the
+  # constraint to hold. with-doc=true pulls odoc + its deps.
+  lint-doc:
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - if: needs.detect.outputs.code == 'true'
+        uses: actions/checkout@v4
+      - if: needs.detect.outputs.code == 'true'
+        uses: ./.github/actions/setup
+        with:
+          ocaml-compiler: "5.4.1"
+          hamlet-source: ${{ env.HAMLET_SOURCE }}
+          hamlet-version: ${{ env.HAMLET_VERSION }}
+          hamlet-git-url: ${{ env.HAMLET_GIT_URL }}
+          hamlet-git-ref: ${{ env.HAMLET_GIT_REF }}
+          with-test: "false"
+          with-doc: "true"
+      - if: needs.detect.outputs.code == 'true'
+        name: Doc
+        run: opam exec -- dune build @doc
+      - if: needs.detect.outputs.code != 'true'
+        run: echo "docs-only change — skipping odoc check."
