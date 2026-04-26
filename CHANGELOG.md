@@ -14,6 +14,50 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-26 (later): hamlet uptake — `?loc` on every combinator, defect channel, PPX bare-name loc injection
+
+Picked up five more upstream commits in `hamlet-org/hamlet` (HEAD
+now at `424d7cc`): `68ed607` (#15) introduces a side-band defect
+channel with a new `Hamlet.Combinators.catch_defect` combinator,
+its handler initially typed `exn -> _ h`; `469a02c` is a
+follow-up test fix syncing manual tags + type-error tests to the
+new service-implementation shape; `f78c919` (#16) preserves the
+raise-site backtrace through `Defect` re-raises and replaces the
+bare `exn` carried by `Defect`/`catch_defect` with a new
+`Cause.t` (raise site + backtrace + later breadcrumbs);
+`a3e02a1` (#18) threads a `?loc:Source_pos.t` optional argument
+through every monitored combinator (`catch`, `catch_defect`,
+`provide`, `chain`, `both`, `scoped`, `map`, `map_error`, `tap`,
+`sandbox`, `or_die`, plus the Layer family) and walks the
+interpreter's `cont_stack` on defect to render an "effect trace"
+in pretty output — leaf combinators like `return`, `failure`,
+`summon`, `suspend`, `defect` take no `?loc` and are not on the
+PPX whitelist either; `424d7cc` (#19) extends the loc-injection
+PPX to bare-name calls under `open Hamlet[.Combinators|.Layer]`
+and rewrites `let*`/`and*`/`let+` desugars when the operators
+are rebound to `Hamlet.Combinators.( let* )`. The `Hamlet`
+umbrella also now re-exports `Source_pos`, `Cause`, and `Exit`.
+
+**Linter impact: none.** The walker keys off labels, not positions:
+the new `?loc:Source_pos.t` is `Optional`/`Labelled "loc"`, so it
+never collides with the upstream's positional `Nolabel` slot or
+with the handler's `Labelled "f"`/`"h"`. `catch_defect`'s handler
+takes a plain `Cause.t` (no row-typed annotation), so retroactive
+widening cannot apply — it stays out of the monitored-combinator
+table. `Hamlet.t` is still `(+'a, +'e, +'r) t`, so the 3-arg
+structural fingerprint in `extract/classify.ml`'s
+`mentions_hamlet_t` is unchanged. The fixture suites already
+preprocess with `(pps ppx_hamlet)` so every whitelisted
+`Hamlet.Combinators.X` call site now has a PPX-injected
+`~loc:__POS__` arg in the typedtree; tests stay green because
+that arg is just one more `Labelled` entry the walker is happy
+to ignore. `make build` clean, `dune runtest` green on all 20
+cases.
+
+`HAMLET_VERSION` in CI remains `0.1.0` for the same reason as the
+previous entry: bumping requires a hamlet opam release that
+includes these commits.
+
 ## 2026-04-26: hamlet PPX uptake — `Tag.r` carries `t Hamlet.P.t`, path-qualified labels
 
 Picked up two upstream commits in `hamlet-org/hamlet` (HEAD now at

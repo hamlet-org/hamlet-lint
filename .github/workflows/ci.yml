@@ -3,8 +3,34 @@ name: ci
 on:
   push:
     branches: [main]
+    # Docs-only / metadata-only changes don't affect build or tests.
+    # Skip CI for them to save runner minutes. `knowledge/` is the
+    # local knowledge base (git-ignored in this repo, but listed for
+    # safety in case anyone tracks it in a fork).
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - "knowledge/**"
+      - ".github/dependabot.yml"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - "knowledge/**"
+      - ".github/dependabot.yml"
+
+# Auto-cancel superseded runs on the same branch/PR. On main we let
+# every push complete so individual commits remain independently
+# buildable; on PRs only the latest push is run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Jobs only get read access to the repo: they cannot post comments,
+# create tags, push, etc. Reduces the blast radius if a third-party
+# action is ever compromised.
+permissions: read-all
 
 # How the linter obtains hamlet for fixture compilation.
 #

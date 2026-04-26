@@ -10,6 +10,8 @@
 #
 # Targets:
 #   build      plain `dune build`
+#   clean      `dune clean`
+#   watch      `dune build --watch` — rebuild on file changes (Ctrl-C to stop)
 #   test       `dune runtest` (alcotest suites + e2e fixtures)
 #   fmt        dune fmt check (use PROMOTE=1 to rewrite files)
 #   fmt-fix    auto-format the whole project in place
@@ -52,17 +54,25 @@ FIXTURE_TAIL = $(shell echo "$(FIXTURE)" | cut -c2-)
 FIXTURE_CAP  = $(FIXTURE_HEAD)$(FIXTURE_TAIL)
 CASE_CMT     = $(BUILD_DIR)/test/cases/.hamlet_lint_fixtures.objs/byte/hamlet_lint_fixtures__$(FIXTURE_CAP).cmt
 
-.PHONY: help build test fmt fmt-fix doc opam promote all setup hooks list paths \
+.PHONY: help build clean watch test fmt fmt-fix doc opam promote all setup hooks list paths \
         run warn ndjson debug _require_fixture _maybe_promote
 
 .DEFAULT_GOAL := help
 
 help:
-	@sed -n '2,29p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
+	@sed -n '2,31p' $(MAKEFILE_LIST) | sed 's/^# \{0,1\}//'
 
 build:
 	$(DUNE) build
 	@$(MAKE) --no-print-directory _maybe_promote
+
+clean:
+	$(DUNE) clean
+
+# Incremental rebuild on file changes. Dune's built-in --watch uses
+# inotify (linux) / fsevents (macos); Ctrl-C to stop.
+watch:
+	$(DUNE) build --watch
 
 test: build
 	$(DUNE) runtest --force
