@@ -35,9 +35,9 @@
 
     "Handler-driven" cases that we successfully detect:
 
-    - {b catch} with pure-propagate handler (every arm is [failure (alias)] —
-      the [%hamlet.propagate_e] expansion or hand-rolled equivalent): residual
-      on slot 1 = inner upstream's residual on slot 1.
+    - {b catch} with pure-propagate handler (every arm is [fail (alias)] — the
+      [%hamlet.propagate_e] expansion or hand-rolled equivalent): residual on
+      slot 1 = inner upstream's residual on slot 1.
     - {b provide} with pure-need handler (every arm is [Dispatch.need (alias)]):
       residual on slot 2 = inner upstream's residual on slot 2 (handler is a
       no-op, equivalent to [%hamlet.propagate_s] for all tags).
@@ -46,7 +46,7 @@
       of give-tags collected from the arm patterns.
 
     Anything else (handler shape we don't recognise, [Layer.catch] whose handler
-    returns [Layer.make ...] rather than [failure], [map_error] whose handler
+    returns [Layer.make ...] rather than [fail], [map_error] whose handler
     returns a tag value, etc.) → fallback to widened [exp_type], same
     false-negative posture as before.
 

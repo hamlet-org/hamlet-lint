@@ -54,7 +54,7 @@ let e5_open_handler =
     C.print_endline "go"
   in
   catch eff ~f:(fun (x : [> `Console_error of string ]) ->
-      match x with `Console_error _ -> failure `Fallback)
+      match x with `Console_error _ -> fail `Fallback)
 
 (* E6 - GOOD: non-Hamlet catch-like name (unrelated fn) should not be flagged *)
 let my_catch _up ~f:_h = ()
@@ -120,4 +120,4 @@ let e11_user_helper_no_false_positive =
     C.print_endline "go"
   in
   User_helpers.catch eff ~f:(fun `Anything ->
-      Hamlet.Combinators.failure (`Console_error "x"))
+      Hamlet.Combinators.fail (`Console_error "x"))

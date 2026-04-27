@@ -11,7 +11,7 @@
       where [<inner_pat>] is either a single [Tpat_variant] or a [Tpat_or] tree
       of variants (cross-CU union types lower to or-patterns).
     - per-arm RHS for propagate_e:
-      [Texp_apply (Hamlet.Combinators.failure, [Nolabel, Arg <Texp_ident var>])].
+      [Texp_apply (Hamlet.Combinators.fail, [Nolabel, Arg <Texp_ident var>])].
     - per-arm RHS for propagate_s:
       [Texp_apply (Hamlet.Dispatch.need, [Nolabel, Arg <Texp_ident var>])].
     - per-arm RHS for "give" (a service implementation handed to the runtime):
@@ -149,11 +149,14 @@ let is_expose_of_var (e : expression) (v : Ident.t) : bool =
       | _ -> false)
   | _ -> false
 
-(** Recognise [Hamlet.Combinators.failure] by canonical [Path.name]. User
-    aliases ([let fail = failure], [let open Hamlet.Combinators]) are
-    intentionally unsupported — see LIMITATIONS §6. *)
-let is_failure_callee (path : Path.t) : bool =
-  Path.name path = "Hamlet.Combinators.failure"
+(** Recognise [Hamlet.Combinators.fail] by canonical [Path.name]. User aliases
+    ([let f = fail], [let open Hamlet.Combinators]) are intentionally
+    unsupported — see LIMITATIONS §6.
+
+    Renamed from [is_failure_callee] when hamlet renamed the smart constructor
+    [failure → fail] in commit [e3ab0c8]. *)
+let is_fail_callee (path : Path.t) : bool =
+  Path.name path = "Hamlet.Combinators.fail"
 
 (** Recognise [Hamlet.Dispatch.need] by canonical [Path.name]. Aliases
     intentionally unsupported (LIMITATIONS §6). *)
@@ -212,16 +215,16 @@ let classify_provide_arm (Arm (lhs, guard, rhs) : arm) : provide_arm =
 (** Result of classifying a catch handler. *)
 type catch_handler =
   | Catch_pure_propagate
-      (** every arm is [failure (alias)] (or cross-CU
-          [failure (expose (alias :> _))]) *)
+      (** every arm is [fail (alias)] (or cross-CU [fail (expose (alias :> _))])
+      *)
   | Catch_other  (** anything else — fallback to widened [exp_type] *)
 
 (** Classify a catch handler. Returns [Catch_pure_propagate] iff every case has
     a guard-free pattern that aliases a polymorphic-variant pattern, and a RHS
     of either:
-    - [Texp_apply (Hamlet.Combinators.failure, [Nolabel, Arg (Texp_ident
-       alias)])] — same-CU
-    - [Texp_apply (Hamlet.Combinators.failure, [Nolabel, Arg (<expose> (alias :>
+    - [Texp_apply (Hamlet.Combinators.fail, [Nolabel, Arg (Texp_ident alias)])]
+      — same-CU
+    - [Texp_apply (Hamlet.Combinators.fail, [Nolabel, Arg (<expose> (alias :>
        _))])] — cross-CU
 
     The PPX-generated [%hamlet.propagate_e] expansion always produces this
@@ -240,12 +243,12 @@ let classify_catch_handler ~peel (h : expression) : catch_handler =
               match (alias_var lhs, rhs.exp_desc) with
               | Some var, Texp_apply (callee, [ (Asttypes.Nolabel, Arg arg) ])
                 ->
-                  let path_is_failure =
+                  let path_is_fail =
                     match callee.exp_desc with
-                    | Texp_ident (path, _, _) -> is_failure_callee path
+                    | Texp_ident (path, _, _) -> is_fail_callee path
                     | _ -> false
                   in
-                  path_is_failure
+                  path_is_fail
                   && (is_ident_var arg var || is_expose_of_var arg var)
               | _ -> false
           in

@@ -14,6 +14,79 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-27: hamlet uptake — `failure → fail` smart-ctor rename, `Cause → Die`, new `catch_cause` / `sandbox_cause` / `ensuring`
+
+Picked up six upstream commits in `hamlet-org/hamlet` (HEAD now at
+`e3ab0c8`):
+
+- `22f30bf` adds an `ensuring` combinator (try/finally style: cleanup
+  runs after success, typed failure, OR defect; original outcome is
+  restored unless cleanup itself fails).
+- `f80e853` reroutes `ensuring` through `sandbox` to fix a
+  single-execution bug, and adds the regression tests for that
+  invariant on the success and failure paths.
+- `cdc63ed` (#20) renames the prior `Cause.t` (the package previously
+  carried by the defect channel) to `Die.t`, and introduces a NEW
+  unified `Cause.t` sum (initially `Failure of 'e | Defect of Die.t`;
+  the `Failure → Fail` rename comes later in `e3ab0c8`). `catch_defect`'s
+  handler becomes `Die.t -> _ h`. `Exit.t` collapses to
+  `Success | Cause` carrying the new `Cause.t`. `defect_cause` is
+  renamed to `defect_die`.
+- `2946a4c` (#21) adds `catch_cause` (folds typed failure + defect
+  into one `'e Cause.t -> ('a, 'f, 'r) h` handler) and `sandbox_cause`
+  (projects failure onto the typed-error channel as a `Cause.t`).
+  `ensuring` joins the loc-injected combinator set.
+- `b4b4dc5` (#22) reorganises `lib/` into thematic subfolders
+  (`failure/`, `phantom/`, `loc/`). Public module paths
+  (`Hamlet.Combinators`, `Hamlet.Cause`, `Hamlet.Die`, `Hamlet.Exit`,
+  `Hamlet.P`, `Hamlet.Source_pos`) are unchanged — only the
+  on-disk layout moved.
+- `e3ab0c8` (#23) renames `Failure → Fail` at the variant, GADT, and
+  smart-constructor levels. **The smart constructor is now
+  `Hamlet.Combinators.fail` (was `Hamlet.Combinators.failure`).**
+  PPX-generated `[%hamlet.propagate_e]` arms now expand to
+  `Hamlet.Combinators.fail (alias)` instead of `... .failure (...)`.
+
+**Linter impact: one canonical-path string + comment/fixture
+renames.** `extract/propagate.ml`'s `is_failure_callee` matched
+`Hamlet.Combinators.failure` by `Path.name`; renamed to
+`is_fail_callee` matching `Hamlet.Combinators.fail`. All comments
+and the six fixture call sites across `test/cases/layer_cases.ml`
+(four) and `test/cases/edge_cases.ml` (two) that used
+`Hamlet.Combinators.failure` / bare `failure` updated to `fail`.
+Live docs (`docs/RULE.md`, `docs/LIMITATIONS.md`,
+`docs/ARCHITECTURE.md`, `docs/USAGE.md`) updated symmetrically.
+No structural change to the walker — the rule still keys off the
+same `Texp_apply (callee, [Nolabel, Arg <var>])` shape; only the
+callee's canonical name moved by one suffix.
+
+**New combinators NOT monitored.**
+- `catch_cause` IS a real widening surface but is left
+  unmonitored for now. The handler signature is
+  `f:('e Cause.t -> ('a, 'f, 'r) h)` with `'f` independent of `'e`,
+  and a user can write
+  `~f:(fun (c : ([%hamlet.te Console, Database]) Hamlet.Cause.t) -> ...)`
+  to declare an error universe wider than upstream's actual `'e`.
+  Detecting this requires extracting the polymorphic-variant row
+  from *inside* the `Cause.t` constructor argument — `tags.ml` and
+  `handler.ml` currently only walk top-level rows on the handler
+  parameter. A future patch can add `catch_cause` to
+  `classify.ml`'s monitored set and teach `tags.ml` to descend into
+  one level of `Tconstr ("Hamlet.Cause.t", [row])`. Tracked as a
+  known false-negative surface.
+- `sandbox_cause` reifies failure into a typed value; no
+  row-narrowing handler.
+- `ensuring`'s handler returns `(unit, 'e, 'r) h` — same `'e`/`'r`
+  as input, no narrowing.
+
+**Cause/Die rename**: hamlet-lint never referenced `Cause.t` or
+`Die.t` in source/tests/docs (only in prose CHANGELOG entries
+documenting prior uptakes, which stay as historical record).
+
+`make build` clean; `dune runtest` green on all 20 cases (7 unit
++ 13 e2e). `HAMLET_VERSION` in CI stays `0.1.0` for the same
+reason as the previous two entries.
+
 ## 2026-04-26 (later): hamlet uptake — `?loc` on every combinator, defect channel, PPX bare-name loc injection
 
 Picked up five more upstream commits in `hamlet-org/hamlet` (HEAD

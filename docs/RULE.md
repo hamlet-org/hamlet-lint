@@ -137,13 +137,13 @@ Per-combinator slot effect:
 #### Recognised handler shapes for touched slots
 
 **catch with pure-propagate handler.** Every arm is
-`failure(<the alias bound by the pattern>)` — i.e. "match the tag,
+`fail(<the alias bound by the pattern>)` — i.e. "match the tag,
 re-raise it unchanged". Semantically a row no-op: the handler emits
 exactly what it receives. Residual = inner upstream's residual.
 
 This is exactly what `[%hamlet.propagate_e]` PPX-expands to. The
 cross-CU expansion wraps the alias in `<__Hamlet_rest_X>.expose_Y
-(alias :> _)` before passing to `failure`; the walker recognises both
+(alias :> _)` before passing to `fail`; the walker recognises both
 shapes.
 
 **provide with give/need handler.** Every arm is one of:

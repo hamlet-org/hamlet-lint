@@ -69,7 +69,7 @@ Modules:
 |------------------|--------------------------------------------------------------------------|
 | `tags.ml`        | Variant-tag enumeration via `Tvariant` / `row_fields` / `row_more`       |
 | `classify.ml`    | Callee identification: canonical `Path.name` + structural fingerprint    |
-| `propagate.ml`   | Pure-propagate detectors (catch `failure`, provide `give`/`need`)        |
+| `propagate.ml`   | Pure-propagate detectors (catch `fail`, provide `give`/`need`)           |
 | `upstream.ml`    | `val_type` extraction, slot picking, `residual` recursion, `unstage_apply` |
 | `handler.ml`     | Five-shape extractor for handler universe                                |
 | `walker.ml`      | Tast iterator + per-call dispatch (direct + unstaged)                    |

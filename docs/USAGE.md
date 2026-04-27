@@ -107,7 +107,7 @@ File "src/foo.ml", line 42, characters 14-14:
 Two typical fixes:
 
 1. Annotation too wide → shrink it to upstream's actual tags.
-2. Upstream missing a producer → add the `summon` / `failure` for
+2. Upstream missing a producer → add the `summon` / `fail` for
    the declared tags.
 
 ## 7. Troubleshooting
