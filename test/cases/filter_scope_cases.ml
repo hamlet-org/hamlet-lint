@@ -6,6 +6,7 @@
     - [Combinators.provide_scope]: row on [~handler] curried second slot
       ([Scope_core.t -> 'r_in -> _]) *)
 
+open Hamlet
 open Hamlet_test_services
 
 (* ============================================================ *)
@@ -112,3 +113,40 @@ let ps2_provide_scope_widening =
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
       | [%hamlet.propagate_s] -> .)
+
+(* ps3 - GOOD: provide_scope discharges the implicit [Scope] service plus
+   propagates Console. Upstream is let-bound and summons only Console — its
+   [val_type] does NOT carry [Scope] because [provide_scope]'s signature is
+   generic on ['r_in]. The handler matching [#Scope.Tag.r] is the combinator's
+   job, not retroactive widening, so the linter must stay silent.
+
+   Before the [implicit_upstream_tags] classifier extension, this produced a
+   false positive: declared = [Scope; Console], upstream = [Console], extra =
+   [Scope]. *)
+let ps3_provide_scope_implicit_scope_letbound =
+  let open Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  provide_scope eff
+    ~handler:(fun
+        scope (tag : [< `Scope of Scope.Tag.t Hamlet.P.t | Console.Tag.r ]) ->
+      match tag with
+      | `Scope _ -> Dispatch.give Scope.Tag.key scope
+      | #Console.Tag.r as w -> Dispatch.need w)
+
+(* ps4 - GOOD: same shape as ps3 but with inline upstream. The inline
+   expression's [exp_type] is unified at the call site against [provide_scope]'s
+   ['r_in], so its row already carries [Scope]. Silent both before and after
+   the fix; locks in the let-bound vs inline asymmetry of the gap. *)
+let ps4_provide_scope_implicit_scope_inline =
+  let open Combinators in
+  provide_scope
+    (let* (module C) = Console.Tag.summon () in
+     C.print_endline "go")
+    ~handler:(fun
+        scope (tag : [< `Scope of Scope.Tag.t Hamlet.P.t | Console.Tag.r ]) ->
+      match tag with
+      | `Scope _ -> Dispatch.give Scope.Tag.key scope
+      | #Console.Tag.r as w -> Dispatch.need w)

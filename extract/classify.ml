@@ -31,6 +31,16 @@ type info = {
       (** true for [catch_filter] / [catch_cause_filter]: the walker emits a
           second candidate comparing [~f]'s first parameter's declared row
           against the upper bound inferred from [~filter]'s body. *)
+  implicit_upstream_tags : string list;
+      (** tags the combinator silently introduces into upstream's row before the
+          handler sees them, on top of whatever upstream's [val_type] declares.
+          Currently only [Combinators.provide_scope] uses this (with
+          [["Scope"]]) because its signature is generic on ['r_in] yet the
+          runtime always seeds the [Scope] service for the handler to discharge.
+          The walker unions these into [upstream] so the rule does not flag the
+          handler's legitimate [#Scope.Tag.r] arm as widening when upstream is a
+          let-bound ident whose [val_type] was generalised before reaching the
+          call site. *)
 }
 
 (** Result of classifying a callee. *)
@@ -46,6 +56,7 @@ let paths : (string * info) list =
         handler_label = "f";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Combinators.map_error",
       {
@@ -54,6 +65,7 @@ let paths : (string * info) list =
         handler_label = "f";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Combinators.catch_filter",
       {
@@ -62,6 +74,7 @@ let paths : (string * info) list =
         handler_label = "filter";
         wraps_in_cause = false;
         match_probe = true;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Combinators.catch_cause",
       {
@@ -70,6 +83,7 @@ let paths : (string * info) list =
         handler_label = "f";
         wraps_in_cause = true;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Combinators.catch_cause_filter",
       {
@@ -78,6 +92,7 @@ let paths : (string * info) list =
         handler_label = "filter";
         wraps_in_cause = true;
         match_probe = true;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Combinators.provide",
       {
@@ -86,6 +101,7 @@ let paths : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Combinators.provide_scope",
       {
@@ -94,6 +110,7 @@ let paths : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [ "Scope" ];
       } );
     ( "Hamlet.Layer.catch",
       {
@@ -102,6 +119,7 @@ let paths : (string * info) list =
         handler_label = "f";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Layer.catch_cause",
       {
@@ -110,6 +128,7 @@ let paths : (string * info) list =
         handler_label = "f";
         wraps_in_cause = true;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Layer.provide_to_effect",
       {
@@ -118,6 +137,7 @@ let paths : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Layer.provide_to_layer",
       {
@@ -126,6 +146,7 @@ let paths : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Layer.provide_merge_to_layer",
       {
@@ -134,6 +155,7 @@ let paths : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
   ]
 
@@ -151,6 +173,7 @@ let lasts : (string * info) list =
         handler_label = "f";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "map_error",
       {
@@ -159,6 +182,7 @@ let lasts : (string * info) list =
         handler_label = "f";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "catch_filter",
       {
@@ -167,6 +191,7 @@ let lasts : (string * info) list =
         handler_label = "filter";
         wraps_in_cause = false;
         match_probe = true;
+        implicit_upstream_tags = [];
       } );
     ( "catch_cause",
       {
@@ -175,6 +200,7 @@ let lasts : (string * info) list =
         handler_label = "f";
         wraps_in_cause = true;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "catch_cause_filter",
       {
@@ -183,6 +209,7 @@ let lasts : (string * info) list =
         handler_label = "filter";
         wraps_in_cause = true;
         match_probe = true;
+        implicit_upstream_tags = [];
       } );
     ( "provide",
       {
@@ -191,6 +218,7 @@ let lasts : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "provide_scope",
       {
@@ -199,6 +227,7 @@ let lasts : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [ "Scope" ];
       } );
     ( "provide_to_effect",
       {
@@ -207,6 +236,7 @@ let lasts : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "provide_to_layer",
       {
@@ -215,6 +245,7 @@ let lasts : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
     ( "provide_merge_to_layer",
       {
@@ -223,6 +254,7 @@ let lasts : (string * info) list =
         handler_label = "handler";
         wraps_in_cause = false;
         match_probe = false;
+        implicit_upstream_tags = [];
       } );
   ]
 

@@ -107,12 +107,14 @@ let cases =
     {
       fixture = "Filter_scope_cases";
       expected_exit = 1;
-      (* cf2 (catch_filter ~filter), ps2 (provide_scope ~handler):
-         universe wider than upstream. *)
       (* cf2 (~filter widening), cf4 (~f's `'match_' widening with remapping
          filter), ps2 (provide_scope ~handler widening). cf5 has an opaque
-         branch in filter and must NOT be flagged (probe aborts → no FP). *)
-      expected_lines = [ 35; 69; 111 ];
+         branch in filter and must NOT be flagged (probe aborts → no FP).
+         ps3 (Scope-implicit, let-bound upstream) and ps4 (inline upstream)
+         are silent: the [implicit_upstream_tags] classifier extension unions
+         [Scope] into upstream so the handler's mandatory Scope-discharge arm
+         is not flagged as widening. *)
+      expected_lines = [ 36; 70; 112 ];
     };
   ]
 

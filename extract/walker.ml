@@ -51,6 +51,16 @@ let try_candidate ~(info : Classify.info) ~combinator ~loc args :
           let site_kind : S.kind =
             match info.slot with `Catch -> Catch | `Provide -> Provide
           in
+          (* combinators like [provide_scope] silently introduce a service into
+             upstream's row before the handler sees it — the runtime always
+             seeds [Scope] on the new frame, regardless of whether upstream's
+             [val_type] mentions it. Union those tags into [upstream] so the
+             handler's mandatory discharge arm is not flagged as widening. *)
+          let upstream =
+            List.fold_left
+              (fun acc t -> if List.mem t acc then acc else acc @ [ t ])
+              upstream info.implicit_upstream_tags
+          in
           Some
             {
               loc = loc_to_schema loc;

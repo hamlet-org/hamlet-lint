@@ -14,6 +14,30 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-30: `provide_scope` implicit-Scope discharge — kill false positive on let-bound upstreams
+
+`Combinators.provide_scope` silently introduces the [Scope] service into the
+handler's view of upstream's row: the runtime always seeds `Scope.Tag.key` on
+the new frame (regardless of whether upstream summons it), and the handler is
+contractually required to discharge `#Scope.Tag.r`. The hamlet signature is
+generic on `'r_in` (no syntactic `[> Scope.Tag.r ]` constraint), so for a
+let-bound upstream — typed via `vd.val_type`, the pre-widening generalised row
+— `Scope` was absent on the upstream side while present on the handler-declared
+side. The set-difference rule then flagged `Scope` as widening: a false
+positive on correct code.
+
+Fix: `extract/classify.ml::info` gained `implicit_upstream_tags : string list`,
+set to `["Scope"]` for both `provide_scope` entries (full-path + bare-name) and
+`[]` everywhere else. `extract/walker.ml::try_candidate` unions those tags
+into `upstream` before constructing the schema candidate, so the handler's
+mandatory Scope-discharge arm is no longer flagged.
+
+Asymmetry locked in by fixtures: `ps3_provide_scope_implicit_scope_letbound`
+(let-bound — was the FP source) and `ps4_provide_scope_implicit_scope_inline`
+(inline upstream — already silent because `exp_type` is unified post-typing
+with the handler's row, so `Scope` was visible from the start). Both must be
+silent post-fix.
+
 ## 2026-04-30: filter-output inference — close §8 gap on `'match_` widening
 
 Added `extract/filter_output.ml`: walks a `~filter` callback's body and
