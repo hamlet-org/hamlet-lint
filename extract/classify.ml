@@ -27,6 +27,10 @@ type info = {
   wraps_in_cause : bool;
       (** true when the handler param is ['e Cause.t] and the row sits inside
           the [Tconstr] argument *)
+  match_probe : bool;
+      (** true for [catch_filter] / [catch_cause_filter]: the walker emits a
+          second candidate comparing [~f]'s first parameter's declared row
+          against the upper bound inferred from [~filter]'s body. *)
 }
 
 (** Result of classifying a callee. *)
@@ -36,26 +40,44 @@ type classification = Match of info | Other
 let paths : (string * info) list =
   [
     ( "Hamlet.Combinators.catch",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
-    );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = false;
+        match_probe = false;
+      } );
     ( "Hamlet.Combinators.map_error",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
-    );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = false;
+        match_probe = false;
+      } );
     ( "Hamlet.Combinators.catch_filter",
       {
         slot = `Catch;
         peel = 0;
         handler_label = "filter";
         wraps_in_cause = false;
+        match_probe = true;
       } );
     ( "Hamlet.Combinators.catch_cause",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = true } );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = true;
+        match_probe = false;
+      } );
     ( "Hamlet.Combinators.catch_cause_filter",
       {
         slot = `Catch;
         peel = 0;
         handler_label = "filter";
         wraps_in_cause = true;
+        match_probe = true;
       } );
     ( "Hamlet.Combinators.provide",
       {
@@ -63,6 +85,7 @@ let paths : (string * info) list =
         peel = 0;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "Hamlet.Combinators.provide_scope",
       {
@@ -70,18 +93,31 @@ let paths : (string * info) list =
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "Hamlet.Layer.catch",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
-    );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = false;
+        match_probe = false;
+      } );
     ( "Hamlet.Layer.catch_cause",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = true } );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = true;
+        match_probe = false;
+      } );
     ( "Hamlet.Layer.provide_to_effect",
       {
         slot = `Provide;
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "Hamlet.Layer.provide_to_layer",
       {
@@ -89,6 +125,7 @@ let paths : (string * info) list =
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "Hamlet.Layer.provide_merge_to_layer",
       {
@@ -96,6 +133,7 @@ let paths : (string * info) list =
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
   ]
 
@@ -107,26 +145,44 @@ let paths : (string * info) list =
 let lasts : (string * info) list =
   [
     ( "catch",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
-    );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = false;
+        match_probe = false;
+      } );
     ( "map_error",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
-    );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = false;
+        match_probe = false;
+      } );
     ( "catch_filter",
       {
         slot = `Catch;
         peel = 0;
         handler_label = "filter";
         wraps_in_cause = false;
+        match_probe = true;
       } );
     ( "catch_cause",
-      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = true } );
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "f";
+        wraps_in_cause = true;
+        match_probe = false;
+      } );
     ( "catch_cause_filter",
       {
         slot = `Catch;
         peel = 0;
         handler_label = "filter";
         wraps_in_cause = true;
+        match_probe = true;
       } );
     ( "provide",
       {
@@ -134,6 +190,7 @@ let lasts : (string * info) list =
         peel = 0;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "provide_scope",
       {
@@ -141,6 +198,7 @@ let lasts : (string * info) list =
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "provide_to_effect",
       {
@@ -148,6 +206,7 @@ let lasts : (string * info) list =
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "provide_to_layer",
       {
@@ -155,6 +214,7 @@ let lasts : (string * info) list =
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
     ( "provide_merge_to_layer",
       {
@@ -162,6 +222,7 @@ let lasts : (string * info) list =
         peel = 1;
         handler_label = "handler";
         wraps_in_cause = false;
+        match_probe = false;
       } );
   ]
 

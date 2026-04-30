@@ -62,6 +62,34 @@ let try_candidate ~(info : Classify.info) ~combinator ~loc args :
       | _ -> None)
   | _ -> None
 
+(** Second-probe candidate for [catch_filter] / [catch_cause_filter]: compares
+    [~f]'s first-parameter declared row against the upper bound inferred from
+    [~filter]'s body (every [Some _]'s argument tags). When [~f]'s declaration
+    is wider than what [~filter] can actually emit, the extra arms are dead code
+    — the same retroactive widening pattern as the primary probe but on
+    ['match_] instead of upstream's row. Hard-codes the labels (["filter"] /
+    ["f"]) since both monitored filter combinators share them. *)
+let try_match_candidate ~combinator ~loc args : S.candidate option =
+  match
+    (extract_handler ~label:"filter" args, extract_handler ~label:"f" args)
+  with
+  | Some filter, Some f -> (
+      match
+        ( Handler.universe_tags ~peel:0 ~wraps_in_cause:false f,
+          Filter_output.infer_output_tags filter )
+      with
+      | Some declared, Some inferred ->
+          Some
+            {
+              loc = loc_to_schema loc;
+              kind = Catch;
+              combinator;
+              declared;
+              upstream = inferred;
+            }
+      | _ -> None)
+  | _ -> None
+
 (** Strip the [Hamlet.] / [Hamlet__] prefix from a path so the report can show a
     short, user-readable combinator name. ["Hamlet.Layer.provide_to_effect"]
     becomes ["Layer.provide_to_effect"]; ["Hamlet.Combinators.catch"] becomes
@@ -116,10 +144,15 @@ let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
         | Texp_ident (pth, _, vd) -> (
             let combinator = short_name pth in
             match Classify.classify_path pth vd.val_type vd with
-            | Match info -> (
-                match try_candidate ~info ~combinator ~loc args with
+            | Match info ->
+                (match try_candidate ~info ~combinator ~loc args with
                 | Some c -> acc := c :: !acc
-                | None -> ())
+                | None -> ());
+                if info.match_probe then
+                  begin match try_match_candidate ~combinator ~loc args with
+                  | Some c -> acc := c :: !acc
+                  | None -> ()
+                  end
             | Other -> ())
         | _ -> ()
       in

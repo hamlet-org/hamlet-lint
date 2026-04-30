@@ -76,6 +76,38 @@ let ccf2_catch_cause_filter_widening =
     ~f:(fun _matched _cause -> return ())
     ~on_no_match:(fun _cause -> return ())
 
+(* ccf3 - GOOD: catch_cause_filter with remapping filter; ~f's match_ matches
+   what filter actually emits. *)
+let ccf3_match_remap_narrow =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  catch_cause_filter eff
+    ~filter:(fun c ->
+      match Hamlet.Cause.find_fail c with
+      | Some (`Console_error _) -> Some `Renamed
+      | _ -> None)
+    ~f:(fun (_m : [ `Renamed ]) _orig -> return ())
+    ~on_no_match:(fun _c -> return ())
+
+(* ccf4 - BAD: same remapping filter; ~f declares `Renamed | `Other while
+   filter only emits `Renamed. The filter-output probe must flag this. *)
+let ccf4_match_remap_widening =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  catch_cause_filter eff
+    ~filter:(fun c ->
+      match Hamlet.Cause.find_fail c with
+      | Some (`Console_error _) -> Some `Renamed
+      | _ -> None)
+    ~f:(fun (_m : [ `Renamed | `Other ]) _orig -> return ())
+    ~on_no_match:(fun _c -> return ())
+
 (* ============================================================ *)
 (* Layer.catch_cause                                            *)
 (* ============================================================ *)

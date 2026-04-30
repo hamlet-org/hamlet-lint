@@ -14,6 +14,30 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-30: filter-output inference — close §8 gap on `'match_` widening
+
+Added `extract/filter_output.ml`: walks a `~filter` callback's body and
+collects every `Some <arg>`'s structural tag (from `Texp_variant`'s literal
+label, or from a bound `Texp_ident`'s `val_type`). The result is the upper
+bound on filter's `'match_` output universe.
+
+Wired into `extract/walker.ml` as a second probe for `catch_filter` /
+`catch_cause_filter`: when `info.match_probe = true`, the walker emits a
+second candidate comparing `~f`'s first-parameter declared row against the
+inferred output set. This catches the previously-silent case where filter
+remaps types (e.g. `function `A x -> Some `Renamed | _ -> None`) and `~f`
+declares a wider `'match_` than what filter can actually emit.
+
+`extract/classify.ml::info` gained `match_probe : bool`; set to `true` for
+both filter combinators, `false` everywhere else. The probe is structurally
+conservative — opaque `Some <expr>` shapes (function calls, complex
+expressions) abort inference and no finding is emitted, preserving the
+project's no-false-positive invariant.
+
+New fixture in `test/cases/filter_scope_cases.ml` (`cf3`/`cf4`) exercises
+the remapping-filter case end-to-end. `docs/LIMITATIONS.md` §8 shrunk to
+just the residual "opaque filter body" gap.
+
 ## 2026-04-30: linter uplift — `classify.ml` richer descriptor, `catch_cause` / `catch_cause_filter` / `catch_filter` / `provide_scope` / `Layer.catch_cause` now monitored
 
 Refactored `extract/classify.ml` to replace the old `Single|Curried|Other`

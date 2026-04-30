@@ -40,6 +40,54 @@ let cf2_catch_filter_widening =
     ~on_no_match:(fun _cause -> return ())
 
 (* ============================================================ *)
+(* Combinators.catch_filter — widening on `'match_` (filter remaps) *)
+(* ============================================================ *)
+
+(* cf3 - GOOD: filter remaps `Console_error -> `Renamed; ~f's annotation
+   matches what filter actually emits. *)
+let cf3_match_remap_narrow =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  catch_filter eff
+    ~filter:(function `Console_error _ -> Some `Renamed | _ -> None)
+    ~f:(fun (_m : [ `Renamed ]) -> return ())
+    ~on_no_match:(fun _c -> return ())
+
+(* cf4 - BAD: filter only ever emits `Renamed inside Some, but ~f declares
+   `Renamed | `Other. The Other arm is dead. The primary `'e' probe sees
+   nothing wrong (filter remaps, `'match_' is independent of `'e'). The new
+   filter-output probe should flag this. *)
+let cf4_match_remap_widening =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  catch_filter eff
+    ~filter:(function `Console_error _ -> Some `Renamed | _ -> None)
+    ~f:(fun (_m : [ `Renamed | `Other ]) -> return ())
+    ~on_no_match:(fun _c -> return ())
+
+(* cf5 - GOOD: filter has an opaque-option return path (let-bound option used
+   as a fallback branch). The walker must abort inference on this shape and
+   emit no second-probe finding — emitting one would be a false positive
+   because filter genuinely emits `Other via [fallback]. *)
+let cf5_filter_opaque_branch_no_finding =
+  let open Hamlet.Combinators in
+  let eff =
+    let* (module C) = Console.Tag.summon () in
+    C.print_endline "go"
+  in
+  let fallback = Some `Other in
+  catch_filter eff
+    ~filter:(function `Console_error _ -> Some `Renamed | _ -> fallback)
+    ~f:(fun (_m : [ `Renamed | `Other ]) -> return ())
+    ~on_no_match:(fun _c -> return ())
+
+(* ============================================================ *)
 (* Combinators.provide_scope                                    *)
 (* ============================================================ *)
 

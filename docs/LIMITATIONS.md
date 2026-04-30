@@ -105,51 +105,25 @@ Hamlet.Combinators.catch eff
   ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-## 8. `catch_filter` / `catch_cause_filter` — widening on a remapping
-filter's `'match_` is not detected
+## 8. `catch_filter` / `catch_cause_filter` — opaque filter bodies
 
-`catch_filter` / `catch_cause_filter` have three callbacks; only one
-type variable is shared with upstream (`'e`):
+For `catch_filter` and `catch_cause_filter` the linter runs a second
+probe that compares `~f`'s first-parameter declared row (`'match_`)
+against the upper bound inferred by walking `~filter`'s body and
+collecting every `Some <arg>`'s structural tag:
 
-- `~filter`'s parameter — `'e` (or `'e Cause.t` for the cause variant)
-- `~on_no_match`'s parameter — `'e Cause.t`
-- `~f`'s second parameter on `catch_cause_filter` — `'e Cause.t`
-- `~f`'s first parameter — `'match_`, the type filter returns wrapped
-  in `Some _`. Independent of `'e` in general.
+- `Some \`Foo x` — tag `\`Foo` from the AST (`Texp_variant`).
+- `Some bound_var` — tag set from the variable's `val_type`.
 
-Annotations on any of the first three positions propagate to the
-others through OCaml unification: the linter reads `~filter`'s
-`pat_type` (post-unification), so a widening on any of them is
-caught.
+For any other `Some` argument shape (`Some (transform e)`, `Some
+(if cond then ... else ...)`, programmatic variant builders, etc.)
+the inference aborts and no finding is emitted. The linter is
+conservative on this probe — false negatives only, never false
+positives, matching the project's safety invariant.
 
-The genuine gap is `~f`'s first parameter (`'match_`) **when filter
-remaps types**. Concretely:
-
-```ocaml
-(* filter is identity-typed: 'match_ = 'e, gap closed by unification *)
-catch_filter eff
-  ~filter:(fun e -> Some e)
-  ~f:(fun (_m : [%hamlet.te Console, Database]) -> ...)  (* CAUGHT *)
-  ~on_no_match:...
-
-(* filter remaps: 'match_ independent of 'e, gap real *)
-catch_filter eff
-  ~filter:(fun e ->
-    match e with `Console_error s -> Some (`Console_error s) | _ -> None)
-  ~f:(fun (_m : [%hamlet.te Console, Database]) -> ...)  (* SILENT *)
-  ~on_no_match:...
-```
-
-In the second form, `'match_` is closed by `~f`'s annotation but
-filter only ever emits `` `Console_error ``; the `Connection_error`
-and `Query_error` arms of `~f` are dead. Catching this would require
-inferring the tag set actually produced by filter's body, symmetric
-to the existing pure-give detector for `provide` handlers but on
-filter's output side.
-
-**Fix:** put the `[%hamlet.te ...]` annotation on `~filter` or on
-`~on_no_match` — both probe `'e` directly and the linter will catch
-any retroactive widening on the upstream row.
+**Fix:** simplify filter to use direct `Some \`Foo`/`Some bound_var`
+forms, or annotate `~filter`'s parameter directly (the `'e` probe
+catches widening regardless of filter shape).
 
 ## 9. Let-bound partial application
 
