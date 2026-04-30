@@ -105,24 +105,51 @@ Hamlet.Combinators.catch eff
   ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-## 8. `catch_filter` / `catch_cause_filter` — widening on the `'match_`
-parameter is not detected
+## 8. `catch_filter` / `catch_cause_filter` — widening on a remapping
+filter's `'match_` is not detected
 
-`catch_filter` and `catch_cause_filter` have a second row-bearing
-position the linter does NOT inspect: the `~f` callback's first
-parameter (the filter's `'match_` output type, wrapped by the `option`
-`Some _`). Annotating `~f`'s first parameter wider than the tags
-`~filter` actually produces is a retroactive widening on `'match_`,
-not on upstream's `'e`. The current walker only inspects the primary
-probe (`~filter`'s parameter), where `'e` lives. Catching `'match_`
-widening would need a separate pass that infers the tag set actually
-produced by `~filter`'s body — symmetric to the existing pure-give
-detector for `provide` handlers, but on the output side of `~filter`.
+`catch_filter` / `catch_cause_filter` have three callbacks; only one
+type variable is shared with upstream (`'e`):
 
-Annotations on `~on_no_match` or on `catch_cause_filter`'s `~f`
-second parameter ARE caught: those positions share the same `'e`
-type variable as `~filter`, so OCaml unification propagates the
-closed row back to `~filter`'s `pat_type`, which the linter reads.
+- `~filter`'s parameter — `'e` (or `'e Cause.t` for the cause variant)
+- `~on_no_match`'s parameter — `'e Cause.t`
+- `~f`'s second parameter on `catch_cause_filter` — `'e Cause.t`
+- `~f`'s first parameter — `'match_`, the type filter returns wrapped
+  in `Some _`. Independent of `'e` in general.
+
+Annotations on any of the first three positions propagate to the
+others through OCaml unification: the linter reads `~filter`'s
+`pat_type` (post-unification), so a widening on any of them is
+caught.
+
+The genuine gap is `~f`'s first parameter (`'match_`) **when filter
+remaps types**. Concretely:
+
+```ocaml
+(* filter is identity-typed: 'match_ = 'e, gap closed by unification *)
+catch_filter eff
+  ~filter:(fun e -> Some e)
+  ~f:(fun (_m : [%hamlet.te Console, Database]) -> ...)  (* CAUGHT *)
+  ~on_no_match:...
+
+(* filter remaps: 'match_ independent of 'e, gap real *)
+catch_filter eff
+  ~filter:(fun e ->
+    match e with `Console_error s -> Some (`Console_error s) | _ -> None)
+  ~f:(fun (_m : [%hamlet.te Console, Database]) -> ...)  (* SILENT *)
+  ~on_no_match:...
+```
+
+In the second form, `'match_` is closed by `~f`'s annotation but
+filter only ever emits `` `Console_error ``; the `Connection_error`
+and `Query_error` arms of `~f` are dead. Catching this would require
+inferring the tag set actually produced by filter's body, symmetric
+to the existing pure-give detector for `provide` handlers but on
+filter's output side.
+
+**Fix:** put the `[%hamlet.te ...]` annotation on `~filter` or on
+`~on_no_match` — both probe `'e` directly and the linter will catch
+any retroactive widening on the upstream row.
 
 ## 9. Let-bound partial application
 
