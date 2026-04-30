@@ -105,19 +105,24 @@ Hamlet.Combinators.catch eff
   ~f:(fun (x : [%hamlet.te Console, Database]) -> ...)
 ```
 
-## 8. Multi-callback combinators only inspect their primary row probe
+## 8. `catch_filter` / `catch_cause_filter` — widening on the `'match_`
+parameter is not detected
 
-`catch_filter` and `catch_cause_filter` carry the row on more than one
-callback. The linter inspects only the primary one (`~filter` for both),
-so a `[%hamlet.te ...]` annotation placed exclusively on `~on_no_match`
-or on `catch_cause_filter`'s `~f` second parameter is silent.
+`catch_filter` and `catch_cause_filter` have a second row-bearing
+position the linter does NOT inspect: the `~f` callback's first
+parameter (the filter's `'match_` output type, wrapped by the `option`
+`Some _`). Annotating `~f`'s first parameter wider than the tags
+`~filter` actually produces is a retroactive widening on `'match_`,
+not on upstream's `'e`. The current walker only inspects the primary
+probe (`~filter`'s parameter), where `'e` lives. Catching `'match_`
+widening would need a separate pass that infers the tag set actually
+produced by `~filter`'s body — symmetric to the existing pure-give
+detector for `provide` handlers, but on the output side of `~filter`.
 
-In practice OCaml unifies the row variable across callbacks, so
-annotating any of them constrains the same `'e`; the gap matters only
-when `~filter` is unannotated or naturally narrow and the user widens
-solely on the secondary callback.
-
-**Fix:** put the `[%hamlet.te ...]` annotation on `~filter`.
+Annotations on `~on_no_match` or on `catch_cause_filter`'s `~f`
+second parameter ARE caught: those positions share the same `'e`
+type variable as `~filter`, so OCaml unification propagates the
+closed row back to `~filter`'s `pat_type`, which the linter reads.
 
 ## 9. Let-bound partial application
 
