@@ -1,5 +1,5 @@
-(** Classify a [Texp_apply]'s callee as one of the two combinators we monitor —
-    [Hamlet.Combinators.catch] / [.provide] — or as something else.
+(** Classify a [Texp_apply]'s callee as one of the monitored combinators or as
+    something else.
 
     Two strategies in order:
 
@@ -15,40 +15,154 @@
     type constructor anywhere in its surface — a structural signature unique to
     combinators. *)
 
-(** All combinators we monitor. For each: which slot of the upstream's
-    [Hamlet.t] / [Layer.t] carries the row to compare against ([`Catch] = slot 1
-    = errors row, [`Provide] = slot 2 = services row), and whether the handler
-    is single-arg or curried (curried handlers like
-    [Layer.provide_to_effect ~h:(fun impl (x : [%hamlet.ts ...]) -> ...)] have
-    the annotation on the SECOND parameter). *)
+(** Per-combinator descriptor: which row slot to inspect, how many outer handler
+    parameters to strip before reading the annotation, which argument label
+    carries the handler, and whether the handler's first parameter is wrapped in
+    [Cause.t] (requiring one extra [Tconstr] descent to reach the row). *)
+type info = {
+  slot : [ `Catch | `Provide ];
+  peel : int;
+  handler_label : string;
+      (** label name without leading [~], e.g. ["f"], ["handler"], ["filter"] *)
+  wraps_in_cause : bool;
+      (** true when the handler param is ['e Cause.t] and the row sits inside
+          the [Tconstr] argument *)
+}
 
-let single_arg_paths : (string * [ `Catch | `Provide ]) list =
+(** Result of classifying a callee. *)
+type classification = Match of info | Other
+
+(** All combinators we monitor. Full canonical path → descriptor. *)
+let paths : (string * info) list =
   [
-    ("Hamlet.Combinators.catch", `Catch);
-    ("Hamlet.Combinators.provide", `Provide);
-    ("Hamlet.Combinators.map_error", `Catch);
-    ("Hamlet.Layer.catch", `Catch);
+    ( "Hamlet.Combinators.catch",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
+    );
+    ( "Hamlet.Combinators.map_error",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
+    );
+    ( "Hamlet.Combinators.catch_filter",
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "filter";
+        wraps_in_cause = false;
+      } );
+    ( "Hamlet.Combinators.catch_cause",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = true } );
+    ( "Hamlet.Combinators.catch_cause_filter",
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "filter";
+        wraps_in_cause = true;
+      } );
+    ( "Hamlet.Combinators.provide",
+      {
+        slot = `Provide;
+        peel = 0;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "Hamlet.Combinators.provide_scope",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "Hamlet.Layer.catch",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
+    );
+    ( "Hamlet.Layer.catch_cause",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = true } );
+    ( "Hamlet.Layer.provide_to_effect",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "Hamlet.Layer.provide_to_layer",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "Hamlet.Layer.provide_merge_to_layer",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
   ]
 
-let curried_paths : (string * [ `Catch | `Provide ]) list =
+(** Structural-fingerprint fallback: bare [Path.last] → descriptor.
+    [Layer.catch] / [Layer.catch_cause] share the bare names ["catch"] /
+    ["catch_cause"] with their [Combinators.*] siblings — the
+    [mentions_hamlet_t] gate (applied in [classify_path]) is sufficient to
+    distinguish them from unrelated APIs; the descriptors are identical. *)
+let lasts : (string * info) list =
   [
-    ("Hamlet.Layer.provide_to_effect", `Provide);
-    ("Hamlet.Layer.provide_to_layer", `Provide);
-    ("Hamlet.Layer.provide_merge_to_layer", `Provide);
-  ]
-
-(* For the structural fingerprint fallback: the bare name → kind / arity.
-   [Path.last] gives just the function name (no module prefix); we still
-   gate on [mentions_hamlet_t val_type] in [classify_path] to avoid
-   matching unrelated APIs. *)
-let single_arg_lasts : (string * [ `Catch | `Provide ]) list =
-  [ ("catch", `Catch); ("provide", `Provide); ("map_error", `Catch) ]
-
-let curried_lasts : (string * [ `Catch | `Provide ]) list =
-  [
-    ("provide_to_effect", `Provide);
-    ("provide_to_layer", `Provide);
-    ("provide_merge_to_layer", `Provide);
+    ( "catch",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
+    );
+    ( "map_error",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = false }
+    );
+    ( "catch_filter",
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "filter";
+        wraps_in_cause = false;
+      } );
+    ( "catch_cause",
+      { slot = `Catch; peel = 0; handler_label = "f"; wraps_in_cause = true } );
+    ( "catch_cause_filter",
+      {
+        slot = `Catch;
+        peel = 0;
+        handler_label = "filter";
+        wraps_in_cause = true;
+      } );
+    ( "provide",
+      {
+        slot = `Provide;
+        peel = 0;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "provide_scope",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "provide_to_effect",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "provide_to_layer",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
+    ( "provide_merge_to_layer",
+      {
+        slot = `Provide;
+        peel = 1;
+        handler_label = "handler";
+        wraps_in_cause = false;
+      } );
   ]
 
 (** Walk a [Path.t] up to its root identifier and check whether that identifier
@@ -90,14 +204,6 @@ let mentions_hamlet_t (ty : Types.type_expr) : bool =
   in
   go ty
 
-(** Result of classifying a callee: which slot to inspect ([`Catch] = errors,
-    [`Provide] = services), and whether the handler is curried (annotation on
-    the second parameter, as in [Layer.provide_to_effect]). *)
-type classification =
-  | Single of [ `Catch | `Provide ]
-  | Curried of [ `Catch | `Provide ]
-  | Other
-
 (** Returns [true] when [vd.val_loc] points to Hamlet's published surface (the
     top-level [hamlet.mli] / [hamlet.ml] re-exports). Used to disambiguate the
     [let module HC = Hamlet.Combinators in HC.catch] alias case from a
@@ -113,26 +219,20 @@ let val_loc_in_hamlet_surface (vd : Types.value_description) : bool =
     definition site is in Hamlet's surface module (covers
     [let module HC = Hamlet.Combinators in HC.catch] where the path root is the
     local alias). Without one of these signals a user-defined helper named
-    [catch] / [provide] / [map_error] / [provide_to_*] could be misclassified as
-    the real combinator (regression: [edge_cases.ml::e11]). *)
+    [catch] / [provide] / [map_error] / [provide_to_*] etc. could be
+    misclassified as the real combinator (regression: [edge_cases.ml::e11]). *)
 let classify_path
     (path : Path.t)
     (val_type : Types.type_expr)
     (vd : Types.value_description) =
   let n = Path.name path in
-  match List.assoc_opt n single_arg_paths with
-  | Some kind -> Single kind
+  match List.assoc_opt n paths with
+  | Some info -> Match info
   | None -> (
-      match List.assoc_opt n curried_paths with
-      | Some kind -> Curried kind
-      | None -> (
-          if not (path_root_is_hamlet path || val_loc_in_hamlet_surface vd) then
-            Other
-          else
-            let last = Path.last path in
-            match List.assoc_opt last single_arg_lasts with
-            | Some kind when mentions_hamlet_t val_type -> Single kind
-            | _ -> (
-                match List.assoc_opt last curried_lasts with
-                | Some kind when mentions_hamlet_t val_type -> Curried kind
-                | _ -> Other)))
+      if not (path_root_is_hamlet path || val_loc_in_hamlet_surface vd) then
+        Other
+      else
+        let last = Path.last path in
+        match List.assoc_opt last lasts with
+        | Some info when mentions_hamlet_t val_type -> Match info
+        | _ -> Other)

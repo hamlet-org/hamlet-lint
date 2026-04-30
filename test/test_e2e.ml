@@ -94,6 +94,20 @@ let cases =
          slot is correctly narrow); c1 silent (no widening anywhere). *)
       expected_lines = [ 43; 55; 75; 112; 136; 177 ];
     };
+    {
+      fixture = "Cause_cases";
+      expected_exit = 1;
+      (* cc2 (catch_cause), ccf2 (catch_cause_filter), lcc2 (Layer.catch_cause):
+         each declares Console + Database while upstream emits only Console. *)
+      expected_lines = [ 43; 73; 101 ];
+    };
+    {
+      fixture = "Filter_scope_cases";
+      expected_exit = 1;
+      (* cf2 (catch_filter ~filter), ps2 (provide_scope ~handler):
+         universe wider than upstream. *)
+      expected_lines = [ 35; 63 ];
+    };
   ]
 
 (* ============================================================ *)

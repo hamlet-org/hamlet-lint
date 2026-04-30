@@ -91,11 +91,11 @@ let p1_chained_provide_narrow =
     D.connect "x"
   in
   provide
-    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+    (provide eff ~handler:(fun (x : [%hamlet.ts Console, Database]) ->
          match x with
          | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
          | [%hamlet.propagate_s] -> .))
-    ~h:(fun (x : [%hamlet.ts Database]) ->
+    ~handler:(fun (x : [%hamlet.ts Database]) ->
       match x with #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
 
 (* p2 - BAD: outer provide declares Console + Database but the inner
@@ -110,11 +110,11 @@ let p2_chained_provide_outer_widening =
     D.connect "x"
   in
   provide
-    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+    (provide eff ~handler:(fun (x : [%hamlet.ts Console, Database]) ->
          match x with
          | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
          | [%hamlet.propagate_s] -> .))
-    ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+    ~handler:(fun (x : [%hamlet.ts Console, Database]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
       | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
@@ -134,7 +134,7 @@ let x1_catch_over_provide_widening =
     return ()
   in
   catch
-    (provide eff ~h:(fun (x : [%hamlet.ts Console]) ->
+    (provide eff ~handler:(fun (x : [%hamlet.ts Console]) ->
          match x with #Console.Tag.r as w -> Console.Tag.give w (failwith "C")))
     ~f:(fun (x : [%hamlet.te Console, Database]) ->
       match x with [%hamlet.propagate_e] -> .)
@@ -151,7 +151,7 @@ let x2_provide_over_catch_narrow =
   provide
     (catch eff ~f:(fun (x : [%hamlet.te Console]) ->
          match x with [%hamlet.propagate_e] -> .))
-    ~h:(fun (x : [%hamlet.ts Console]) ->
+    ~handler:(fun (x : [%hamlet.ts Console]) ->
       match x with #Console.Tag.r as w -> Console.Tag.give w (failwith "C"))
 
 (* ============================================================ *)
@@ -174,12 +174,12 @@ let lpe1_chained_layer_provide_outer_widening () =
     Hamlet.Layer.make Database.Tag.key
       (Hamlet.Combinators.return (failwith "D"))
   in
-  Hamlet.Layer.provide_to_effect ~s:lay
-    ~h:(fun impl (x : [%hamlet.ts Console, Database]) ->
+  Hamlet.Layer.provide_to_effect ~source:lay
+    ~handler:(fun impl (x : [%hamlet.ts Console, Database]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
       | #Database.Tag.r as w -> Database.Tag.give w impl)
-    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+    (provide eff ~handler:(fun (x : [%hamlet.ts Console, Database]) ->
          match x with
          | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
          | [%hamlet.propagate_s] -> .))
@@ -199,10 +199,10 @@ let lpe2_chained_layer_provide_narrow () =
     Hamlet.Layer.make Database.Tag.key
       (Hamlet.Combinators.return (failwith "D"))
   in
-  Hamlet.Layer.provide_to_effect ~s:lay
-    ~h:(fun impl (x : [%hamlet.ts Database]) ->
+  Hamlet.Layer.provide_to_effect ~source:lay
+    ~handler:(fun impl (x : [%hamlet.ts Database]) ->
       match x with #Database.Tag.r as w -> Database.Tag.give w impl)
-    (provide eff ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+    (provide eff ~handler:(fun (x : [%hamlet.ts Console, Database]) ->
          match x with
          | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
          | [%hamlet.propagate_s] -> .))

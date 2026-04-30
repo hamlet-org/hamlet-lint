@@ -49,7 +49,7 @@ let good_provide =
     D.connect "x"
   in
   provide eff
-    ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+    ~handler:(fun (x : [%hamlet.ts Console, Database]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
       | #Database.Tag.r as w -> Database.Tag.give w (failwith "D"))
@@ -62,7 +62,7 @@ let bad_provide_widening =
     C.print_endline "go"
   in
   provide eff
-    ~h:(fun (x : [%hamlet.ts Console, Database]) ->
+    ~handler:(fun (x : [%hamlet.ts Console, Database]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w (failwith "C")
       | [%hamlet.propagate_s] -> .)

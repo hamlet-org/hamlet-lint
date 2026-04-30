@@ -18,8 +18,8 @@ module S = Hamlet_lint_schema.Schema
     logic and the walker share one canonical extractor. *)
 let extract_upstream = Upstream.extract_upstream
 
-(** Pull out the labeled handler. Both [~f] and [~h] are accepted because
-    Hamlet's combinator surface uses both labels in different places.
+(** Pull out the labeled handler. The label is combinator-specific (e.g. ["f"]
+    for [catch], ["handler"] for [provide], ["filter"] for [catch_filter]).
     Re-exported from {!Upstream.extract_handler}. *)
 let extract_handler = Upstream.extract_handler
 
@@ -31,18 +31,25 @@ let loc_to_schema (l : Location.t) : S.loc =
 
 (** Try to build a candidate for one application. [None] when either side could
     not be recognised — e.g. handler is a literal closure we don't
-    pattern-match, or upstream is not a [Hamlet.t] / [Layer.t] value. [~peel] is
-    the number of outer handler parameters to skip (used for curried handlers in
-    [Layer.provide_to_*]). [~combinator] is the dotted-path name of the callee
-    for inclusion in the wire record (e.g. ["catch"], ["map_error"],
+    pattern-match, or upstream is not a [Hamlet.t] / [Layer.t] value. [~info] is
+    the combinator descriptor carrying [slot], [peel], [handler_label], and
+    [wraps_in_cause]. [~combinator] is the dotted-path name of the callee for
+    inclusion in the wire record (e.g. ["catch"], ["map_error"],
     ["Layer.provide_to_effect"]). *)
-let try_candidate ~kind ~peel ~combinator ~loc args : S.candidate option =
-  match (extract_upstream args, extract_handler args) with
+let try_candidate ~(info : Classify.info) ~combinator ~loc args :
+    S.candidate option =
+  match
+    (extract_upstream args, extract_handler ~label:info.handler_label args)
+  with
   | Some up, Some h -> (
-      match (Handler.universe_tags ~peel h, Upstream.row_tags up ~kind) with
+      match
+        ( Handler.universe_tags ~peel:info.peel
+            ~wraps_in_cause:info.wraps_in_cause h,
+          Upstream.row_tags up ~kind:info.slot )
+      with
       | Some declared, Some upstream ->
           let site_kind : S.kind =
-            match kind with `Catch -> Catch | `Provide -> Provide
+            match info.slot with `Catch -> Catch | `Provide -> Provide
           in
           Some
             {
@@ -108,14 +115,11 @@ let walk_cmt (path : string) (acc : S.candidate list ref) : unit =
         match callee.exp_desc with
         | Texp_ident (pth, _, vd) -> (
             let combinator = short_name pth in
-            let push kind peel =
-              match try_candidate ~kind ~peel ~combinator ~loc args with
-              | Some c -> acc := c :: !acc
-              | None -> ()
-            in
             match Classify.classify_path pth vd.val_type vd with
-            | Single kind -> push kind 0
-            | Curried kind -> push kind 1
+            | Match info -> (
+                match try_candidate ~info ~combinator ~loc args with
+                | Some c -> acc := c :: !acc
+                | None -> ())
             | Other -> ())
         | _ -> ()
       in

@@ -14,6 +14,56 @@ Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
 supported target.
 
+## 2026-04-30: linter uplift — `classify.ml` richer descriptor, `catch_cause` / `catch_cause_filter` / `catch_filter` / `provide_scope` / `Layer.catch_cause` now monitored
+
+Refactored `extract/classify.ml` to replace the old `Single|Curried|Other`
+classification ADT and four parallel `(string * kind) list` tables with a
+single `info` record (`slot`, `peel`, `handler_label`, `wraps_in_cause`) and
+`classification = Match of info | Other`. This lets each combinator encode its
+own calling convention in one place instead of spreading it across multiple
+lookup lists.
+
+**New combinators added to the monitored set** (total now 12):
+- `Hamlet.Combinators.catch_cause` — handler param is `'e Cause.t`; the walker
+  strips the outer `Tconstr` layer (`strip_cause_wrapper`) to reach the inner
+  polymorphic-variant row before comparing it with upstream's `val_type`.
+- `Hamlet.Combinators.catch_filter` — handler label `~filter`.
+- `Hamlet.Combinators.catch_cause_filter` — combines the two above.
+- `Hamlet.Combinators.provide_scope` — curried handler, `peel = 1`, label
+  `~handler`.
+- `Hamlet.Layer.catch_cause` — same `wraps_in_cause` treatment as its
+  Combinators sibling.
+
+**`extract/handler.ml`** — added `strip_cause_wrapper` helper and threaded
+`~wraps_in_cause:bool` through all tag-extraction helpers
+(`tags_from_pat_type`, `tags_from_cases`, `try_param_pat`, `try_body_tags`,
+`tags_from_arrow_domain`, `universe_tags`).
+
+**`extract/upstream.ml`** — `extract_handler` is now label-parametric
+(`~label:string`); callers pass the label from `info.handler_label`.
+`residual_through` and `classify_and_recurse` updated to use `Match info`.
+
+**`extract/walker.ml`** — `try_candidate` and `process_call` updated to
+consume `~info:Classify.info` from the new classifier.
+
+**Test fixtures** — added `test/cases/cause_cases.ml` (`catch_cause`,
+`catch_cause_filter`, `Layer.catch_cause` — narrow + widening pair each)
+and `test/cases/filter_scope_cases.ml` (`catch_filter`, `provide_scope` —
+narrow + widening pair each). Registered as `Cause_cases` (lines
+`[43; 73; 101]`) and `Filter_scope_cases` (lines `[35; 63]`) in
+`test/test_e2e.ml`. Existing fixtures migrated `~h:` → `~handler:` and
+`~s:` → `~source:` for the renamed Layer / `provide` argument labels.
+
+**`docs/LIMITATIONS.md`** §3 — updated combinator count from 7 to 12;
+removed the now-resolved paragraph about `catch_cause` being unmonitored.
+Added §8 documenting the multi-callback probe gap on `catch_filter` /
+`catch_cause_filter` (only `~filter` is inspected; OCaml unifies the row
+across callbacks so the gap matters only when widening exclusively on a
+secondary callback while leaving `~filter` narrow).
+
+`dune runtest` green on all 22 cases (7 unit + 15 e2e — 7 fixtures + 3
+wire-error + 5 fs-error).
+
 ## 2026-04-27: hamlet uptake — `failure → fail` smart-ctor rename, `Cause → Die`, new `catch_cause` / `sandbox_cause` / `ensuring`
 
 Picked up six upstream commits in `hamlet-org/hamlet` (HEAD now at

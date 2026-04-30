@@ -75,8 +75,8 @@ let lpe1_provide_to_effect_narrow () =
     Hamlet.Layer.make Console.Tag.key
       (Hamlet.Combinators.return (failwith "C"))
   in
-  Hamlet.Layer.provide_to_effect ~s:lay
-    ~h:(fun impl (x : [%hamlet.ts Console]) ->
+  Hamlet.Layer.provide_to_effect ~source:lay
+    ~handler:(fun impl (x : [%hamlet.ts Console]) ->
       match x with #Console.Tag.r as w -> Console.Tag.give w impl)
     eff
 
@@ -91,8 +91,8 @@ let lpe2_provide_to_effect_widening () =
     Hamlet.Layer.make Console.Tag.key
       (Hamlet.Combinators.return (failwith "C"))
   in
-  Hamlet.Layer.provide_to_effect ~s:lay
-    ~h:(fun impl (x : [%hamlet.ts Console, Database]) ->
+  Hamlet.Layer.provide_to_effect ~source:lay
+    ~handler:(fun impl (x : [%hamlet.ts Console, Database]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w impl
       | [%hamlet.propagate_s] -> .)
@@ -116,8 +116,8 @@ let lpl_provide_to_layer_narrow () =
     Hamlet.Layer.make Console.Tag.key
       (Hamlet.Combinators.return (failwith "C"))
   in
-  Hamlet.Layer.provide_to_layer ~s:dep
-    ~h:(fun impl (x : [%hamlet.ts Console]) ->
+  Hamlet.Layer.provide_to_layer ~source:dep
+    ~handler:(fun impl (x : [%hamlet.ts Console]) ->
       match x with #Console.Tag.r as w -> Console.Tag.give w impl)
     target
 
@@ -136,8 +136,8 @@ let lpm_provide_merge_to_layer_narrow () =
          method console : (module Console.S) = failwith "C"
       end)
   in
-  Hamlet.Layer.provide_merge_to_layer ~s:env_build
-    ~h:(fun env (x : [%hamlet.ts Console]) ->
+  Hamlet.Layer.provide_merge_to_layer ~source:env_build
+    ~handler:(fun env (x : [%hamlet.ts Console]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w env#console)
     target
@@ -157,8 +157,8 @@ let lpl2_provide_to_layer_widening () =
     Hamlet.Layer.make Console.Tag.key
       (Hamlet.Combinators.return (failwith "C"))
   in
-  Hamlet.Layer.provide_to_layer ~s:dep
-    ~h:(fun impl (x : [%hamlet.ts Console, Database]) ->
+  Hamlet.Layer.provide_to_layer ~source:dep
+    ~handler:(fun impl (x : [%hamlet.ts Console, Database]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w impl
       | [%hamlet.propagate_s] -> .)
@@ -180,8 +180,8 @@ let lpm2_provide_merge_to_layer_widening () =
          method console : (module Console.S) = failwith "C"
       end)
   in
-  Hamlet.Layer.provide_merge_to_layer ~s:env_build
-    ~h:(fun env (x : [%hamlet.ts Console, Database]) ->
+  Hamlet.Layer.provide_merge_to_layer ~source:env_build
+    ~handler:(fun env (x : [%hamlet.ts Console, Database]) ->
       match x with
       | #Console.Tag.r as w -> Console.Tag.give w env#console
       | [%hamlet.propagate_s] -> .)

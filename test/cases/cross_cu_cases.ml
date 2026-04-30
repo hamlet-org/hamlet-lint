@@ -55,7 +55,7 @@ let xc3_cross_cu_provide_narrow () =
     RC.get "key"
   in
   Hamlet.Combinators.provide prog
-    ~h:(fun (x : [%hamlet.ts RemoteCache]) ->
+    ~handler:(fun (x : [%hamlet.ts RemoteCache]) ->
       match x with
       | #RemoteCache.Tag.r as w ->
           RemoteCache.Tag.give w (failwith "RC"))
@@ -69,7 +69,7 @@ let xc4_cross_cu_provide_widening () =
     RC.get "key"
   in
   Hamlet.Combinators.provide prog
-    ~h:(fun (x : [%hamlet.ts RemoteCache, Database]) ->
+    ~handler:(fun (x : [%hamlet.ts RemoteCache, Database]) ->
       match x with
       | #RemoteCache.Tag.r as w ->
           RemoteCache.Tag.give w (failwith "RC")

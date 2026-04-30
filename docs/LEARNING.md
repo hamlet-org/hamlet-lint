@@ -78,41 +78,52 @@ let bad_catch_widening =
 
 ## Phase 2 — Monitored combinators
 
-Out of hamlet's full surface, only 7 functions take a row-declaring
+Out of hamlet's full surface, 12 functions take a row-declaring
 handler. They split by which row the handler refers to:
 
-- **Errors row (`'e`)** — `catch`, `map_error`, `Layer.catch`. The
-  handler's annotation is `[%hamlet.te ...]`.
-- **Services row (`'r`)** — `provide`, `Layer.provide_to_effect`,
-  `Layer.provide_to_layer`, `Layer.provide_merge_to_layer`. The
-  handler's annotation is `[%hamlet.ts ...]`.
+- **Errors row (`'e`)** — `catch`, `map_error`, `catch_filter`,
+  `catch_cause`, `catch_cause_filter`, `Layer.catch`,
+  `Layer.catch_cause`. The handler's annotation is `[%hamlet.te ...]`.
+- **Services row (`'r`)** — `provide`, `provide_scope`,
+  `Layer.provide_to_effect`, `Layer.provide_to_layer`,
+  `Layer.provide_merge_to_layer`. The handler's annotation is
+  `[%hamlet.ts ...]`.
 
-A second axis is the handler's **arity**:
+Each combinator declares three things in addition to its slot:
 
-- **Single-arg** handlers take just the matched row value:
-  `~f:(fun (x : [%hamlet.te ...]) -> ...)`. The first parameter
-  carries the closed-row annotation.
-- **Curried** handlers (the three `Layer.provide_to_*` only) take an
-  extra leading argument — the layer's "implementation" — and the
-  closed-row annotation sits on the **second** parameter:
-  `~h:(fun impl (x : [%hamlet.ts ...]) -> ...)`. The walker has to
-  peel one outer parameter before looking for the row.
+- **`peel`** — how many outer handler parameters to skip before
+  reading the row annotation. `peel = 0` for single-arg handlers
+  (`catch ~f:(fun (x : [%hamlet.te ...]) -> ...)`); `peel = 1` for
+  the curried handlers (`Layer.provide_to_*`, `provide_scope`) where
+  the row sits on the **second** parameter
+  (`~handler:(fun impl (x : [%hamlet.ts ...]) -> ...)`).
+- **`handler_label`** — which labeled argument carries the row-typed
+  callback. `~f` for the original `catch`/`map_error` family;
+  `~handler` for `provide` and the `Layer.provide_*` family;
+  `~filter` for the new filter combinators.
+- **`wraps_in_cause`** — when the handler parameter is `'e Cause.t`
+  rather than bare `'e` (the case for `catch_cause`,
+  `catch_cause_filter`, `Layer.catch_cause`), the linter must strip
+  one outer `Tconstr` layer to reach the polymorphic-variant row
+  inside.
 
-`extract/classify.ml:25`:
+`extract/classify.ml:23` defines the descriptor:
 
 ```ocaml
-let single_arg_paths = [
-  ("Hamlet.Combinators.catch", `Catch);
-  ("Hamlet.Combinators.provide", `Provide);
-  ("Hamlet.Combinators.map_error", `Catch);
-  ("Hamlet.Layer.catch", `Catch);
-]
-let curried_paths = [
-  ("Hamlet.Layer.provide_to_effect", `Provide);
-  ("Hamlet.Layer.provide_to_layer", `Provide);
-  ("Hamlet.Layer.provide_merge_to_layer", `Provide);
-]
+type info = {
+  slot : [ `Catch | `Provide ];
+  peel : int;
+  handler_label : string;     (* "f", "handler", "filter" *)
+  wraps_in_cause : bool;
+}
+
+type classification = Match of info | Other
 ```
+
+A single `paths : (string * info) list` and a fallback
+`lasts : (string * info) list` (for the bare-name structural-fingerprint
+case) drive every classification. Adding a new monitored combinator
+is a single row in each list.
 
 `` `Catch `` / `` `Provide `` is the linter's internal "which slot do
 I look at?" tag. In the upstream type `('a, 'e, 'r) Hamlet.t`,
@@ -190,7 +201,7 @@ Per-field meaning:
   finding.
 - `combinator` — the short callee name (`catch`,
   `Layer.provide_to_effect`, ...). Lets the report tell the user
-  which of the seven monitored functions actually fired (since `kind`
+  which of the twelve monitored functions actually fired (since `kind`
   alone can't distinguish e.g. `catch` from `map_error`).
 - `declared` — list of tag names the handler's annotation
   enumerates, in source order.
@@ -309,15 +320,15 @@ So `classify_path` uses two strategies in order. `extract/classify.ml:118`:
 ```ocaml
 let classify_path path val_type vd =
   let n = Path.name path in
-  match List.assoc_opt n single_arg_paths with
-  | Some kind -> Single kind                     (* strategy 1: canonical match *)
-  | None -> match List.assoc_opt n curried_paths with
-    | Some kind -> Curried kind
-    | None ->
-        if not (path_root_is_hamlet path || val_loc_in_hamlet_surface vd) then Other
-        else  (* strategy 2: bare-name + structural fingerprint *)
-          let last = Path.last path in
-          ...
+  match List.assoc_opt n paths with
+  | Some info -> Match info                      (* strategy 1: canonical match *)
+  | None ->
+      if not (path_root_is_hamlet path || val_loc_in_hamlet_surface vd) then Other
+      else  (* strategy 2: bare-name + structural fingerprint *)
+        let last = Path.last path in
+        match List.assoc_opt last lasts with
+        | Some info when mentions_hamlet_t val_type -> Match info
+        | _ -> Other
 ```
 
 Strategy 1 is the canonical-name match. Strategy 2 is the fallback:
@@ -344,9 +355,11 @@ definition site is in `hamlet.mli`/`hamlet.ml`) blocks user-defined
 helpers from sneaking in. The structural fingerprint
 (`mentions_hamlet_t`) is a second filter on top.
 
-Returns `Single | Curried | Other`. `Single`/`Curried` means "yes,
-this is one of ours, and here's how to handle the arity". `Other`
-means "not interesting, skip".
+Returns `Match info | Other`. `Match info` means "yes, this is one of
+ours; the descriptor in `info` tells the walker which slot to inspect,
+how many handler parameters to peel, which labeled argument carries
+the handler, and whether to descend through a `Cause.t` wrapper".
+`Other` means "not interesting, skip".
 
 ---
 
@@ -993,9 +1006,10 @@ canonical PPX-generated form; user-written aliased forms are out of
 scope (would require expensive `val_type` chasing for too little
 real-world gain).
 
-The remaining six (handler shapes we don't pattern-match,
-combinators outside the seven monitored, OCaml-version coupling,
+The remaining seven (handler shapes we don't pattern-match,
+combinators outside the twelve monitored, OCaml-version coupling,
 computed combinator references, locally-aliased combinator,
+multi-callback combinators inspected only on their primary probe,
 let-bound partial application) follow similar trade-offs: each
 could be supported in principle, each pays a precision-vs-
 complexity cost the project chose not to take.

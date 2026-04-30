@@ -25,9 +25,14 @@
     Combinator                     Slot 1 (errors)            Slot 2 (services)
     ------------------------------ ------------------------- ---------------------------
     Combinators.catch              handler-driven            pass-through (recurse)
+    Combinators.catch_filter       handler-driven            pass-through (recurse)
+    Combinators.catch_cause        handler-driven            pass-through (recurse)
+    Combinators.catch_cause_filter handler-driven            pass-through (recurse)
     Combinators.map_error          handler codomain (skip)   pass-through (recurse)
     Combinators.provide            pass-through (recurse)    handler-driven
+    Combinators.provide_scope      pass-through (recurse)    handler-driven
     Layer.catch                    handler-driven (skip)     pass-through (recurse)
+    Layer.catch_cause              handler-driven            pass-through (recurse)
     Layer.provide_to_effect        pass-through (recurse)    handler-driven
     Layer.provide_to_layer         pass-through (recurse)    handler-driven
     Layer.provide_merge_to_layer   pass-through (recurse)    handler-driven
@@ -72,11 +77,11 @@ let extract_upstream args =
       match (lbl, a) with Asttypes.Nolabel, Arg e -> Some e | _ -> None)
     args
 
-let extract_handler args =
+let extract_handler ~(label : string) args =
   List.find_map
     (fun (lbl, a) ->
       match (lbl, a) with
-      | Asttypes.Labelled ("f" | "h"), Arg e -> Some e
+      | Asttypes.Labelled lbl, Arg e when lbl = label -> Some e
       | _ -> None)
     args
 
@@ -199,15 +204,9 @@ and classify_and_recurse
     ~(args : (Asttypes.arg_label * apply_arg) list) : string list option =
   match callee.exp_desc with
   | Texp_ident (path, _, vd) -> (
-      let kind_opt =
-        match Classify.classify_path path vd.val_type vd with
-        | Single k -> Some (k, 0)
-        | Curried k -> Some (k, 1)
-        | Other -> None
-      in
-      match kind_opt with
-      | None -> tags_at_slot outer_e.exp_type ~slot
-      | Some (kind, peel) -> residual_through ~slot ~kind ~peel args outer_e)
+      match Classify.classify_path path vd.val_type vd with
+      | Other -> tags_at_slot outer_e.exp_type ~slot
+      | Match info -> residual_through ~slot ~info args outer_e)
   | Texp_apply _ -> (
       (* The pipe form [eff |> catch ~f:H] yields a staged apply: outer
          apply with one positional [Arg eff] over an inner apply (the
@@ -219,7 +218,7 @@ and classify_and_recurse
       | None -> tags_at_slot outer_e.exp_type ~slot)
   | _ -> tags_at_slot outer_e.exp_type ~slot
 
-(** Residual through one inner combinator application. The combinator kind
+(** Residual through one inner combinator application. The combinator slot
     determines which slot it touches:
 
     - [`Catch] touches slot 1 (errors), passes slot 2 (services) through.
@@ -228,24 +227,27 @@ and classify_and_recurse
     For pass-through slots we recurse on the inner positional upstream. For
     touched slots we delegate to the handler-shape detector and either recurse
     (pure-propagate / pure-need) or arithmetic-then-recurse (pure-give), or fall
-    back. *)
-and residual_through ~slot ~kind ~peel args (outer_e : expression) :
+    back.
+
+    The [info.handler_label] is forwarded to [extract_handler] so each
+    combinator's handler is found at the correct label. *)
+and residual_through ~slot ~(info : Classify.info) args (outer_e : expression) :
     string list option =
   let upstream = extract_upstream args in
-  let handler = extract_handler args in
+  let handler = extract_handler ~label:info.handler_label args in
   let pass_through () =
     match upstream with
     | Some up -> residual ~slot up
     | None -> tags_at_slot outer_e.exp_type ~slot
   in
   let touched () =
-    match (kind, handler, upstream) with
+    match (info.slot, handler, upstream) with
     | `Catch, Some h, Some up -> (
-        match Propagate.classify_catch_handler ~peel h with
+        match Propagate.classify_catch_handler ~peel:info.peel h with
         | Catch_pure_propagate -> residual ~slot up
         | Catch_other -> tags_at_slot outer_e.exp_type ~slot)
     | `Provide, Some h, Some up -> (
-        match Propagate.classify_provide_handler ~peel h with
+        match Propagate.classify_provide_handler ~peel:info.peel h with
         | Provide_residual discharged -> (
             match residual ~slot up with
             | Some up_tags -> Some (diff up_tags discharged)
@@ -253,13 +255,13 @@ and residual_through ~slot ~kind ~peel args (outer_e : expression) :
         | Provide_other -> tags_at_slot outer_e.exp_type ~slot)
     | _ -> tags_at_slot outer_e.exp_type ~slot
   in
-  match (kind, slot) with
+  match (info.slot, slot) with
   | `Catch, 1 -> touched ()
   | `Catch, _ -> pass_through ()
   | `Provide, 2 -> touched ()
   | `Provide, _ -> pass_through ()
 
-(** Tag list reachable from upstream's row at the slot relevant to [kind].
+(** Tag list reachable from upstream's row at the slot relevant to [slot].
     [None] when neither the recursion nor the fallback can recognise a
     Hamlet/Layer [t] slot. Wrapper kept for API stability with the existing
     walker. *)
