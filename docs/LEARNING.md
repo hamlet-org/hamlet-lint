@@ -106,6 +106,12 @@ Each combinator declares three things in addition to its slot:
   `catch_cause_filter`, `Layer.catch_cause`), the linter must strip
   one outer `Tconstr` layer to reach the polymorphic-variant row
   inside.
+- **`match_probe`** — when `true`, the walker also runs a second
+  analysis pass for `catch_filter` / `catch_cause_filter`: it compares
+  `~f`'s first-parameter declared row against the upper bound of tags
+  inferred from `~filter`'s body. Catches widening on `'match_` (the
+  filter's output), which is independent of `'e` when the filter
+  remaps types. See Phase 11b.
 
 `extract/classify.ml:23` defines the descriptor:
 
@@ -115,6 +121,7 @@ type info = {
   peel : int;
   handler_label : string;     (* "f", "handler", "filter" *)
   wraps_in_cause : bool;
+  match_probe : bool;
 }
 
 type classification = Match of info | Other
@@ -673,6 +680,42 @@ the diff `declared \ upstream`, which under-approximates findings.
 
 ---
 
+## Phase 12b — Filter-output inference
+
+`catch_filter` / `catch_cause_filter` carry a second row-bearing
+position the primary probe doesn't reach: `~f`'s first parameter,
+typed `'match_` (the filter's output, wrapped in `Some _`).
+`'match_` is independent of `'e` when the filter remaps types
+(e.g. `function `Console_error _ -> Some \`Renamed | _ -> None`),
+so the closed-row annotation on `~f` would be invisible to the
+upstream-row probe.
+
+`extract/filter_output.ml` walks the filter's body and infers an
+upper bound on what filter can return inside `Some _`. Each
+control-flow leaf must be one of:
+
+- `None` — contributes no tags.
+- `Some \`Foo x` — contributes `\`Foo` (literal `Texp_variant`).
+- `Some bound_var` — contributes the var's `val_type` tags.
+
+Any other shape (`Some (helper e)`, `Some <complex_expr>`, opaque
+let-bound option in a branch) aborts inference. Recursion threads
+through `Texp_match` (both computation and effect cases),
+`Texp_function` cases, `Texp_let*`, `Texp_ifthenelse`,
+`Texp_sequence`, `Texp_try`.
+
+The walker then emits a SECOND candidate per filter-combinator
+call: declared = `~f`'s first-parameter row, upstream = filter's
+inferred output. The analyzer applies the same `declared \ upstream`
+rule. Same no-false-positive invariant: opaque shapes abort, no
+finding emitted, never a wrong flag.
+
+`extract/walker.ml::try_match_candidate` hard-codes the labels
+(`~filter`, `~f`) since both monitored filter combinators share
+them. Activated by `info.match_probe = true`.
+
+---
+
 ## Phase 13 — Pipe form unstaging
 
 You'd expect `eff |> catch ~f:H` to compile to the same typedtree
@@ -986,7 +1029,7 @@ fail with a hint.
 
 ## Phase 21 — Limitations
 
-`docs/LIMITATIONS.md` enumerates 8 known gaps — cases the linter
+`docs/LIMITATIONS.md` enumerates 9 known gaps — cases the linter
 **doesn't** catch by design. Two you'll see most:
 
 **§1 — Inline upstream from non-monitored ops.** Phase 11's
@@ -1009,10 +1052,10 @@ real-world gain).
 The remaining seven (handler shapes we don't pattern-match,
 combinators outside the twelve monitored, OCaml-version coupling,
 computed combinator references, locally-aliased combinator,
-multi-callback combinators inspected only on their primary probe,
-let-bound partial application) follow similar trade-offs: each
-could be supported in principle, each pays a precision-vs-
-complexity cost the project chose not to take.
+filter bodies with opaque return paths in `catch_filter` /
+`catch_cause_filter`, let-bound partial application) follow similar
+trade-offs: each could be supported in principle, each pays a
+precision-vs-complexity cost the project chose not to take.
 
 The invariant across every fallback: **false negatives only, never
 false positives**. Every fallback over-approximates upstream's row,
