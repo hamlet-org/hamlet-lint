@@ -38,12 +38,13 @@ The committed expansion golden must always come from the raw Merlin output of
 the final implementation. Do not create it from explicit `%hamlet.te` or
 `%hamlet.ts` stand-ins.
 
-`make installed-consumer` supplies the complementary package test. It installs
-Hamlet Subtractor into a fresh prefix, runs a separate repository with only
+The normal `dune runtest` gate also runs the installed-consumer package test.
+It installs Hamlet Subtractor into a fresh prefix, runs a separate repository with only
 `(staged_pps hamlet-subtractor.ppx)`, traces the Dune-site resolver, and verifies
 narrow raw Merlin hover without source-tree metadata.
 
-Use `make installed-consumer-keep` when investigating that external fixture.
+`make installed-consumer` runs that same package proof directly. Use
+`make installed-consumer-keep` when investigating the external fixture.
 It runs the same gate with `KEEP_WORK=1`, preserves the temporary directory,
 and prints the consumer project, installation prefix, and generated
 `with-installed-hamlet-subtractor` launcher paths before exiting. The launcher derives the

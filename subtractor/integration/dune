@@ -21,6 +21,17 @@
  (name runtest)
  (deps hamlet_subtractor_integration_fixture.cma))
 
+(rule
+ (alias runtest)
+ (deps
+  (sandbox none)
+  installed_consumer.sh)
+ (action
+  (setenv
+   HAMLET_SUBTRACTOR_DUNE_ACTION
+   1
+   (run %{dep:installed_consumer.sh}))))
+
 (executable
  (name hamlet_subtractor_fast_driver)
  (modules hamlet_subtractor_fast_driver)

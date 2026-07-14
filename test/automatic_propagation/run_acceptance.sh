@@ -147,6 +147,34 @@ dump_hover() {
     "$response_file" >"$output_file"
 }
 
+assert_error_hover() {
+  hover_file=$1
+  residual=$2
+  context=$3
+  hover=$(cat "$hover_file")
+  case "$hover" in
+    "(string, Automatic_propagation_external.Storage.Errors.$residual, never) t" | \
+    "(string, Automatic_propagation_external.Storage.Errors.$residual, Hamlet.never) Hamlet.t")
+      ;;
+    *)
+      fail "$context Merlin hover is not the exact $residual residual: $hover"
+      ;;
+  esac
+}
+
+assert_requirement_hover() {
+  hover_file=$1
+  hover=$(cat "$hover_file")
+  case "$hover" in
+    '(string, never, Automatic_propagation_external.Clock.Tag.r) t' | \
+    '(string, Hamlet.never, Automatic_propagation_external.Clock.Tag.r) Hamlet.t')
+      ;;
+    *)
+      fail "requirement Merlin hover is not the exact Clock residual: $hover"
+      ;;
+  esac
+}
+
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/hamlet-automatic-propagation.XXXXXX")
 dependency_source=test/automatic_propagation/automatic_propagation_external.ml
 build_dir=${HAMLET_SUBTRACTOR_DUNE_BUILD_DIR:-_build}
@@ -188,17 +216,14 @@ subset_line=$(grep -n '^let case_error_cross_subset =' \
 dump_hover test/automatic_propagation/automatic_propagation_positive.ml \
   test/automatic_propagation/automatic_propagation_positive.ml "$subset_line:5" \
   "$tmp_dir/saved.hover"
-grep -Fx \
-  '(string, Automatic_propagation_external.Storage.Errors.storage_timeout, never) t' \
-  "$tmp_dir/saved.hover" >/dev/null
+assert_error_hover "$tmp_dir/saved.hover" storage_timeout saved
 
 requirement_line=$(grep -n '^let case_requirement_cross_pipe =' \
   test/automatic_propagation/automatic_propagation_positive.ml | cut -d: -f1)
 dump_hover test/automatic_propagation/automatic_propagation_positive.ml \
   test/automatic_propagation/automatic_propagation_positive.ml "$requirement_line:5" \
   "$tmp_dir/requirement.hover"
-grep -Fx '(string, never, Automatic_propagation_external.Clock.Tag.r) t' \
-  "$tmp_dir/requirement.hover" >/dev/null
+assert_requirement_hover "$tmp_dir/requirement.hover"
 
 saved_arm='#Automatic_propagation_external.Storage.Errors.storage_missing'
 unsaved_arm='#Automatic_propagation_external.Storage.Errors.storage_timeout'
@@ -227,9 +252,7 @@ assert_typed_subset_forwarder "$tmp_dir/unsaved.typedtree" storage_missing \
 dump_hover test/automatic_propagation/automatic_propagation_positive.ml \
   "$tmp_dir/automatic_propagation_positive.unsaved.ml" "$subset_line:5" \
   "$tmp_dir/unsaved.hover"
-grep -Fx \
-  '(string, Automatic_propagation_external.Storage.Errors.storage_missing, never) t' \
-  "$tmp_dir/unsaved.hover" >/dev/null
+assert_error_hover "$tmp_dir/unsaved.hover" storage_missing unsaved
 
 cp "$dependency_source" "$dependency_backup"
 dependency_modified=1

@@ -343,7 +343,10 @@ process path at the normalized evidence and final AST boundaries. They also
 inject crashes, timeouts, malformed frames, version mismatches, and incomplete
 responses.
 
-`make installed-consumer` stages the released package layout into a temporary
+The normal `dune runtest` gate includes the installed-consumer proof. Its Dune
+action installs from an isolated source copy, so it never re-enters the active
+build directory. `make installed-consumer` runs the same proof directly and
+stages the released package layout into a temporary
 prefix and verifies a separate Dune project, runtime behavior, the
 installation-relative resolver path, and narrow raw Merlin hovers without any
 source-tree `preprocessor_deps` stanza. Its requirement source is deliberately

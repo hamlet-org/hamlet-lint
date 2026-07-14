@@ -14,7 +14,7 @@
 #   fmt-fix                    apply formatting
 #   doc                        build documentation
 #   opam                       lint package metadata
-#   all                        build, test, format, docs, opam, consumer
+#   all                        build, test, format, docs, opam
 
 DUNE := opam exec -- dune
 PROMOTE ?= 0
@@ -67,7 +67,7 @@ installed-consumer:
 installed-consumer-keep:
 	KEEP_WORK=1 $(MAKE) --no-print-directory installed-consumer
 
-all: build test fmt doc opam installed-consumer
+all: build test fmt doc opam
 
 clean:
 	$(DUNE) clean

@@ -2,7 +2,28 @@
 
 set -eu
 
-root=$(CDPATH= cd "$(dirname "$0")/../.." && pwd)
+root=${HAMLET_SUBTRACTOR_SOURCE_ROOT:-}
+if [ -z "$root" ]; then
+  root=$(CDPATH= cd "$(dirname "$0")" && pwd)
+fi
+while :; do
+  case "$root" in
+    */_build/*) ;;
+    *)
+      if [ -f "$root/dune-project" ]; then
+        break
+      fi
+      ;;
+  esac
+  parent=$(dirname "$root")
+  if [ "$parent" = "$root" ]; then
+    printf '%s\n' 'cannot locate the hamlet-subtractor source root' >&2
+    exit 1
+  fi
+  root=$parent
+done
+root=$(CDPATH= cd "$root" && pwd)
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/hamlet-subtractor-installed-consumer.XXXXXX")
 work=$(CDPATH= cd "$work" && pwd)
 prefix="$work/prefix"
@@ -10,6 +31,7 @@ consumer="$work/consumer"
 trace="$work/resolver.trace"
 launcher="$work/with-installed-hamlet-subtractor"
 keep_work=${KEEP_WORK:-0}
+build_source=
 
 cleanup() {
   if [ "$keep_work" = 1 ]; then
@@ -68,8 +90,32 @@ require_one_of() {
 
 mkdir -p "$prefix" "$consumer"
 
-dune build --display quiet --root "$root" @install
-dune install --display quiet --root "$root" --prefix "$prefix"
+if [ "${HAMLET_SUBTRACTOR_DUNE_ACTION:-}" = 1 ]; then
+  build_source=$work/source
+  mkdir -p "$build_source"
+  (
+    cd "$root"
+    tar -cf - \
+      --exclude='./.git' \
+      --exclude='./_build' \
+      --exclude='./_opam' \
+      --exclude='./.qmd' \
+      --exclude='./knowledge' \
+      --exclude='./knowledge-backup-*' \
+      .
+  ) | (
+    cd "$build_source"
+    tar -xf -
+  )
+  (
+    cd "$build_source"
+    dune build --display quiet @install
+    dune install --display quiet --prefix "$prefix"
+  )
+else
+  dune build --display quiet --root "$root" @install
+  dune install --display quiet --root "$root" --prefix "$prefix"
+fi
 
 toolchain_bin=$(dirname "$(command -v dune)")
 quoted_toolchain_bin=$(shell_quote "$toolchain_bin")
