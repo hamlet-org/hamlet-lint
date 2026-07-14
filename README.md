@@ -79,6 +79,12 @@ generates opam metadata. Compatibility starts at OCaml 5.5.0. The current
 matrix contains OCaml 5.5.0; support for later compiler patches is added with
 an explicit compatibility layer and matching CI image.
 
+Maintainer release runs need read access to the private companion repository.
+Set the optional `HAMLET_READ_TOKEN` GitHub Actions secret with repository
+contents read access, or grant the subtractor workflow token the same access.
+The credential is used only for the CI Git transport and never appears in the
+generated opam metadata.
+
 There is one forward-moving source tree. While Hamlet is installed from Git,
 the paired pins ensure the resolver is never combined with an unrelated Hamlet
 PPX or compiler version. When Hamlet is published in opam, the pins can become

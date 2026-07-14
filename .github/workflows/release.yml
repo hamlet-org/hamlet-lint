@@ -115,6 +115,19 @@ jobs:
         with:
           ocaml-compiler: ${{ matrix.pair.ocaml }}
 
+      - name: Authenticate private Hamlet source
+        env:
+          HAMLET_READ_TOKEN: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+        run: |
+          if [ -z "${HAMLET_READ_TOKEN:-}" ]; then
+            echo "::error::Release needs read access to hamlet-org/hamlet. Configure HAMLET_READ_TOKEN with repository read access, or grant this workflow token access to the companion repository."
+            exit 1
+          fi
+          echo "::add-mask::$HAMLET_READ_TOKEN"
+          git config --global \
+            url."https://x-access-token:${HAMLET_READ_TOKEN}@github.com/hamlet-org/".insteadOf \
+            "https://github.com/hamlet-org/"
+
       - name: Install matching Hamlet source
         run: |
           if ! [[ "$HAMLET_GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
