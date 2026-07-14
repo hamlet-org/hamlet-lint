@@ -20,7 +20,9 @@ env:
   OCAML_COMPILER: "5.5.0"
   MINIMUM_DUNE: "3.18.2"
   HAMLET_GIT_URL: https://github.com/hamlet-org/hamlet.git
-  HAMLET_GIT_REF: main
+  # keep this source pin aligned with the companion Hamlet pull request until
+  # automatic propagation lands on main. releases use exact published pairs.
+  HAMLET_GIT_REF: automatic-propagation-elaboration
 
 jobs:
   classify:
