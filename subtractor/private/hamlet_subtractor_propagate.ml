@@ -153,15 +153,16 @@ let is_expose_of_var (e : expression) (v : Ident.t) : bool =
 
 (** Recognise [Hamlet.Combinators.fail] by canonical [Path.name]. User aliases
     ([let f = fail], [let open Hamlet.Combinators]) are intentionally
-    unsupported : see LIMITATIONS §6.
+    unsupported because the proof tracer accepts this direct resolved path.
 
     Renamed from [is_failure_callee] when hamlet renamed the smart constructor
     [failure → fail] in commit [e3ab0c8]. *)
 let is_fail_callee (path : Path.t) : bool =
   Path.name path = "Hamlet.Combinators.fail"
 
-(** Recognise [Hamlet.Dispatch.need] by canonical [Path.name]. Aliases
-    intentionally unsupported (LIMITATIONS §6). *)
+(** Recognise [Hamlet.Dispatch.need] by canonical [Path.name]. Aliases are
+    intentionally unsupported because the proof tracer accepts this direct
+    resolved path. *)
 let is_dispatch_need_callee (path : Path.t) : bool =
   Path.name path = "Hamlet.Dispatch.need"
 
@@ -190,7 +191,8 @@ type provide_arm =
     - [Texp_apply (<X>.Tag.give, [Arg (Texp_ident alias); _])] → Pa_give
 
     Aliased forms ([let need = Dispatch.need], [let open ...], etc.) are out of
-    scope (LIMITATIONS §6). Tags are taken from the case pattern. *)
+    scope because the proof tracer requires the direct resolved path. Tags are
+    taken from the case pattern. *)
 let classify_provide_arm (Arm (lhs, guard, rhs) : arm) : provide_arm =
   if guard <> None then Pa_unknown
   else

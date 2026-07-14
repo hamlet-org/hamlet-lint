@@ -9,9 +9,10 @@
 # prereleases (0~alpha1, 0~beta2, 0~rc1) which sort before the GA
 # release as opam expects.
 #
-# Why patches and not minors: extract/compat.cppo.ml's #error guard
-# pins the exact patch, so the build artifact is patch-specific and
-# the opam ocaml constraint is `{= "<patch>"}`.
+# Why patches and not minors: the OCaml 5.5 compiler-libs adapter in
+# subtractor/private/hamlet_subtractor_compiler_compat_505.ml is compiled for
+# this exact compiler target, so the build artifact is patch-specific and the
+# opam ocaml constraint is `{= "<patch>"}`.
 #
 # Mirror any add/remove with: .github/workflows/ci.yml, dune-project, and the
 # compiler compatibility layer.

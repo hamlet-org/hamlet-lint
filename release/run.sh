@@ -10,7 +10,8 @@
 # Policy: only the latest hamlet is supported on new OCaml patches.
 # When a new OCaml patch is added to OCAML_PATCHES, re-run this script
 # with the latest hamlet version to publish the missing pair(s). Past
-# hamlet releases are NOT backfilled. See docs/RELEASING.md §5.
+# hamlet releases are NOT backfilled. See README.md, "Compatibility and
+# releases".
 #
 # The OCaml axis comes from OCAML_PATCHES in release/versions.sh.
 #
