@@ -87,8 +87,8 @@ fields exposed by OCaml 5.5's standard PPX context:
 - debug, thread, recursive-type, principal, alias-dependency, and unboxed-type
   modes;
 - PPX cookies;
-- the current Hamlet, subtractor, protocol, OCaml, and AST versions added by
-  the subtractor itself.
+- the current OCaml, protocol, subtractor PPX, expected resolver, and AST
+  versions added by the subtractor itself.
 
 Fields used only to correlate a request with its response are kept separate
 from the semantic digest. The semantic digest must be equal when `ocamlc`,
@@ -147,7 +147,8 @@ run the PPX pipeline recursively.
 
 The request contains:
 
-- a protocol version and lockstep package versions;
+- a protocol version plus the subtractor PPX version and expected resolver
+  version;
 - a unique request correlation value;
 - the semantic context snapshot and digest;
 - a location-preserving serialized probe Parsetree;

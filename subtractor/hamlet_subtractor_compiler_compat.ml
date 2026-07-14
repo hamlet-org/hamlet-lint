@@ -190,7 +190,7 @@ let request_context ~source_file structure =
       {
         ocaml_version = Sys.ocaml_version;
         hamlet_subtractor_version = Hamlet_subtractor_version.value;
-        ppx_hamlet_version = Hamlet_subtractor_version.value;
+        resolver_version = Hamlet_subtractor_version.value;
         catalogue_schema_version = 1;
       }
   in
@@ -266,11 +266,11 @@ let validate_request_context request =
       ~actual:context.hamlet_subtractor_version
   else if
     not
-      (String.equal context.ppx_hamlet_version Hamlet_subtractor_version.value)
+      (String.equal context.resolver_version Hamlet_subtractor_version.value)
   then
-    request_context_mismatch ~field:"ppx_hamlet_version"
+    request_context_mismatch ~field:"resolver_version"
       ~expected:Hamlet_subtractor_version.value
-      ~actual:context.ppx_hamlet_version
+      ~actual:context.resolver_version
   else if context.catalogue_schema_version <> 1 then
     request_context_mismatch ~field:"catalogue_schema_version" ~expected:"1"
       ~actual:(string_of_int context.catalogue_schema_version)

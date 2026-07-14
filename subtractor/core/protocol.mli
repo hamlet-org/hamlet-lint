@@ -8,7 +8,7 @@ type package_mode = Standalone | For_pack of string
 type tool_context = {
   ocaml_version : string;
   hamlet_subtractor_version : string;
-  ppx_hamlet_version : string;
+  resolver_version : string;
   catalogue_schema_version : int;
 }
 

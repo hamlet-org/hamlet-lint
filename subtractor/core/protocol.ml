@@ -1,11 +1,11 @@
-let version = 3
+let version = 4
 
 type package_mode = Standalone | For_pack of string
 
 type tool_context = {
   ocaml_version : string;
   hamlet_subtractor_version : string;
-  ppx_hamlet_version : string;
+  resolver_version : string;
   catalogue_schema_version : int;
 }
 
@@ -126,8 +126,8 @@ let validate_tool_context context =
     Error (Empty_tool_version "ocaml_version")
   else if String.trim context.hamlet_subtractor_version = "" then
     Error (Empty_tool_version "hamlet_subtractor_version")
-  else if String.trim context.ppx_hamlet_version = "" then
-    Error (Empty_tool_version "ppx_hamlet_version")
+  else if String.trim context.resolver_version = "" then
+    Error (Empty_tool_version "resolver_version")
   else if context.catalogue_schema_version < 1 then
     Error (Invalid_catalogue_schema_version context.catalogue_schema_version)
   else Ok ()
@@ -887,7 +887,7 @@ let tool_context_to_json context =
     [
       ("ocaml_version", `String context.ocaml_version);
       ("hamlet_subtractor_version", `String context.hamlet_subtractor_version);
-      ("ppx_hamlet_version", `String context.ppx_hamlet_version);
+      ("resolver_version", `String context.resolver_version);
       ("catalogue_schema_version", `Int context.catalogue_schema_version);
     ]
 
@@ -899,7 +899,7 @@ let tool_context_of_json path json =
   in
   let* ocaml_version = get_string "ocaml_version" in
   let* hamlet_subtractor_version = get_string "hamlet_subtractor_version" in
-  let* ppx_hamlet_version = get_string "ppx_hamlet_version" in
+  let* resolver_version = get_string "resolver_version" in
   let* catalogue_json = field path "catalogue_schema_version" fields in
   let* catalogue_schema_version =
     as_int (path @ [ "catalogue_schema_version" ]) catalogue_json
@@ -908,7 +908,7 @@ let tool_context_of_json path json =
     {
       ocaml_version;
       hamlet_subtractor_version;
-      ppx_hamlet_version;
+      resolver_version;
       catalogue_schema_version;
     }
   in

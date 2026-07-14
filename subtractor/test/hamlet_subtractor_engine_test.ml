@@ -861,7 +861,7 @@ let resolver_request marker =
       {
         ocaml_version = "5.5.0";
         hamlet_subtractor_version = "test";
-        ppx_hamlet_version = "test";
+        resolver_version = "test";
         catalogue_schema_version = 1;
       }
   in

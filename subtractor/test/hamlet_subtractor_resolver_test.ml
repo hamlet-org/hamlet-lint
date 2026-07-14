@@ -140,7 +140,7 @@ let fake_request
       {
         ocaml_version = Sys.ocaml_version;
         hamlet_subtractor_version = Hamlet_subtractor_version.value;
-        ppx_hamlet_version = Hamlet_subtractor_version.value;
+        resolver_version = Hamlet_subtractor_version.value;
         catalogue_schema_version = 1;
       }
   in
@@ -262,7 +262,7 @@ let test_transport_version_mismatch () =
   | Error
       (Hamlet_subtractor_resolver_transport.Output_decode
          (Hamlet_subtractor_resolver_protocol.Response_decode
-            (Protocol.Version_mismatch { expected = 3; actual = 999 }))) ->
+            (Protocol.Version_mismatch { expected = 4; actual = 999 }))) ->
       ()
   | Error error ->
       Alcotest.fail
