@@ -127,6 +127,10 @@ jobs:
           git config --global \
             url."https://x-access-token:${HAMLET_READ_TOKEN}@github.com/hamlet-org/".insteadOf \
             "https://github.com/hamlet-org/"
+          if ! git ls-remote --heads "$HAMLET_GIT_URL" >/dev/null 2>&1; then
+            echo "::error::Release needs read access to hamlet-org/hamlet. Configure HAMLET_READ_TOKEN with repository read access, or grant this workflow token access to the companion repository."
+            exit 1
+          fi
 
       - name: Install matching Hamlet source
         run: |
