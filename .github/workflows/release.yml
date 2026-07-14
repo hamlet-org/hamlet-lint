@@ -21,6 +21,12 @@ on:
 permissions:
   contents: write
 
+env:
+  # Hamlet remains outside opam while automatic propagation is introduced.
+  # Keep this ref aligned with the Git pins in the generated opam metadata.
+  HAMLET_GIT_URL: https://github.com/hamlet-org/hamlet.git
+  HAMLET_GIT_REF: automatic-propagation-elaboration
+
 jobs:
   # Re-filter the input list against the current state of opam-repository
   # so a stale dispatch (manual UI typo, racing run.sh, etc.) self-corrects.
@@ -92,9 +98,12 @@ jobs:
         with:
           ocaml-compiler: ${{ matrix.pair.ocaml }}
 
-      - name: Install exact Hamlet release pair
+      - name: Install matching Hamlet source
         run: |
-          opam install -y "hamlet.${HAMLET_VERSION}" "ppx_hamlet.${HAMLET_VERSION}"
+          source="git+${HAMLET_GIT_URL}#${HAMLET_GIT_REF}"
+          opam pin add -y --no-action hamlet "$source"
+          opam pin add -y --no-action ppx_hamlet "$source"
+          opam install -y hamlet ppx_hamlet
           opam install -y . --deps-only --with-test
 
       - name: Build & test

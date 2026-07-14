@@ -59,6 +59,7 @@ doc:
 
 opam:
 	opam lint hamlet-subtractor.opam
+	./release/check-opam-template.sh
 
 installed-consumer:
 	opam exec -- ./subtractor/integration/installed_consumer.sh

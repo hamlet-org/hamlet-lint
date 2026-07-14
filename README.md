@@ -20,9 +20,25 @@ use `[%hamlet.propagate_s.auto]` with `Hamlet.Combinators.provide`; a direct
 
 ## Use in a Hamlet project
 
-Install the `hamlet` and `hamlet-subtractor` packages from the same supported
-release pair. Then configure each Dune target that contains an automatic
-marker with the staged bundle:
+Hamlet is not published in opam yet. Pin Hamlet, its PPX, and this package from
+GitHub together:
+
+```sh
+opam pin add --yes --no-action hamlet \
+  "git+https://github.com/hamlet-org/hamlet.git#automatic-propagation-elaboration"
+opam pin add --yes --no-action ppx_hamlet \
+  "git+https://github.com/hamlet-org/hamlet.git#automatic-propagation-elaboration"
+opam pin add --yes hamlet-subtractor \
+  "git+https://github.com/hamlet-org/hamlet-subtractor.git#automatic-propagation-subtractor"
+```
+
+`hamlet-subtractor.opam` records the two Hamlet Git pins too, so a future opam
+installation of this package obtains the same source dependencies
+automatically. A local checkout can instead run `make setup`; it uses the
+same URL and lets maintainers override `HAMLET_GIT_URL` and `HAMLET_GIT_REF`.
+
+Then configure each Dune target that contains an automatic marker with the
+staged bundle:
 
 ```lisp
 (library
@@ -55,18 +71,16 @@ examples, diagnostics, and the explicit fallback.
 
 ## Compatibility and releases
 
-The resolver reads OCaml compiler Typedtree APIs. Therefore each released
-package targets one exact `(hamlet, OCaml patch)` pair and pins both the
-matching `hamlet` and `ppx_hamlet` packages. Compatibility starts at OCaml
-5.5.0. The current release matrix contains OCaml 5.5.0; support for later
-compiler patches is added with an explicit compatibility layer and matching
-CI image.
+The resolver reads OCaml compiler Typedtree APIs. Each package targets one
+exact OCaml patch and pins `hamlet` with `ppx_hamlet` from one GitHub source
+ref. Compatibility starts at OCaml 5.5.0. The current matrix contains
+OCaml 5.5.0; support for later compiler patches is added with an explicit
+compatibility layer and matching CI image.
 
-There is one forward-moving source tree. A Hamlet release produces one
-`hamlet-subtractor` package for every currently supported OCaml patch. Adding
-a new OCaml patch releases the current Hamlet version for that patch; old
-Hamlet releases are not retroactively rebuilt. This prevents a compiler-libs
-resolver from being paired with an unrelated Hamlet PPX or compiler version.
+There is one forward-moving source tree. While Hamlet is installed from Git,
+the paired pins ensure the resolver is never combined with an unrelated Hamlet
+PPX or compiler version. When Hamlet is published in opam, the pins can become
+ordinary exact package constraints without changing the Dune setup.
 
 `hamlet-lint` is the repository and package lineage from which the Typedtree
 analysis was migrated. Its old packages and releases remain historical. This
