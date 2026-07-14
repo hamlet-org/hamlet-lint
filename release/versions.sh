@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# release/versions.sh — supported OCaml patches for hamlet-lint
+# release/versions.sh — supported OCaml patches for hamlet-subtractor
 # releases. Sourced by release/run.sh.
 #
 # Format: one row per OCaml major.minor line. Column 1 is the
@@ -13,18 +13,15 @@
 # pins the exact patch, so the build artifact is patch-specific and
 # the opam ocaml constraint is `{= "<patch>"}`.
 #
-# Mirror any add/remove with: .github/workflows/ci.yml (matrix),
-# .github/workflows/release.yml (choice list), extract/compat.cppo.ml
-# (#if guard), dune-project ((ocaml ...)).
+# Mirror any add/remove with: .github/workflows/ci.yml, dune-project, and the
+# compiler compatibility layer.
 #
 # Examples (suffix → full patch):
-#   5.4  1                  → 5.4.1
-#   5.4  1 2                → 5.4.1, 5.4.2
 #   5.5  0~alpha1 0~beta1   → 5.5.0~alpha1, 5.5.0~beta1
 #   5.5  0~rc1 0            → 5.5.0~rc1, 5.5.0
 
 OCAML_PATCHES=$(cat <<'EOF'
-5.4  1
+5.5  0
 EOF
 )
 

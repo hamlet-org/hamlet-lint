@@ -1,0 +1,60 @@
+# hamlet-subtractor opam file template for opam-repository submissions.
+#
+# This file is not used by `opam install .` or `dune build` locally. The
+# release workflow substitutes the placeholders below to create a package for
+# each exact (hamlet, OCaml) pair as
+# `hamlet-subtractor.<hamlet-version>~<ocaml-target>/opam`.
+#
+# %%VERSION%%         e.g. 0.1.0~5.5.0
+# %%HAMLET_VERSION%%  the matching Hamlet release
+# %%OCAML_TARGET%%    the exact OCaml patch for this compatibility build
+# %%CHECKSUM_SHA256%% the tarball checksum computed during release
+# %%TARBALL_URL%%     the GitHub Release asset URL
+#
+# Keep dependencies and package metadata aligned with the generated root opam
+# file. The exact `hamlet` and `ppx_hamlet` constraints intentionally travel
+# together: the resolver uses compiler typed-tree APIs and must preprocess with
+# the PPX from the same Hamlet release.
+opam-version: "2.0"
+version: "%%VERSION%%"
+synopsis: "Exact automatic propagation for Hamlet"
+description:
+  "Compiler-assisted automatic propagation for Hamlet. The package installs hamlet-subtractor.ppx together with its matching compiler-libs resolver. It is released for one exact Hamlet and OCaml compiler pair at a time so the resolver and PPX stay compatible with the compiler APIs they inspect."
+maintainer: ["Andrea Simone Costa <andreasimonecosta@gmail.com>"]
+authors: ["Andrea Simone Costa <andreasimonecosta@gmail.com>"]
+license: "MIT"
+homepage: "https://github.com/hamlet-org/hamlet-subtractor"
+bug-reports: "https://github.com/hamlet-org/hamlet-subtractor/issues"
+depends: [
+  "ocaml" {= "%%OCAML_TARGET%%"}
+  "dune" {>= "3.18"}
+  "hamlet" {= "%%HAMLET_VERSION%%"}
+  "ppx_hamlet" {= "%%HAMLET_VERSION%%"}
+  "ppxlib" {>= "0.38.0"}
+  "dune-site"
+  "yojson" {>= "2.0.0"}
+  "alcotest" {>= "1.7.0" & with-test}
+  "merlin" {with-test}
+  "fmt" {>= "0.11.0" & with-test}
+  "odoc" {with-doc}
+]
+build: [
+  [
+    "dune"
+    "build"
+    "-p"
+    name
+    "-j"
+    jobs
+    "@install"
+    "@runtest" {with-test}
+    "@doc" {with-doc}
+  ]
+]
+dev-repo: "git+https://github.com/hamlet-org/hamlet-subtractor.git"
+url {
+  src: "%%TARBALL_URL%%"
+  checksum: [
+    "sha256=%%CHECKSUM_SHA256%%"
+  ]
+}

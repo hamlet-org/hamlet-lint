@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       pairs:
-        description: 'JSON array of pairs, e.g. [{"hamlet":"0.1.0","ocaml":"5.4.1"}]'
+        description: 'JSON array of pairs, e.g. [{"hamlet":"0.1.0","ocaml":"5.5.0"}]'
         required: true
         type: string
 
@@ -45,7 +45,7 @@ jobs:
             pkg="${hamlet}~${ocaml}"
             if gh api \
                  -H "Accept: application/vnd.github+json" \
-                 "repos/ocaml/opam-repository/contents/packages/hamlet-lint/hamlet-lint.${pkg}" \
+                 "repos/ocaml/opam-repository/contents/packages/hamlet-subtractor/hamlet-subtractor.${pkg}" \
                  >/dev/null 2>&1; then
               echo "skip ${pkg}: already merged on ocaml/opam-repository"
             else
@@ -88,11 +88,14 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/setup-ocaml
         with:
           ocaml-compiler: ${{ matrix.pair.ocaml }}
-          hamlet-source: opam
-          hamlet-version: ${{ env.HAMLET_VERSION }}
+
+      - name: Install exact Hamlet release pair
+        run: |
+          opam install -y "hamlet.${HAMLET_VERSION}" "ppx_hamlet.${HAMLET_VERSION}"
+          opam install -y . --deps-only --with-test
 
       - name: Build & test
         run: |
@@ -145,8 +148,8 @@ jobs:
         id: archive
         run: |
           rm -rf dist && mkdir -p dist
-          TARBALL="dist/hamlet-lint-${PKG_VERSION}.tar.gz"
-          git archive --format=tar.gz --prefix="hamlet-lint-${PKG_VERSION}/" \
+          TARBALL="dist/hamlet-subtractor-${PKG_VERSION}.tar.gz"
+          git archive --format=tar.gz --prefix="hamlet-subtractor-${PKG_VERSION}/" \
             -o "$TARBALL" HEAD
           SHA=$(shasum -a 256 "$TARBALL" | awk '{print $1}')
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
@@ -155,7 +158,7 @@ jobs:
       - name: Create annotated tag
         if: steps.tag.outputs.exists == 'false'
         run: |
-          git tag -a "$TAG_NAME" -m "hamlet-lint ${PKG_VERSION}"
+          git tag -a "$TAG_NAME" -m "hamlet-subtractor ${PKG_VERSION}"
           git push origin "$TAG_NAME"
 
       - name: Create GitHub Release
@@ -166,8 +169,8 @@ jobs:
             echo "GitHub Release ${TAG_NAME} already exists, skipping creation"
           else
             gh release create "$TAG_NAME" "${{ steps.archive.outputs.tarball }}" \
-              --title "hamlet-lint ${PKG_VERSION}" \
-              --notes "Packaging release for hamlet ${HAMLET_VERSION} on OCaml ${OCAML_TARGET}. See CHANGELOG.md for walker-level changes."
+              --title "hamlet-subtractor ${PKG_VERSION}" \
+              --notes "Packaging release for hamlet ${HAMLET_VERSION} on OCaml ${OCAML_TARGET}."
           fi
           TARBALL_URL=$(gh release view "$TAG_NAME" --json assets -q '.assets[0].url')
           echo "TARBALL_URL=$TARBALL_URL" >> "$GITHUB_ENV"
@@ -182,7 +185,7 @@ jobs:
             -e "s|%%OCAML_TARGET%%|${OCAML_TARGET}|g" \
             -e "s|%%TARBALL_URL%%|${TARBALL_URL}|g" \
             -e "s|%%CHECKSUM_SHA256%%|${{ steps.archive.outputs.sha256 }}|g" \
-            release/hamlet-lint.opam.tmpl > "$OPAM_OUT"
+            release/hamlet-subtractor.opam.tmpl > "$OPAM_OUT"
           opam lint "$OPAM_OUT"
 
       # Artifact name encodes the pair so bundle-pr can pattern-download
@@ -217,16 +220,16 @@ jobs:
           COUNT: ${{ needs.plan.outputs.count }}
         run: |
           # Check for an existing PR before doing any work. Match on
-          # "hamlet-lint" in the title among open PRs on the fork.
+          # "hamlet-subtractor" in the title among open PRs on the fork.
           existing=$(gh pr list \
             --repo ocaml/opam-repository \
-            --search "[new release] hamlet-lint in:title" \
+            --search "[new release] hamlet-subtractor in:title" \
             --state open \
             --json number,title \
-            --jq '.[] | select(.title | contains("hamlet-lint")) | .number' \
+            --jq '.[] | select(.title | contains("hamlet-subtractor")) | .number' \
             | head -n1)
           if [ -n "$existing" ]; then
-            echo "opam-repository PR #${existing} already open for hamlet-lint, skipping"
+            echo "opam-repository PR #${existing} already open for hamlet-subtractor, skipping"
             exit 0
           fi
 
@@ -236,7 +239,7 @@ jobs:
 
           # Branch name is derived from the run id so two release passes
           # never clash on the fork. Hyphen only (git refs forbid ~).
-          BRANCH_NAME="hamlet-lint-release-${{ github.run_id }}"
+          BRANCH_NAME="hamlet-subtractor-release-${{ github.run_id }}"
           git checkout -b "$BRANCH_NAME"
 
           # Drop every rendered opam under its target package directory.
@@ -244,7 +247,7 @@ jobs:
           versions=()
           for d in "${GITHUB_WORKSPACE}"/rendered/opam-*; do
             pkg="${d##*/opam-}"
-            PKG_DIR="packages/hamlet-lint/hamlet-lint.${pkg}"
+            PKG_DIR="packages/hamlet-subtractor/hamlet-subtractor.${pkg}"
             mkdir -p "$PKG_DIR"
             cp "${d}/opam" "$PKG_DIR/opam"
             git add "$PKG_DIR/opam"
@@ -254,20 +257,20 @@ jobs:
           # Single-pair PRs keep the explicit form; multi-pair PRs use
           # the "(N packages)" form, matching dune/atd/ocurrent style.
           if [ "$COUNT" -eq 1 ]; then
-            TITLE="[new release] hamlet-lint (${versions[0]})"
+            TITLE="[new release] hamlet-subtractor (${versions[0]})"
           else
-            TITLE="[new release] hamlet-lint (${COUNT} packages)"
+            TITLE="[new release] hamlet-subtractor (${COUNT} packages)"
           fi
 
           # Body lists every pair so reviewers can see the full set
           # without expanding the diff.
-          BODY="Automated release of hamlet-lint:"$'\n'
+          BODY="Automated release of hamlet-subtractor:"$'\n'
           for v in "${versions[@]}"; do
-            BODY+="- hamlet-lint.${v}"$'\n'
+            BODY+="- hamlet-subtractor.${v}"$'\n'
           done
 
-          git -c user.name="hamlet-lint release bot" \
-              -c user.email="release@hamlet-lint" \
+          git -c user.name="hamlet-subtractor release bot" \
+              -c user.email="release@hamlet-subtractor" \
               commit -m "$TITLE"
           gh pr create \
             --repo ocaml/opam-repository \

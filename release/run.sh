@@ -16,14 +16,14 @@
 #
 # Idempotency. A pair is skipped if its package directory already
 # exists on ocaml/opam-repository, or if it is part of any open PR
-# touching packages/hamlet-lint/. The workflow's `plan` job repeats
+# touching packages/hamlet-subtractor/. The workflow's `plan` job repeats
 # the merged-state check upstream, so a stale dispatch self-corrects.
 # Stale tags from a failed run are a separate cleanup
 # (`git push origin :v<hamlet>-<ocaml>`, the tag uses `-` because
 # git refs forbid `~`).
 #
 # Requires: gh (authenticated, with read on ocaml/opam-repository and
-# workflow-dispatch on hamlet-org/hamlet-lint) and jq.
+# workflow-dispatch on hamlet-org/hamlet-subtractor) and jq.
 
 set -euo pipefail
 
@@ -49,7 +49,7 @@ is_published() {
   local pkg="$1"
   gh api \
       -H "Accept: application/vnd.github+json" \
-      "repos/ocaml/opam-repository/contents/packages/hamlet-lint/hamlet-lint.${pkg}" \
+      "repos/ocaml/opam-repository/contents/packages/hamlet-subtractor/hamlet-subtractor.${pkg}" \
       >/dev/null 2>&1
 }
 
@@ -59,12 +59,12 @@ is_published() {
 collect_in_flight_pkgs() {
   local prs pr
   prs=$(gh pr list --repo ocaml/opam-repository --state open \
-          --search "hamlet-lint in:title" \
+          --search "hamlet-subtractor in:title" \
           --json number --jq '.[].number')
   for pr in $prs; do
     gh pr view "$pr" --repo ocaml/opam-repository --json files \
       --jq '.files[].path' \
-      | sed -nE 's|^packages/hamlet-lint/hamlet-lint\.([^/]+)/opam$|\1|p'
+      | sed -nE 's|^packages/hamlet-subtractor/hamlet-subtractor\.([^/]+)/opam$|\1|p'
   done | sort -u
 }
 
