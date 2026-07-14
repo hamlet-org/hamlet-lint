@@ -1,0 +1,36 @@
+(executable
+ (name fast_pipeline)
+ (modules fast_pipeline)
+ (libraries hamlet)
+ (enabled_if
+  (= %{profile} automatic-propagation-negative))
+ (preprocess
+  (pps hamlet-subtractor.ppx)))
+
+(executables
+ (names
+  parameter_row
+  named_handler
+  user_or_pattern
+  partial_payload
+  non_refutation
+  non_last
+  wildcard_before
+  fake_owner
+  wrong_kind
+  propagate_r_alias
+  outside_universe
+  hidden_alias
+  grouped_requirement
+  external_no_cases
+  exhausted_warning)
+ (libraries hamlet automatic_propagation_external automatic_propagation_abstract automatic_propagation_no_cases)
+ (enabled_if
+  (= %{profile} automatic-propagation-negative))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(env
+ (_
+  (flags
+   (:standard -warn-error +11))))

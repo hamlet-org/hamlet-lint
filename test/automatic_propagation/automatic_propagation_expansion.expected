@@ -1,0 +1,209 @@
+case_error_local_direct match-1:
+match __input with
+| #Local_io.Errors.local_missing -> ((Hamlet.Combinators.return "missing")
+    [@merlin.loc ])
+| #Local_io.Errors.local_corrupt as error -> Hamlet.Combinators.fail error
+| #Local_io.Errors.local_denied as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_cross_pipe match-1:
+match __input with
+| #Automatic_propagation_external.Storage.Errors.storage_missing ->
+    ((Hamlet.Combinators.return "missing")[@merlin.loc ])
+| #Automatic_propagation_external.Storage.Errors.error as error ->
+    Automatic_propagation_external.Storage.Errors.Cases.dispatch
+      (({
+          (Automatic_propagation_external.Storage.Errors.Cases.propagate ()) with
+          Automatic_propagation_external.Storage.Errors.Cases.storage_missing =
+            (fun _ -> assert false)
+        })[@warning "-23"]) error
+| _ -> .
+
+case_error_cross_subset match-1:
+match __input with
+| #Automatic_propagation_external.Storage.Errors.storage_missing ->
+    ((Hamlet.Combinators.return "missing")[@merlin.loc ])
+| #Automatic_propagation_external.Storage.Errors.storage_timeout as error ->
+    Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_recovery_adds match-1:
+match __input with
+| #Local_io.Errors.local_missing ->
+    ((Hamlet.Combinators.fail `Recovery_error)[@merlin.loc ])
+| #Local_io.Errors.local_corrupt as error -> Hamlet.Combinators.fail error
+| #Local_io.Errors.local_denied as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_guarded match-1:
+match __input with
+| #Local_io.Errors.local_missing when ((false)[@merlin.loc ]) ->
+    ((Hamlet.Combinators.return "guarded")[@merlin.loc ])
+| #Local_io.Errors.local_corrupt -> ((Hamlet.Combinators.return "corrupt")
+    [@merlin.loc ])
+| #Local_io.Errors.local_denied as error -> Hamlet.Combinators.fail error
+| #Local_io.Errors.local_missing as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_exhausted match-1:
+match __input with
+| #Exact_errors.a -> ((Hamlet.Combinators.return "a")[@merlin.loc ])
+| #Exact_errors.b -> ((Hamlet.Combinators.return "b")[@merlin.loc ])
+| _ -> .
+| _ -> assert false
+
+case_error_function match-1:
+match __input with
+| #Local_io.Errors.local_denied -> ((Hamlet.Combinators.return "denied")
+    [@merlin.loc ])
+| #Local_io.Errors.local_corrupt as error -> Hamlet.Combinators.fail error
+| #Local_io.Errors.local_missing as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_dependent match-1:
+match __input with
+| #Local_io.Errors.local_missing -> ((Hamlet.Combinators.return "missing")
+    [@merlin.loc ])
+| #Local_io.Errors.local_corrupt as error -> Hamlet.Combinators.fail error
+| #Local_io.Errors.local_denied as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_dependent match-2:
+match __input with
+| #Local_io.Errors.local_corrupt -> ((Hamlet.Combinators.return "corrupt")
+    [@merlin.loc ])
+| #Local_io.Errors.local_denied as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_requirement_local_direct match-1:
+match __input with
+| #Local_logger.Tag.r as witness ->
+    ((Local_logger.Tag.give witness (module Local_logger_live))
+    [@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Local_clock.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_need match-1:
+match __input with
+| #Local_logger.Tag.r as witness -> ((Hamlet.Dispatch.need witness)
+    [@merlin.loc ])
+| #Local_clock.Tag.r as witness ->
+    ((Local_clock.Tag.give witness (module Local_clock_live))[@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_guarded match-1:
+match __input with
+| #Local_logger.Tag.r as witness when ((false)[@merlin.loc ]) ->
+    ((Local_logger.Tag.give witness (module Local_logger_live))
+    [@merlin.loc ])
+| #Local_clock.Tag.r as witness ->
+    ((Local_clock.Tag.give witness (module Local_clock_live))[@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Local_logger.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_cross_pipe match-1:
+match __input with
+| #Automatic_propagation_external.Logger.Tag.r as witness ->
+    ((Automatic_propagation_external.Logger.Tag.give witness (module
+        struct let log _ = Hamlet.Combinators.return () end))
+    [@merlin.loc ])
+| #Automatic_propagation_external.Clock.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_dependent match-1:
+match __input with
+| #Local_logger.Tag.r as witness ->
+    ((Local_logger.Tag.give witness (module Local_logger_live))
+    [@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Local_clock.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_dependent match-2:
+match __input with
+| #Local_clock.Tag.r as witness ->
+    ((Local_clock.Tag.give witness (module Local_clock_live))[@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_interleaved match-1:
+match __input with
+| #Mixed_errors.a -> ((Hamlet.Combinators.return "a")[@merlin.loc ])
+| `Mixed_b _ as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_interleaved match-2:
+match __input with
+| #Local_logger.Tag.r as witness ->
+    ((Local_logger.Tag.give witness (module Local_logger_live))
+    [@merlin.loc ])
+| #Local_clock.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_recovery_requirement match-1:
+match __input with
+| #Exact_errors.a ->
+    Hamlet.Combinators.summon ~loc:__POS__ Local_audit.Tag.key
+      Local_audit.Tag.tag
+| `Exact_b _ as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_recovery_requirement match-2:
+match __input with
+| #Local_audit.Tag.r as witness ->
+    ((Local_audit.Tag.give witness (module Local_audit_live))[@merlin.loc ])
+| _ -> .
+| _ -> assert false
+
+case_provision_error_then_catch match-1:
+match __input with
+| #Automatic_propagation_external.Provision.Tag.r as witness ->
+    ((Automatic_propagation_external.Provision.Tag.give witness (module Provision_live))
+    [@merlin.loc ])
+| _ -> .
+| _ -> assert false
+
+case_provision_error_then_catch match-2:
+match __input with
+| #Automatic_propagation_external.Provision.Errors.provision_fallback ->
+    ((Hamlet.Combinators.return "fallback")[@merlin.loc ])
+| #Automatic_propagation_external.Provision.Errors.error as error ->
+    Automatic_propagation_external.Provision.Errors.Cases.dispatch
+      (({
+          (Automatic_propagation_external.Provision.Errors.Cases.propagate ()) with
+          Automatic_propagation_external.Provision.Errors.Cases.provision_fallback =
+            (fun _ -> assert false)
+        })[@warning "-23"]) error
+| _ -> .
+
+case_linear_cross_cu match-1:
+match __input with
+| #Automatic_propagation_external.Linear.Errors.e1 -> ((Hamlet.Combinators.return ())
+    [@merlin.loc ])
+| #Automatic_propagation_external.Linear.Errors.e2 -> ((Hamlet.Combinators.return ())
+    [@merlin.loc ])
+| #Automatic_propagation_external.Linear.Errors.error as error ->
+    Automatic_propagation_external.Linear.Errors.Cases.dispatch
+      (({
+          (Automatic_propagation_external.Linear.Errors.Cases.propagate ()) with
+          Automatic_propagation_external.Linear.Errors.Cases.e1 = (fun _ -> assert false);
+          Automatic_propagation_external.Linear.Errors.Cases.e2 = (fun _ -> assert false)
+        })[@warning "-23"]) error
+| _ -> .
+
+case_error_wrapped match-1:
+match __input with
+| #Automatic_propagation_wrapped.Wrapped_fixture.Remote.Errors.first ->
+    ((Hamlet.Combinators.return "first")[@merlin.loc ])
+| #Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.error as error ->
+    Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.Cases.dispatch
+      (({
+          (Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.Cases.propagate
+             ()) with
+          Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.Cases.first =
+            (fun _ -> assert false)
+        })[@warning "-23"]) error
+| _ -> .

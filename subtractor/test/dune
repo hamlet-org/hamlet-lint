@@ -1,0 +1,84 @@
+(test
+ (name test_core)
+ (package hamlet-subtractor)
+ (libraries alcotest hamlet_subtractor_core))
+
+(library
+ (name subtractor_dep_fixture)
+ (package hamlet-subtractor)
+ (wrapped false)
+ (modules subtractor_dep_fixture))
+
+(test
+ (name hamlet_subtractor_private_test)
+ (package hamlet-subtractor)
+ (modules hamlet_subtractor_private_test)
+ (libraries
+  alcotest
+  compiler-libs.common
+  subtractor_dep_fixture
+  hamlet
+  hamlet_subtractor_core
+  hamlet_subtractor_engine
+  hamlet_subtractor_private
+  ppxlib
+  unix))
+
+(test
+ (name hamlet_subtractor_engine_test)
+ (package hamlet-subtractor)
+ (modules hamlet_subtractor_engine_test)
+ (libraries
+  alcotest
+  compiler-libs.common
+  hamlet_subtractor_core
+  hamlet_subtractor_engine
+  ppxlib))
+
+(test
+ (name hamlet_subtractor_ppx_test)
+ (package hamlet-subtractor)
+ (modules hamlet_subtractor_ppx_test)
+ (libraries
+  alcotest
+  compiler-libs.common
+  hamlet
+  hamlet_subtractor_core
+  hamlet_subtractor_engine
+  hamlet_subtractor_ppx
+  hamlet_subtractor_private
+  hamlet_subtractor_resolver_runtime
+  ppx_hamlet
+  ppxlib)
+ (deps
+  (package hamlet-subtractor)))
+
+(executable
+ (name hamlet_subtractor_resolver_peer)
+ (modules hamlet_subtractor_resolver_peer)
+ (libraries hamlet_subtractor_core hamlet_subtractor_engine unix yojson))
+
+(rule
+ (targets hamlet_subtractor_resolver_peer_ready.ml)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let path = \"%{exe:hamlet_subtractor_resolver_peer.exe}\""))))
+
+(test
+ (name hamlet_subtractor_resolver_test)
+ (package hamlet-subtractor)
+ (modules hamlet_subtractor_resolver_peer_ready hamlet_subtractor_resolver_test)
+ (libraries
+  alcotest
+  compiler-libs.common
+  hamlet
+  hamlet_test_services
+  hamlet_subtractor_core
+  hamlet_subtractor_engine
+  hamlet_subtractor_private
+  hamlet_subtractor_resolver_runtime
+  ppxlib
+  unix)
+ (deps
+  (package hamlet-subtractor)))

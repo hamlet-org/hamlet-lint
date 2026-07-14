@@ -1,0 +1,113 @@
+(library
+ (name automatic_propagation_external)
+ (wrapped false)
+ (modules automatic_propagation_external)
+ (libraries hamlet)
+ (preprocess
+  (pps ppx_hamlet)))
+
+(library
+ (name automatic_propagation_abstract)
+ (wrapped false)
+ (modules automatic_propagation_abstract)
+ (libraries hamlet automatic_propagation_external))
+
+(library
+ (name automatic_propagation_no_cases)
+ (wrapped false)
+ (modules no_cases_fixture)
+ (libraries hamlet)
+ (preprocess
+  (pps ppx_hamlet)))
+
+(library
+ (name automatic_propagation_wrapped)
+ (modules wrapped_fixture)
+ (libraries hamlet)
+ (preprocess
+  (pps ppx_hamlet)))
+
+(library
+ (name automatic_propagation_positive)
+ (wrapped false)
+ (modules automatic_propagation_positive)
+ (libraries hamlet automatic_propagation_external automatic_propagation_wrapped)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(library
+ (name automatic_propagation_type_reference)
+ (wrapped false)
+ (modules automatic_propagation_type_reference)
+ (libraries hamlet automatic_propagation_external)
+ (preprocess
+  (pps ppx_hamlet)))
+
+(executable
+ (name automatic_propagation_cmt_dump)
+ (modules automatic_propagation_cmt_dump)
+ (libraries compiler-libs.common))
+
+(executable
+ (name automatic_propagation_expansion_dump)
+ (modules automatic_propagation_expansion_dump)
+ (libraries compiler-libs.common))
+
+(executable
+ (name automatic_propagation_merlin_source)
+ (modules automatic_propagation_merlin_source)
+ (libraries yojson))
+
+(executable
+ (name automatic_propagation_merlin_type)
+ (modules automatic_propagation_merlin_type)
+ (libraries yojson))
+
+(executable
+ (name automatic_propagation_lsp_client)
+ (modules automatic_propagation_lsp_client)
+ (libraries unix yojson))
+
+(test
+ (name automatic_propagation_runtime_test)
+ (modules automatic_propagation_runtime_test)
+ (libraries hamlet automatic_propagation_external alcotest)
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(rule
+ (targets automatic_propagation_types.actual)
+ (deps .automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ./automatic_propagation_cmt_dump.exe %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff automatic_propagation_types.expected automatic_propagation_types.actual)))
+
+(rule
+ (alias automatic-propagation-lsp)
+ (deps
+  .automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt
+  automatic_propagation_positive.ml
+  automatic_propagation_lsp_client.exe)
+ (action
+  (chdir
+   %{workspace_root}
+   (run
+    %{exe:automatic_propagation_lsp_client.exe}
+    %{workspace_root}
+    %{workspace_root}/test/automatic_propagation/automatic_propagation_positive.ml
+    case_error_cross_subset))))
+
+(alias
+ (name automatic-propagation-acceptance)
+ (deps
+  .automatic_propagation_type_reference.objs/byte/automatic_propagation_type_reference.cmt
+  (alias runtest)
+  (alias automatic-propagation-lsp)))
