@@ -5,7 +5,7 @@
 # this repo.
 #
 # Usage:
-#   ./release/run.sh <hamlet-version>
+#   ./release/run.sh <hamlet-version> [hamlet-git-ref]
 #
 # Policy: only the latest hamlet is supported on new OCaml patches.
 # When a new OCaml patch is added to OCAML_PATCHES, re-run this script
@@ -27,8 +27,8 @@
 
 set -euo pipefail
 
-if [ "$#" -ne 1 ]; then
-  echo "usage: $0 <hamlet-version>" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  echo "usage: $0 <hamlet-version> [hamlet-git-ref]" >&2
   exit 2
 fi
 
@@ -37,12 +37,47 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${here}/versions.sh"
 
 hamlets=("$1")
+hamlet_git_url="${HAMLET_GIT_URL:-https://github.com/hamlet-org/hamlet.git}"
+hamlet_git_ref="${2:-${HAMLET_GIT_REF:-automatic-propagation-elaboration}}"
 mapfile -t patches < <(all_patches)
 
 if [ "${#patches[@]}" -eq 0 ]; then
   echo "release/versions.sh defines no OCaml patches; aborting." >&2
   exit 2
 fi
+
+is_git_commit() {
+  [[ "$1" =~ ^[0-9a-f]{40}$ ]]
+}
+
+resolve_hamlet_commit() {
+  local ref="$1" resolved
+
+  if is_git_commit "$ref"; then
+    printf '%s\n' "$ref"
+    return
+  fi
+
+  resolved="$(git ls-remote "$hamlet_git_url" "${ref}^{}" \
+    | awk '$2 ~ /\\^\\{\\}$/ { print $1; exit }')"
+  if [ -z "$resolved" ]; then
+    resolved="$(git ls-remote --refs "$hamlet_git_url" "$ref" \
+      | awk 'NR == 1 { print $1; exit }')"
+  fi
+
+  if ! is_git_commit "$resolved"; then
+    cat >&2 <<DIAG
+could not resolve Hamlet ref '${ref}' to an immutable commit from
+${hamlet_git_url}. Supply a reachable branch, tag, or 40-character commit.
+DIAG
+    exit 2
+  fi
+
+  printf '%s\n' "$resolved"
+}
+
+hamlet_git_commit="$(resolve_hamlet_commit "$hamlet_git_ref")"
+echo "Hamlet release source: ${hamlet_git_url}#${hamlet_git_commit}"
 
 # Merged on opam-repository? One contents API call per pair.
 is_published() {
@@ -99,8 +134,12 @@ for hamlet in "${hamlets[@]}"; do
       continue
     fi
 
-    pairs_json=$(jq -c --arg h "$hamlet" --arg o "$ocaml" \
-                   '. + [{"hamlet":$h,"ocaml":$o}]' <<< "$pairs_json")
+    pairs_json=$(jq -c \
+                   --arg h "$hamlet" \
+                   --arg o "$ocaml" \
+                   --arg c "$hamlet_git_commit" \
+                   '. + [{"hamlet":$h,"ocaml":$o,"hamlet_git_commit":$c}]' \
+                   <<< "$pairs_json")
     queued=$((queued + 1))
     echo "queue ${pkg}"
   done

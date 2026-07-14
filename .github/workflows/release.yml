@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       pairs:
-        description: 'JSON array of pairs, e.g. [{"hamlet":"0.1.0","ocaml":"5.5.0"}]'
+        description: 'JSON array, e.g. [{"hamlet":"0.1.0","ocaml":"5.5.0","hamlet_git_commit":"0123456789abcdef0123456789abcdef01234567"}]'
         required: true
         type: string
 
@@ -23,9 +23,8 @@ permissions:
 
 env:
   # Hamlet remains outside opam while automatic propagation is introduced.
-  # Keep this ref aligned with the Git pins in the generated opam metadata.
+  # Each input pair supplies its immutable source commit.
   HAMLET_GIT_URL: https://github.com/hamlet-org/hamlet.git
-  HAMLET_GIT_REF: automatic-propagation-elaboration
 
 jobs:
   # Re-filter the input list against the current state of opam-repository
@@ -44,10 +43,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PAIRS_IN: ${{ inputs.pairs }}
         run: |
+          if ! jq -e '
+            type == "array" and
+            all(.[];
+              type == "object" and
+              (.hamlet | type == "string" and length > 0) and
+              (.ocaml | type == "string" and length > 0) and
+              (.hamlet_git_commit | type == "string" and test("^[0-9a-f]{40}$")))
+          ' <<< "$PAIRS_IN" >/dev/null; then
+            echo "pairs must contain hamlet, ocaml, and a 40-character lowercase hamlet_git_commit" >&2
+            exit 2
+          fi
+
           out='[]'
           while read -r pair; do
             hamlet=$(jq -r '.hamlet' <<< "$pair")
             ocaml=$(jq -r '.ocaml' <<< "$pair")
+            hamlet_git_commit=$(jq -r '.hamlet_git_commit' <<< "$pair")
             pkg="${hamlet}~${ocaml}"
             if gh api \
                  -H "Accept: application/vnd.github+json" \
@@ -56,8 +68,12 @@ jobs:
               echo "skip ${pkg}: already merged on ocaml/opam-repository"
             else
               echo "keep ${pkg}"
-              out=$(jq -c --arg h "$hamlet" --arg o "$ocaml" \
-                      '. + [{"hamlet":$h,"ocaml":$o}]' <<< "$out")
+              out=$(jq -c \
+                      --arg h "$hamlet" \
+                      --arg o "$ocaml" \
+                      --arg c "$hamlet_git_commit" \
+                      '. + [{"hamlet":$h,"ocaml":$o,"hamlet_git_commit":$c}]' \
+                      <<< "$out")
             fi
           done < <(jq -c '.[]' <<< "$PAIRS_IN")
           count=$(jq 'length' <<< "$out")
@@ -78,6 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAMLET_VERSION: ${{ matrix.pair.hamlet }}
+      HAMLET_GIT_COMMIT: ${{ matrix.pair.hamlet_git_commit }}
       OCAML_TARGET: ${{ matrix.pair.ocaml }}
       # Opam package version uses the tilde convention for the
       # OCaml-target suffix (idiomatic on opam-repository, see
@@ -100,7 +117,11 @@ jobs:
 
       - name: Install matching Hamlet source
         run: |
-          source="git+${HAMLET_GIT_URL}#${HAMLET_GIT_REF}"
+          if ! [[ "$HAMLET_GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release requires an immutable 40-character Hamlet commit" >&2
+            exit 2
+          fi
+          source="git+${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
           opam pin add -y --no-action hamlet "$source"
           opam pin add -y --no-action ppx_hamlet "$source"
           opam install -y hamlet ppx_hamlet
@@ -179,7 +200,7 @@ jobs:
           else
             gh release create "$TAG_NAME" "${{ steps.archive.outputs.tarball }}" \
               --title "hamlet-subtractor ${PKG_VERSION}" \
-              --notes "Packaging release for hamlet ${HAMLET_VERSION} on OCaml ${OCAML_TARGET}."
+              --notes "Packaging release for hamlet ${HAMLET_VERSION} at ${HAMLET_GIT_COMMIT} on OCaml ${OCAML_TARGET}."
           fi
           TARBALL_URL=$(gh release view "$TAG_NAME" --json assets -q '.assets[0].url')
           echo "TARBALL_URL=$TARBALL_URL" >> "$GITHUB_ENV"
@@ -190,7 +211,7 @@ jobs:
           OPAM_OUT="rendered/${PKG_VERSION}/opam"
           sed \
             -e "s|%%VERSION%%|${PKG_VERSION}|g" \
-            -e "s|%%HAMLET_VERSION%%|${HAMLET_VERSION}|g" \
+            -e "s|%%HAMLET_GIT_COMMIT%%|${HAMLET_GIT_COMMIT}|g" \
             -e "s|%%OCAML_TARGET%%|${OCAML_TARGET}|g" \
             -e "s|%%TARBALL_URL%%|${TARBALL_URL}|g" \
             -e "s|%%CHECKSUM_SHA256%%|${{ steps.archive.outputs.sha256 }}|g" \

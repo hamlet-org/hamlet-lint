@@ -72,10 +72,12 @@ examples, diagnostics, and the explicit fallback.
 ## Compatibility and releases
 
 The resolver reads OCaml compiler Typedtree APIs. Each package targets one
-exact OCaml patch and pins `hamlet` with `ppx_hamlet` from one GitHub source
-ref. Compatibility starts at OCaml 5.5.0. The current matrix contains
-OCaml 5.5.0; support for later compiler patches is added with an explicit
-compatibility layer and matching CI image.
+exact OCaml patch and pins `hamlet` with `ppx_hamlet` from one immutable
+GitHub commit. Development uses the current branch, but the release dispatcher
+resolves that branch once and rejects any non-commit release input before it
+generates opam metadata. Compatibility starts at OCaml 5.5.0. The current
+matrix contains OCaml 5.5.0; support for later compiler patches is added with
+an explicit compatibility layer and matching CI image.
 
 There is one forward-moving source tree. While Hamlet is installed from Git,
 the paired pins ensure the resolver is never combined with an unrelated Hamlet
