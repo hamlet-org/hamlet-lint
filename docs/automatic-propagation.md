@@ -50,9 +50,9 @@ from GitHub before configuring Dune:
 
 ```sh
 opam pin add --yes --no-action hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#automatic-propagation-elaboration"
+  "git+https://github.com/hamlet-org/hamlet.git#main"
 opam pin add --yes --no-action ppx_hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#automatic-propagation-elaboration"
+  "git+https://github.com/hamlet-org/hamlet.git#main"
 opam pin add --yes hamlet-subtractor \
   "git+https://github.com/hamlet-org/hamlet-subtractor.git#automatic-propagation-subtractor"
 ```

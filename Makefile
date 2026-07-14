@@ -20,7 +20,7 @@ DUNE := opam exec -- dune
 PROMOTE ?= 0
 OCAML_VERSION ?= 5.5.0
 HAMLET_GIT_URL ?= https://github.com/hamlet-org/hamlet.git
-HAMLET_GIT_REF ?= automatic-propagation-elaboration
+HAMLET_GIT_REF ?= main
 
 .PHONY: all setup deps build test fmt fmt-fix doc opam clean promote watch help installed-consumer installed-consumer-keep _maybe_promote
 .DEFAULT_GOAL := help

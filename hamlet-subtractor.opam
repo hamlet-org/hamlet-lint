@@ -46,7 +46,7 @@ x-maintenance-intent: ["(latest)"]
 # dependency graph without a separately managed local checkout.
 pin-depends: [
   [ "hamlet.dev"
-    "git+https://github.com/hamlet-org/hamlet.git#automatic-propagation-elaboration" ]
+    "git+https://github.com/hamlet-org/hamlet.git#main" ]
   [ "ppx_hamlet.dev"
-    "git+https://github.com/hamlet-org/hamlet.git#automatic-propagation-elaboration" ]
+    "git+https://github.com/hamlet-org/hamlet.git#main" ]
 ]

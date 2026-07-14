@@ -39,7 +39,7 @@ source "${here}/versions.sh"
 
 hamlets=("$1")
 hamlet_git_url="${HAMLET_GIT_URL:-https://github.com/hamlet-org/hamlet.git}"
-hamlet_git_ref="${2:-${HAMLET_GIT_REF:-automatic-propagation-elaboration}}"
+hamlet_git_ref="${2:-${HAMLET_GIT_REF:-main}}"
 mapfile -t patches < <(all_patches)
 
 if [ "${#patches[@]}" -eq 0 ]; then
