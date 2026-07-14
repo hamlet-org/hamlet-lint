@@ -63,11 +63,10 @@ open Typedtree
 module Observation = Hamlet_subtractor_core.Observation
 module Kind = Hamlet_subtractor_core.Kind
 
-(** Args helpers : local copies of {!Walker.extract_upstream} /
-    {!Walker.extract_handler}, kept here to avoid a circular dependency between
-    [upstream.ml] (which now needs to inspect arg lists for recursion) and
-    [walker.ml] (which uses [upstream.ml]). The walker delegates to these in
-    {!Walker.try_candidate} too.
+(** Args helpers : local copies of [extract_upstream] and [extract_handler],
+    kept here to avoid a circular dependency between [upstream.ml] (which now
+    needs to inspect arg lists for recursion) and [walker.ml] (which uses
+    [upstream.ml]). The candidate discovery code delegates to these too.
 
     Both helpers ignore [Omitted] arg slots : those represent the
     not-yet-provided positions of a partial application, and the [unstage]
