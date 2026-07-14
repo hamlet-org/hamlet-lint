@@ -24,7 +24,11 @@
   grouped_requirement
   external_no_cases
   exhausted_warning)
- (libraries hamlet automatic_propagation_external automatic_propagation_abstract automatic_propagation_no_cases)
+ (libraries
+  hamlet
+  automatic_propagation_external
+  automatic_propagation_abstract
+  automatic_propagation_no_cases)
  (enabled_if
   (= %{profile} automatic-propagation-negative))
  (preprocess

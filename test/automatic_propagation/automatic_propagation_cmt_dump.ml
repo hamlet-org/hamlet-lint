@@ -130,7 +130,8 @@ let dump_structure cmt structure =
     structure.Typedtree.str_type
 
 let () =
-  if Array.length Sys.argv <> 2 then invalid_arg "usage: automatic_propagation_cmt_dump CMT";
+  if Array.length Sys.argv <> 2 then
+    invalid_arg "usage: automatic_propagation_cmt_dump CMT";
   let cmt = Cmt_format.read_cmt Sys.argv.(1) in
   match cmt.cmt_annots with
   | Implementation structure -> dump_structure cmt structure

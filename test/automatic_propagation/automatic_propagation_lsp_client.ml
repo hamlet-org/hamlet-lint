@@ -484,8 +484,12 @@ let run root source binding =
   let root_uri = uri_of_path root in
   let uri = uri_of_path source in
   let saved = read_file source in
-  let saved_pattern = "#Automatic_propagation_external.Storage.Errors.storage_missing" in
-  let unsaved_pattern = "#Automatic_propagation_external.Storage.Errors.storage_timeout" in
+  let saved_pattern =
+    "#Automatic_propagation_external.Storage.Errors.storage_missing"
+  in
+  let unsaved_pattern =
+    "#Automatic_propagation_external.Storage.Errors.storage_timeout"
+  in
   let unsaved, replacements =
     replace_all ~pattern:saved_pattern ~replacement:unsaved_pattern saved
   in

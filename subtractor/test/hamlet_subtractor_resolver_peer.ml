@@ -13,7 +13,8 @@ let read_all () =
   loop ()
 
 let write payload =
-  Hamlet_subtractor_resolver_protocol.encode_frame payload |> output_string stdout;
+  Hamlet_subtractor_resolver_protocol.encode_frame payload
+  |> output_string stdout;
   flush stdout
 
 let response payload =

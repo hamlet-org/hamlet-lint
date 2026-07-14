@@ -31,7 +31,10 @@
  (name automatic_propagation_positive)
  (wrapped false)
  (modules automatic_propagation_positive)
- (libraries hamlet automatic_propagation_external automatic_propagation_wrapped)
+ (libraries
+  hamlet
+  automatic_propagation_external
+  automatic_propagation_wrapped)
  (preprocessor_deps
   (package hamlet-subtractor))
  (preprocess
@@ -79,7 +82,8 @@
 
 (rule
  (targets automatic_propagation_types.actual)
- (deps .automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt)
+ (deps
+  .automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt)
  (action
   (with-stdout-to
    %{targets}
@@ -88,7 +92,9 @@
 (rule
  (alias runtest)
  (action
-  (diff automatic_propagation_types.expected automatic_propagation_types.actual)))
+  (diff
+   automatic_propagation_types.expected
+   automatic_propagation_types.actual)))
 
 (rule
  (alias automatic-propagation-lsp)

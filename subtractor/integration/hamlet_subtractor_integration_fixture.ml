@@ -96,7 +96,10 @@ let exhausted_requirement : (unit, never, never) t =
 [@@warning "-11"]
 
 let cross_cu_error choose :
-    (unit, Hamlet_subtractor_cross_cu_fixture.Remote.Errors.write_error, never) t =
+    ( unit,
+      Hamlet_subtractor_cross_cu_fixture.Remote.Errors.write_error,
+      never )
+    t =
   Combinators.catch (Hamlet_subtractor_cross_cu_fixture.source choose)
     ~handler:(fun error ->
       match error with

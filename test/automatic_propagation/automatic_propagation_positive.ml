@@ -225,7 +225,8 @@ let case_provision_error_then_catch =
   |> Combinators.provide ~handler:(fun requirement ->
       (match requirement with
       | #Automatic_propagation_external.Provision.Tag.r as witness ->
-          Automatic_propagation_external.Provision.Tag.give witness (module Provision_live)
+          Automatic_propagation_external.Provision.Tag.give witness
+            (module Provision_live)
       | [%hamlet.propagate_s.auto] -> .)
       [@warning "-11"])
   |> Combinators.catch ~handler:(fun error ->
@@ -238,8 +239,10 @@ let case_linear_cross_cu =
   Automatic_propagation_external.linear_program
   |> Combinators.catch ~handler:(fun error ->
       match error with
-      | #Automatic_propagation_external.Linear.Errors.e1 -> Hamlet.Combinators.return ()
-      | #Automatic_propagation_external.Linear.Errors.e2 -> Hamlet.Combinators.return ()
+      | #Automatic_propagation_external.Linear.Errors.e1 ->
+          Hamlet.Combinators.return ()
+      | #Automatic_propagation_external.Linear.Errors.e2 ->
+          Hamlet.Combinators.return ()
       | [%hamlet.propagate_e.auto] -> .)
 
 let case_error_wrapped =

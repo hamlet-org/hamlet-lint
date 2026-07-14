@@ -19,9 +19,13 @@ let expect_ok name expected eff =
 
 let cross_cu_error_propagates () =
   let source :
-      (string, Automatic_propagation_external.Storage.Errors.error, Hamlet.never) Hamlet.t =
+      ( string,
+        Automatic_propagation_external.Storage.Errors.error,
+        Hamlet.never )
+      Hamlet.t =
     Hamlet.Combinators.fail
-      (`Storage_timeout "slow" : Automatic_propagation_external.Storage.Errors.error)
+      (`Storage_timeout "slow"
+        : Automatic_propagation_external.Storage.Errors.error)
   in
   source
   |> Combinators.catch ~handler:(fun error ->
@@ -37,9 +41,13 @@ let cross_cu_error_propagates () =
 
 let recovery_error_is_preserved () =
   let source :
-      (string, Automatic_propagation_external.Storage.Errors.error, Hamlet.never) Hamlet.t =
+      ( string,
+        Automatic_propagation_external.Storage.Errors.error,
+        Hamlet.never )
+      Hamlet.t =
     Hamlet.Combinators.fail
-      (`Storage_missing "gone" : Automatic_propagation_external.Storage.Errors.error)
+      (`Storage_missing "gone"
+        : Automatic_propagation_external.Storage.Errors.error)
   in
   source
   |> Combinators.catch ~handler:(fun error ->
@@ -59,12 +67,14 @@ let requirements_give_and_forward () =
   |> Combinators.provide ~handler:(fun requirement ->
       match requirement with
       | #Automatic_propagation_external.Logger.Tag.r as witness ->
-          Automatic_propagation_external.Logger.Tag.give witness (module Logger_live)
+          Automatic_propagation_external.Logger.Tag.give witness
+            (module Logger_live)
       | [%hamlet.propagate_s.auto] -> .)
   |> Combinators.provide ~handler:(fun requirement ->
       match requirement with
       | #Automatic_propagation_external.Clock.Tag.r as witness ->
-          Automatic_propagation_external.Clock.Tag.give witness (module Clock_live))
+          Automatic_propagation_external.Clock.Tag.give witness
+            (module Clock_live))
   |> expect_ok "give and generated need" "ready"
 
 let explicit_need_is_preserved () =
@@ -74,13 +84,15 @@ let explicit_need_is_preserved () =
       | #Automatic_propagation_external.Logger.Tag.r as witness ->
           Hamlet.Dispatch.need witness
       | #Automatic_propagation_external.Clock.Tag.r as witness ->
-          Automatic_propagation_external.Clock.Tag.give witness (module Clock_live)
+          Automatic_propagation_external.Clock.Tag.give witness
+            (module Clock_live)
       | [%hamlet.propagate_s.auto] -> .)
       [@warning "-11"])
   |> Combinators.provide ~handler:(fun requirement ->
       match requirement with
       | #Automatic_propagation_external.Logger.Tag.r as witness ->
-          Automatic_propagation_external.Logger.Tag.give witness (module Logger_live))
+          Automatic_propagation_external.Logger.Tag.give witness
+            (module Logger_live))
   |> expect_ok "explicit need" "ready"
 
 let guarded_requirement_is_forwarded () =
@@ -88,14 +100,17 @@ let guarded_requirement_is_forwarded () =
   |> Combinators.provide ~handler:(fun requirement ->
       match requirement with
       | #Automatic_propagation_external.Logger.Tag.r as witness when false ->
-          Automatic_propagation_external.Logger.Tag.give witness (module Logger_live)
+          Automatic_propagation_external.Logger.Tag.give witness
+            (module Logger_live)
       | #Automatic_propagation_external.Clock.Tag.r as witness ->
-          Automatic_propagation_external.Clock.Tag.give witness (module Clock_live)
+          Automatic_propagation_external.Clock.Tag.give witness
+            (module Clock_live)
       | [%hamlet.propagate_s.auto] -> .)
   |> Combinators.provide ~handler:(fun requirement ->
       match requirement with
       | #Automatic_propagation_external.Logger.Tag.r as witness ->
-          Automatic_propagation_external.Logger.Tag.give witness (module Logger_live))
+          Automatic_propagation_external.Logger.Tag.give witness
+            (module Logger_live))
   |> expect_ok "guarded requirement" "ready"
 
 let provision_error_crosses_provide () =
@@ -103,7 +118,8 @@ let provision_error_crosses_provide () =
   |> Combinators.provide ~handler:(fun requirement ->
       (match requirement with
       | #Automatic_propagation_external.Provision.Tag.r as witness ->
-          Automatic_propagation_external.Provision.Tag.give witness (module Provision_live)
+          Automatic_propagation_external.Provision.Tag.give witness
+            (module Provision_live)
       | [%hamlet.propagate_s.auto] -> .)
       [@warning "-11"])
   |> Combinators.catch ~handler:(fun error ->
@@ -117,9 +133,13 @@ let provision_error_crosses_provide () =
 
 let dependent_error_markers () =
   let source :
-      (string, Automatic_propagation_external.Storage.Errors.error, Hamlet.never) Hamlet.t =
+      ( string,
+        Automatic_propagation_external.Storage.Errors.error,
+        Hamlet.never )
+      Hamlet.t =
     Hamlet.Combinators.fail
-      (`Storage_corrupt "bad" : Automatic_propagation_external.Storage.Errors.error)
+      (`Storage_corrupt "bad"
+        : Automatic_propagation_external.Storage.Errors.error)
   in
   source
   |> Combinators.catch ~handler:(fun error ->

@@ -97,10 +97,12 @@ let cases_fixture () =
   let third = cases_leaf "third_error" "Third" "third_error" in
   let fields =
     [
-      Hamlet_subtractor_catalogue.{ name = "first_error"; leaf = Leaf.identity first };
+      Hamlet_subtractor_catalogue.
+        { name = "first_error"; leaf = Leaf.identity first };
       Hamlet_subtractor_catalogue.
         { name = "second_error"; leaf = Leaf.identity second };
-      Hamlet_subtractor_catalogue.{ name = "third_error"; leaf = Leaf.identity third };
+      Hamlet_subtractor_catalogue.
+        { name = "third_error"; leaf = Leaf.identity third };
     ]
   in
   let catalogue =
@@ -115,7 +117,8 @@ let generated ?(catalogues = []) residual =
   |> get_ok "generation"
 
 let generated_at ?(catalogues = []) loc residual =
-  Hamlet_subtractor_generator.cases ~loc ~catalogues residual |> get_ok "generation"
+  Hamlet_subtractor_generator.cases ~loc ~catalogues residual
+  |> get_ok "generation"
 
 let test_position offset =
   {
@@ -369,7 +372,8 @@ let test_resolver_catalogue_expansion_parity () =
     |> get_ok "parity decode"
   in
   let resolver_catalogues =
-    Protocol.catalogues response |> List.map Hamlet_subtractor_catalogue.of_protocol
+    Protocol.catalogues response
+    |> List.map Hamlet_subtractor_catalogue.of_protocol
   in
   let resolver_calculation =
     match Protocol.results response with
@@ -504,7 +508,9 @@ let test_certificate_type_materialization () =
       ~requirements:(Effect_certificate.exact requirements)
     |> get_ok "materialized certificate"
   in
-  let resolved = Hamlet_subtractor_engine.{ residual = calculation; certificate } in
+  let resolved =
+    Hamlet_subtractor_engine.{ residual = calculation; certificate }
+  in
   let output =
     owner_source ~user_attribute:true "e:certificate-types"
     |> replace_resolved ~catalogues:[ catalogue ] marker resolved
@@ -604,13 +610,16 @@ let test_upstream_certificate_materialization () =
            (proof Kind.Requirement (Residual.output calculation)))
     |> get_ok "upstream certificate"
   in
-  let resolved = Hamlet_subtractor_engine.{ residual = calculation; certificate } in
+  let resolved =
+    Hamlet_subtractor_engine.{ residual = calculation; certificate }
+  in
   let source =
     "let result =\n\
      ((consume\n\
      (input [@hamlet.subtractor.upstream.v1 \"s:upstream-certificate\"])\n\
      (match requirement with\n\
-     | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:upstream-certificate\"])))\n\
+     | _ -> (assert false [@hamlet.subtractor.marker.v1 \
+     \"s:upstream-certificate\"])))\n\
      [@hamlet.subtractor.owner.v1 \"s:upstream-certificate\"])"
   in
   let output =
@@ -745,7 +754,9 @@ let test_replacement_preserves_user_cases_and_strips_probe_attributes () =
       inherit Ast_traverse.iter as super
 
       method! attribute attribute =
-        if String.starts_with ~prefix:"hamlet.subtractor." attribute.attr_name.txt
+        if
+          String.starts_with ~prefix:"hamlet.subtractor."
+            attribute.attr_name.txt
         then probe_attributes := attribute.attr_name.txt :: !probe_attributes;
         super#attribute attribute
 
@@ -817,7 +828,9 @@ let test_replacement_requires_exactly_one_upstream () =
   in
   let missing =
     Printf.sprintf
-      "let handle value =\n((%s)\n[@hamlet.subtractor.owner.v1 \"e:upstream-count\"])"
+      "let handle value =\n\
+       ((%s)\n\
+       [@hamlet.subtractor.owner.v1 \"e:upstream-count\"])"
       marker_case
   in
   (match replace missing with
@@ -831,7 +844,8 @@ let test_replacement_requires_exactly_one_upstream () =
        ((match\n\
        (value [@hamlet.subtractor.upstream.v1 \"e:upstream-count\"])\n\
        with\n\
-       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"e:upstream-count\"]))\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \
+       \"e:upstream-count\"]))\n\
        [@hamlet.subtractor.upstream.v1 \"e:upstream-count\"]\n\
        [@hamlet.subtractor.owner.v1 \"e:upstream-count\"])"
   in
@@ -874,10 +888,10 @@ let resolver_request marker =
   in
   Protocol.request ~request_id:"resolver-request"
     ~source_file:"resolver_test.ml" ~tool_name:"ocamlopt" ~probe_ast
-    ~probe_unit:(Protocol.Synthetic_unit "Hamlet_subtractor_probe_test") ~tool_context
-    ~context_fingerprint:"context" ~include_dirs:[] ~hidden_include_dirs:[]
-    ~visible_paths:[] ~hidden_paths:[] ~opens:[] ~package_mode:Standalone
-    ~compiler_flags ~expected_markers:[ marker ]
+    ~probe_unit:(Protocol.Synthetic_unit "Hamlet_subtractor_probe_test")
+    ~tool_context ~context_fingerprint:"context" ~include_dirs:[]
+    ~hidden_include_dirs:[] ~visible_paths:[] ~hidden_paths:[] ~opens:[]
+    ~package_mode:Standalone ~compiler_flags ~expected_markers:[ marker ]
   |> get_ok "resolver request"
 
 let test_resolver_protocol_framing_and_correlation () =
@@ -905,8 +919,8 @@ let test_resolver_protocol_framing_and_correlation () =
     |> Hamlet_subtractor_resolver_protocol.encode_frame
   in
   let output =
-    Hamlet_subtractor_resolver_protocol.handle ~max_request:4096 ~max_response:4096
-      ~resolve framed
+    Hamlet_subtractor_resolver_protocol.handle ~max_request:4096
+      ~max_response:4096 ~resolve framed
     |> get_ok "resolver frame"
   in
   Hamlet_subtractor_resolver_protocol.decode_frame ~max_payload:4096 output
@@ -914,8 +928,8 @@ let test_resolver_protocol_framing_and_correlation () =
   |> ignore;
   let expect_error label input =
     match
-      Hamlet_subtractor_resolver_protocol.handle ~max_request:4096 ~max_response:4096
-        ~resolve input
+      Hamlet_subtractor_resolver_protocol.handle ~max_request:4096
+        ~max_response:4096 ~resolve input
     with
     | Error _ -> ()
     | Ok _ -> Alcotest.fail (label ^ " unexpectedly succeeded")
@@ -938,8 +952,8 @@ let test_resolver_protocol_framing_and_correlation () =
     |> fun response -> Ok response
   in
   match
-    Hamlet_subtractor_resolver_protocol.handle ~max_request:4096 ~max_response:4096
-      ~resolve:wrong_context framed
+    Hamlet_subtractor_resolver_protocol.handle ~max_request:4096
+      ~max_response:4096 ~resolve:wrong_context framed
   with
   | Error
       (Hamlet_subtractor_resolver_protocol.Correlation

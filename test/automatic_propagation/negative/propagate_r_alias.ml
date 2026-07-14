@@ -7,6 +7,7 @@ let result =
     ~handler:(fun requirement ->
       match requirement with
       | #Automatic_propagation_external.Logger.Tag.r as witness ->
-          Automatic_propagation_external.Logger.Tag.give witness (failwith "logger")
+          Automatic_propagation_external.Logger.Tag.give witness
+            (failwith "logger")
       | [%hamlet.propagate_r.auto] -> .)
     source

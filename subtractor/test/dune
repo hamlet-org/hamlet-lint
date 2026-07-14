@@ -1,6 +1,7 @@
 (test
  (name test_core)
  (package hamlet-subtractor)
+ (modules test_core)
  (libraries alcotest hamlet_subtractor_core))
 
 (library
@@ -68,7 +69,9 @@
 (test
  (name hamlet_subtractor_resolver_test)
  (package hamlet-subtractor)
- (modules hamlet_subtractor_resolver_peer_ready hamlet_subtractor_resolver_test)
+ (modules
+  hamlet_subtractor_resolver_peer_ready
+  hamlet_subtractor_resolver_test)
  (libraries
   alcotest
   compiler-libs.common

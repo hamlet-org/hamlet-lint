@@ -721,8 +721,8 @@ let request expected_markers context_fingerprint =
   in
   Protocol.request ~request_id:"request-id" ~source_file:"src/example.ml"
     ~tool_name:"ocamlopt" ~probe_ast
-    ~probe_unit:(Protocol.Synthetic_unit "Hamlet_subtractor_probe_test") ~tool_context
-    ~context_fingerprint ~include_dirs:[ "src" ]
+    ~probe_unit:(Protocol.Synthetic_unit "Hamlet_subtractor_probe_test")
+    ~tool_context ~context_fingerprint ~include_dirs:[ "src" ]
     ~hidden_include_dirs:[ "private" ]
     ~visible_paths:[ "_build/default/lib"; "/stdlib" ]
     ~hidden_paths:[ "_build/default/.private" ]
@@ -750,13 +750,16 @@ let test_request_round_trip () =
 
 let test_request_version_mismatch () =
   match
-    Protocol.decode_request {|{"protocol":"hamlet-subtractor-request","version":42}|}
+    Protocol.decode_request
+      {|{"protocol":"hamlet-subtractor-request","version":42}|}
   with
   | Error (Protocol.Version_mismatch { expected = 3; actual = 42 }) -> ()
   | _ -> Alcotest.fail "expected request version mismatch"
 
 let test_request_malformed () =
-  match Protocol.decode_request {|{"protocol":"hamlet-subtractor-request"}|} with
+  match
+    Protocol.decode_request {|{"protocol":"hamlet-subtractor-request"}|}
+  with
   | Error (Protocol.Malformed _) -> ()
   | _ -> Alcotest.fail "expected malformed request"
 
