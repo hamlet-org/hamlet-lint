@@ -4,7 +4,6 @@ FROM ubuntu:24.04
 
 ARG OCAML_VERSION=5.5.0
 ARG OPAM_VERSION=2.5.1
-ARG HAMLET_GIT_URL=https://github.com/hamlet-org/hamlet.git
 ARG HAMLET_GIT_COMMIT
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -42,13 +41,14 @@ RUN opam init --bare --disable-sandboxing \
 WORKDIR /workspace
 
 COPY dune-project ./*.opam ./
+COPY hamlet-source /opt/hamlet-source
 
-# Pin both packages to one resolved Hamlet commit. The workflow includes this
-# commit in the image key, so a moving source ref cannot reuse stale compiler
-# dependencies or a stale PPX implementation.
+# Pin both packages to the checked-out companion source. The workflow resolves
+# this tree once, includes its commit in the image key, and never gives the
+# Docker build an authenticated remote URL or token.
 RUN test -n "${HAMLET_GIT_COMMIT}" \
-    && opam pin add -y --no-action hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}" \
-    && opam pin add -y --no-action ppx_hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}" \
+    && opam pin add -y --no-action hamlet /opt/hamlet-source \
+    && opam pin add -y --no-action ppx_hamlet /opt/hamlet-source \
     && opam install --switch=ci -y hamlet ppx_hamlet \
     && opam install --switch=ci -y . --deps-only --with-test --with-doc --with-dev-setup \
     && opam clean --all

@@ -19,7 +19,6 @@ permissions:
 env:
   OCAML_COMPILER: "5.5.0"
   MINIMUM_DUNE: "3.18.2"
-  HAMLET_GIT_URL: https://github.com/hamlet-org/hamlet.git
   # keep this source pin aligned with the companion Hamlet pull request until
   # automatic propagation lands on main. releases use exact published pairs.
   HAMLET_GIT_REF: automatic-propagation-elaboration
@@ -70,28 +69,42 @@ jobs:
   # against an older Hamlet or ppx_hamlet revision.
   resolve-hamlet:
     runs-on: ubuntu-latest
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
     outputs:
-      git_url: ${{ steps.resolve.outputs.git_url }}
       git_commit: ${{ steps.resolve.outputs.git_commit }}
     steps:
-      - id: resolve
+      - name: Checkout exact Hamlet source
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v6
+        with:
+          repository: hamlet-org/hamlet
+          ref: ${{ env.HAMLET_GIT_REF }}
+          token: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+          path: hamlet-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Explain Hamlet source access failure
+        if: steps.checkout.outcome != 'success'
         shell: bash
-        env:
-          URL: ${{ env.HAMLET_GIT_URL }}
-          REF: ${{ env.HAMLET_GIT_REF }}
         run: |
           set -euo pipefail
-          commit=$(git ls-remote "$URL" "$REF" | awk 'NR == 1 { print $1 }')
-          if [ -z "$commit" ]; then
-            echo "::error::could not resolve Hamlet source pin ${URL}#${REF}"
-            exit 1
-          fi
-          echo "git_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "::error::CI needs read access to hamlet-org/hamlet at ${HAMLET_GIT_REF}. Configure the optional HAMLET_READ_TOKEN secret with repository read access, or grant this workflow token read access to the companion repository."
+          exit 1
+
+      - id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(git -C hamlet-source rev-parse HEAD)
           echo "git_commit=$commit" >> "$GITHUB_OUTPUT"
 
   ensure-ci-image:
     runs-on: ubuntu-latest
     needs: resolve-hamlet
+    if: needs.resolve-hamlet.result == 'success'
     permissions:
       contents: read
       packages: write
@@ -100,13 +113,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Checkout exact Hamlet source
+        uses: actions/checkout@v6
+        with:
+          repository: hamlet-org/hamlet
+          ref: ${{ needs.resolve-hamlet.outputs.git_commit }}
+          token: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+          path: hamlet-source
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Resolve CI image
         id: resolve
         shell: bash
         env:
           SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HAMLET_GIT_URL: ${{ needs.resolve-hamlet.outputs.git_url }}
           HAMLET_GIT_COMMIT: ${{ needs.resolve-hamlet.outputs.git_commit }}
         run: |
           set -euo pipefail
@@ -115,8 +137,8 @@ jobs:
           deps_hash=$(
             {
               sha256sum dune-project ./*.opam .github/docker/ci/Dockerfile
-              printf 'ocaml=%s\nhamlet-url=%s\nhamlet-commit=%s\n' \
-                "$OCAML_COMPILER" "$HAMLET_GIT_URL" "$HAMLET_GIT_COMMIT"
+              printf 'ocaml=%s\nhamlet-commit=%s\n' \
+                "$OCAML_COMPILER" "$HAMLET_GIT_COMMIT"
             } | sha256sum | cut -c1-16
           )
 
@@ -179,7 +201,6 @@ jobs:
           cache-to: type=gha,mode=max,scope=hamlet-subtractor-ci-image
           build-args: |
             OCAML_VERSION=${{ env.OCAML_COMPILER }}
-            HAMLET_GIT_URL=${{ needs.resolve-hamlet.outputs.git_url }}
             HAMLET_GIT_COMMIT=${{ needs.resolve-hamlet.outputs.git_commit }}
           tags: ${{ steps.resolve.outputs.build_tags }}
           labels: |
@@ -189,6 +210,7 @@ jobs:
   build-ubuntu:
     name: build (ubuntu-latest, 5.5.0)
     runs-on: ubuntu-latest
+    if: needs.classify.outputs.docs_only != 'true'
     needs:
       - classify
       - resolve-hamlet
@@ -201,97 +223,104 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Checkout exact Hamlet source
+        uses: actions/checkout@v6
+        with:
+          repository: hamlet-org/hamlet
+          ref: ${{ needs.resolve-hamlet.outputs.git_commit }}
+          token: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+          path: hamlet-source
+          fetch-depth: 1
+          persist-credentials: false
 
-      - if: needs.classify.outputs.docs_only == 'true'
-        run: echo "docs-only change; skipping Ubuntu build."
+      - run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/hamlet-source"
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        name: Ensure exact Hamlet source dependencies
-        env:
-          HAMLET_GIT_URL: ${{ needs.resolve-hamlet.outputs.git_url }}
-          HAMLET_GIT_COMMIT: ${{ needs.resolve-hamlet.outputs.git_commit }}
+      - name: Ensure exact Hamlet source dependencies
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
-          opam pin add -y --no-action ppx_hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
+          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
           opam install -y . --deps-only --with-test --with-doc --with-dev-setup
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        run: make all
+      - run: make all
 
   build-dune-minimum:
     name: build (ubuntu-latest, Dune 3.18.2)
     runs-on: ubuntu-latest
+    if: needs.classify.outputs.docs_only != 'true'
     needs:
       - classify
       - resolve-hamlet
     steps:
-      - if: needs.classify.outputs.docs_only == 'true'
-        run: echo "docs-only change; skipping minimum Dune build."
+      - uses: actions/checkout@v6
 
-      - if: needs.classify.outputs.docs_only != 'true'
+      - name: Checkout exact Hamlet source
         uses: actions/checkout@v6
+        with:
+          repository: hamlet-org/hamlet
+          ref: ${{ needs.resolve-hamlet.outputs.git_commit }}
+          token: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+          path: hamlet-source
+          fetch-depth: 1
+          persist-credentials: false
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        uses: ./.github/actions/setup-ocaml
+      - uses: ./.github/actions/setup-ocaml
         with:
           ocaml-compiler: ${{ env.OCAML_COMPILER }}
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        run: opam pin add -y dune ${{ env.MINIMUM_DUNE }}
+      - run: opam pin add -y dune ${{ env.MINIMUM_DUNE }}
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        env:
-          HAMLET_GIT_URL: ${{ needs.resolve-hamlet.outputs.git_url }}
-          HAMLET_GIT_COMMIT: ${{ needs.resolve-hamlet.outputs.git_commit }}
+      - name: Ensure exact Hamlet source dependencies
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
-          opam pin add -y --no-action ppx_hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
+          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
           opam install -y . --deps-only --with-test --with-doc --with-dev-setup
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        run: test "$(opam exec -- dune --version)" = "${{ env.MINIMUM_DUNE }}"
+      - run: test "$(opam exec -- dune --version)" = "${{ env.MINIMUM_DUNE }}"
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        run: opam exec -- make all
+      - run: opam exec -- make all
 
   build-macos:
     name: build (macos-latest, 5.5.0)
-    if: ${{ vars.ENABLE_MACOS_CI == 'true' }}
+    if: ${{ vars.ENABLE_MACOS_CI == 'true' && needs.classify.outputs.docs_only != 'true' }}
     runs-on: macos-latest
     needs:
       - classify
       - resolve-hamlet
     steps:
-      - if: needs.classify.outputs.docs_only == 'true'
-        run: echo "docs-only change; skipping macOS build."
+      - uses: actions/checkout@v6
 
-      - if: needs.classify.outputs.docs_only != 'true'
+      - name: Checkout exact Hamlet source
         uses: actions/checkout@v6
+        with:
+          repository: hamlet-org/hamlet
+          ref: ${{ needs.resolve-hamlet.outputs.git_commit }}
+          token: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+          path: hamlet-source
+          fetch-depth: 1
+          persist-credentials: false
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        uses: ./.github/actions/setup-ocaml
+      - uses: ./.github/actions/setup-ocaml
         with:
           ocaml-compiler: ${{ env.OCAML_COMPILER }}
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        env:
-          HAMLET_GIT_URL: ${{ needs.resolve-hamlet.outputs.git_url }}
-          HAMLET_GIT_COMMIT: ${{ needs.resolve-hamlet.outputs.git_commit }}
+      - name: Ensure exact Hamlet source dependencies
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
-          opam pin add -y --no-action ppx_hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
+          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
           opam install -y . --deps-only --with-test --with-doc --with-dev-setup
           opam exec -- make all
 
   quality:
     runs-on: ubuntu-latest
+    if: needs.classify.outputs.docs_only != 'true'
     needs:
       - classify
       - resolve-hamlet
@@ -304,22 +333,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Checkout exact Hamlet source
+        uses: actions/checkout@v6
+        with:
+          repository: hamlet-org/hamlet
+          ref: ${{ needs.resolve-hamlet.outputs.git_commit }}
+          token: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+          path: hamlet-source
+          fetch-depth: 1
+          persist-credentials: false
 
-      - if: needs.classify.outputs.docs_only == 'true'
-        run: echo "docs-only change; skipping quality checks."
+      - run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/hamlet-source"
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        name: Ensure exact Hamlet source dependencies
-        env:
-          HAMLET_GIT_URL: ${{ needs.resolve-hamlet.outputs.git_url }}
-          HAMLET_GIT_COMMIT: ${{ needs.resolve-hamlet.outputs.git_commit }}
+      - name: Ensure exact Hamlet source dependencies
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
-          opam pin add -y --no-action ppx_hamlet "${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
+          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
           opam install -y . --deps-only --with-test --with-doc --with-dev-setup
 
-      - if: needs.classify.outputs.docs_only != 'true'
-        run: make fmt doc opam
+      - run: make fmt doc opam
