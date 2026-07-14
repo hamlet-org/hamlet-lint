@@ -1,15 +1,53 @@
 #!/bin/sh
 set -eu
 
-root=$(CDPATH= cd "$(dirname "$0")/../.." && pwd)
+root=${HAMLET_SUBTRACTOR_SOURCE_ROOT:-}
+if [ -z "$root" ]; then
+  root=$(CDPATH= cd "$(dirname "$0")" && pwd)
+fi
+while :; do
+  case "$root" in
+    */_build/*) ;;
+    *)
+      if [ -f "$root/dune-project" ]; then
+        break
+      fi
+      ;;
+  esac
+  parent=$(dirname "$root")
+  if [ "$parent" = "$root" ]; then
+    printf '%s\n' 'cannot locate the hamlet-subtractor source root' >&2
+    exit 1
+  fi
+  root=$parent
+done
+root=$(CDPATH= cd "$root" && pwd)
 cd "$root"
 
+if [ "${HAMLET_SUBTRACTOR_DUNE_ACTION:-}" = 1 ]; then
+  HAMLET_SUBTRACTOR_DUNE_BUILD_DIR=$root/_build/automatic-propagation-acceptance
+fi
+
 dune_cmd() {
-  dune "$@"
+  if [ -n "${HAMLET_SUBTRACTOR_DUNE_BUILD_DIR:-}" ]; then
+    command=$1
+    shift
+    if [ "${HAMLET_SUBTRACTOR_DUNE_ACTION:-}" = 1 ]; then
+      opam exec -- dune "$command" --build-dir "$HAMLET_SUBTRACTOR_DUNE_BUILD_DIR" "$@"
+    else
+      dune "$command" --build-dir "$HAMLET_SUBTRACTOR_DUNE_BUILD_DIR" "$@"
+    fi
+  else
+    dune "$@"
+  fi
 }
 
 merlin_cmd() {
-  ocamlmerlin "$@"
+  if [ "${HAMLET_SUBTRACTOR_DUNE_ACTION:-}" = 1 ]; then
+    opam exec -- ocamlmerlin "$@"
+  else
+    ocamlmerlin "$@"
+  fi
 }
 
 fail() {
@@ -111,7 +149,8 @@ dump_hover() {
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/hamlet-automatic-propagation.XXXXXX")
 dependency_source=test/automatic_propagation/automatic_propagation_external.ml
-positive_cmt=_build/default/test/automatic_propagation/.automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt
+build_dir=${HAMLET_SUBTRACTOR_DUNE_BUILD_DIR:-_build}
+positive_cmt=$build_dir/default/test/automatic_propagation/.automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt
 dependency_backup="$tmp_dir/automatic_propagation_external.ml.backup"
 dependency_modified=0
 
@@ -124,7 +163,11 @@ cleanup() {
 
 trap cleanup EXIT HUP INT TERM
 
-dune_cmd build @test/automatic_propagation/automatic-propagation-acceptance
+if [ "${HAMLET_SUBTRACTOR_DUNE_ACTION:-}" = 1 ]; then
+  dune_cmd build @test/automatic_propagation/automatic-propagation-build-prerequisites
+else
+  dune_cmd build --force @test/automatic_propagation/automatic-propagation-prerequisites
+fi
 dump_ppxed_source test/automatic_propagation/automatic_propagation_positive.ml \
   "$tmp_dir/automatic_propagation_positive.pp.ml"
 dune_cmd exec test/automatic_propagation/automatic_propagation_expansion_dump.exe \

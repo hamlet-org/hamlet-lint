@@ -329,12 +329,14 @@ test/automatic_propagation/run_acceptance.sh
 make installed-consumer
 ```
 
-The complete script checks final CMT types, runtime behavior, final raw Merlin
-preprocessing, the Typedtree Merlin actually types, exact saved and unsaved
-error and requirement hovers, dependency-CMI invalidation, explicit fallbacks,
-refusal diagnostics, and linear cross-unit output. It also rejects embedded
-PPX errors, probe assertions, or retained internal attributes in raw editor
-output.
+`dune runtest test/automatic_propagation`, the named acceptance alias, and the
+direct script all execute the complete gate: final CMT types, runtime behavior,
+saved and unsaved OCaml-LSP hovers, final raw Merlin preprocessing, the
+Typedtree Merlin actually types, dependency-CMI invalidation, explicit
+fallbacks, refusal diagnostics, and linear cross-unit output. The mutable
+checks use a separate acceptance build directory so they never compete with
+the outer Dune test action. The gate rejects embedded PPX errors, probe
+assertions, or retained internal attributes in raw editor output.
 
 Resolver-specific tests compare the direct compatibility layer with the normal
 process path at the normalized evidence and final AST boundaries. They also

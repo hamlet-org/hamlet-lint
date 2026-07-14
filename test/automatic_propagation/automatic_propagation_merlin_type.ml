@@ -1,6 +1,21 @@
+let normalize_whitespace value =
+  let normalized = Buffer.create (String.length value) in
+  let pending_space = ref false in
+  String.iter
+    (fun character ->
+      match character with
+      | ' ' | '\n' | '\r' | '\t' -> pending_space := true
+      | _ ->
+          if !pending_space && Buffer.length normalized > 0 then
+            Buffer.add_char normalized ' ';
+          pending_space := false;
+          Buffer.add_char normalized character)
+    value;
+  Buffer.contents normalized
+
 let find_type fields =
   match List.assoc_opt "type" fields with
-  | Some (`String value) -> Some value
+  | Some (`String value) -> Some (normalize_whitespace value)
   | _ -> None
 
 let require_clean fields =

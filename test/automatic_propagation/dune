@@ -112,8 +112,36 @@
     case_error_cross_subset))))
 
 (alias
- (name automatic-propagation-acceptance)
+ (name automatic-propagation-build-prerequisites)
  (deps
   .automatic_propagation_type_reference.objs/byte/automatic_propagation_type_reference.cmt
-  (alias runtest)
+  .automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt
+  automatic_propagation_types.actual
+  automatic_propagation_cmt_dump.exe
+  automatic_propagation_expansion_dump.exe
+  automatic_propagation_merlin_source.exe
+  automatic_propagation_merlin_type.exe
+  automatic_propagation_lsp_client.exe))
+
+(alias
+ (name automatic-propagation-prerequisites)
+ (deps
+  (alias automatic-propagation-build-prerequisites)
   (alias automatic-propagation-lsp)))
+
+(rule
+ (alias runtest)
+ (deps
+  (sandbox none)
+  run_acceptance.sh
+  (alias automatic-propagation-prerequisites))
+ (action
+  (setenv
+   HAMLET_SUBTRACTOR_DUNE_ACTION
+   1
+   (run %{dep:run_acceptance.sh}))))
+
+(alias
+ (name automatic-propagation-acceptance)
+ (deps
+  (alias runtest)))

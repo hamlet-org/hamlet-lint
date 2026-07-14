@@ -394,15 +394,18 @@ exists before the editor starts. `make installed-consumer` separately proves
 that external projects need only the documented `staged_pps` stanza.
 
 The active opam switch must provide `ocamlmerlin` and `ocamllsp` for the editor
-harnesses. The ordinary runtime and type-golden test does not start either
-tool.
+harnesses.
 
 ```sh
 dune runtest test/automatic_propagation
 ```
 
-This runs the final CMT type golden and runtime behavior. It does not launch an
-editor process or modify source files.
+This runs the complete acceptance gate: final CMT type and runtime behavior,
+saved and unsaved OCaml-LSP hovers, raw Merlin final preprocessing and
+Typedtree checks, dependency-CMI invalidation, refusal diagnostics, explicit
+fallbacks, and linear cross-unit generation. The mutable checks use a separate
+acceptance build directory while raw Merlin keeps the normal Dune editor
+context.
 
 ```sh
 dune build @test/automatic_propagation/automatic-propagation-lsp
@@ -415,19 +418,16 @@ hover types, diagnostics, and clean shutdown.
 dune build @test/automatic_propagation/automatic-propagation-acceptance
 ```
 
-This combines the focused runtime, type, and OCaml-LSP checks.
+This is an explicit name for the same complete acceptance gate.
 
 ```sh
 test/automatic_propagation/run_acceptance.sh
 ```
 
-This is the complete feature harness. It additionally verifies the final raw
-Merlin PPX source and Typedtree, exact saved and unsaved error and requirement
-hovers, dependency-interface invalidation, refusal diagnostics, explicit
-fallbacks, and linear cross-unit generation. It rejects embedded PPX errors,
-probe assertions, and internal marker attributes before accepting an editor
-result. The script temporarily changes its dependency fixture and restores it
-on exit.
+This runs the same complete feature harness directly. It rejects embedded PPX
+errors, probe assertions, and internal marker attributes before accepting an
+editor result. The script temporarily changes its dependency fixture and
+restores it on exit.
 
 ```sh
 make installed-consumer

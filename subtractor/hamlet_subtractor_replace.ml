@@ -294,6 +294,8 @@ let structure ~catalogues ~outcomes ~resolved_values input =
     match find_resolved resolved_values id with
     | None -> (
         match find_outcome outcomes id with
+        | Some (_, Protocol.Refused diagnostic) ->
+            raise (Replacement_error (Refused diagnostic))
         | Some (marker, _) ->
             raise (Replacement_error (Missing_certificate (Marker.id marker)))
         | None -> raise (Replacement_error (Missing_outcome id)))
@@ -381,6 +383,8 @@ let structure ~catalogues ~outcomes ~resolved_values input =
             match find_resolved resolved_values id with
             | None -> (
                 match find_outcome outcomes id with
+                | Some (_, Protocol.Refused diagnostic) ->
+                    raise (Replacement_error (Refused diagnostic))
                 | Some _ ->
                     raise
                       (Replacement_error

@@ -265,12 +265,10 @@ let validate_request_context request =
       ~expected:Hamlet_subtractor_version.value
       ~actual:context.hamlet_subtractor_version
   else if
-    not
-      (String.equal context.resolver_version Hamlet_subtractor_version.value)
+    not (String.equal context.resolver_version Hamlet_subtractor_version.value)
   then
     request_context_mismatch ~field:"resolver_version"
-      ~expected:Hamlet_subtractor_version.value
-      ~actual:context.resolver_version
+      ~expected:Hamlet_subtractor_version.value ~actual:context.resolver_version
   else if context.catalogue_schema_version <> 1 then
     request_context_mismatch ~field:"catalogue_schema_version" ~expected:"1"
       ~actual:(string_of_int context.catalogue_schema_version)

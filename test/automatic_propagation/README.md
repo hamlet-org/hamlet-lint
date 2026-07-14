@@ -16,25 +16,23 @@ need this edge and resolve the executable through the `hamlet-subtractor` Dune s
 automatic type golden without substituting for automatic elaboration. The
 named acceptance alias depends on its final CMT.
 
-`dune runtest test/automatic_propagation` runs the inferred type golden and runtime cases.
-The type golden is produced from the final CMT and records every result, error,
-and requirement row exposed by bindings named `case_*`.
+`dune runtest test/automatic_propagation` runs the complete acceptance gate:
+the final CMT type golden, runtime cases, saved and unsaved OCaml-LSP hovers,
+raw Merlin preprocessing and Typedtree checks, dependency invalidation,
+refusal diagnostics, and the linear `Errors.Cases` guard. The type golden
+records every result, error, and requirement row exposed by bindings named
+`case_*`.
 
-`dune build @test/automatic_propagation/automatic-propagation-acceptance` adds an isolated OCaml-LSP
-session. The test client opens the saved source, checks its exact hover, sends a
-full unsaved `didChange`, checks the changed hover, and performs the standard
-shutdown sequence with bounded waits and process cleanup. Ordinary `runtest`
-does not launch an editor process or mutate source files.
+The Dune action keeps raw Merlin on Dune's default editor context. It runs the
+mutable dependency and negative-fixture checks in a separate acceptance build
+directory, so the outer test action never competes for its build lock. It
+requires the `ocamlmerlin` and `ocamllsp` executables from the active opam
+switch.
 
-`test/automatic_propagation/run_acceptance.sh` adds the editor and refusal checks. It asks
-raw Merlin for `ppxed-source` and Typedtree, snapshots the final elaborated
-handler matches, checks exact saved and unsaved error and requirement hovers
-through Merlin and OCaml-LSP, changes and restores a dependency interface to
-detect stale resolutions, builds every unsupported fixture through Dune, and
-verifies that the generated 16-leaf `Errors.Cases` catalogue remains linear.
-It fails if raw editor output contains an embedded PPX error, a probe assertion,
-or an internal marker attribute. The script requires the `ocamlmerlin` and
-`ocamllsp` executables used by the configured Dune workspace.
+`dune build @test/automatic_propagation/automatic-propagation-acceptance` is an
+explicit name for the same complete gate. Running
+`test/automatic_propagation/run_acceptance.sh` directly also runs it, including
+the OCaml-LSP session.
 
 The committed expansion golden must always come from the raw Merlin output of
 the final implementation. Do not create it from explicit `%hamlet.te` or
