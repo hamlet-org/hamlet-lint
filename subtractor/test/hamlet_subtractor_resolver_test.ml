@@ -30,21 +30,12 @@ let contains text fragment =
   loop 0
 
 let find_hamlet_cmi_directory () =
-  let relative = ".hamlet.objs/byte/hamlet.cmi" in
-  let executable_directory = Filename.dirname Sys.executable_name in
-  let candidates =
-    [
-      Filename.concat
-        (Filename.dirname executable_directory)
-        (Filename.concat "lib" relative);
-      Filename.concat (Sys.getcwd ())
-        (Filename.concat "_build/default/lib" relative);
-      Filename.concat (Sys.getcwd ()) (Filename.concat "lib" relative);
-    ]
-  in
-  match List.find_opt Sys.file_exists candidates with
-  | Some cmi -> Filename.dirname cmi
-  | None -> Alcotest.fail "cannot locate Hamlet CMI fixture"
+  match Sys.getenv_opt "OPAM_SWITCH_PREFIX" with
+  | Some prefix ->
+      let cmi = Filename.concat prefix "lib/hamlet/hamlet.cmi" in
+      if Sys.file_exists cmi then Filename.dirname cmi
+      else Alcotest.failf "cannot locate installed Hamlet CMI at %s" cmi
+  | None -> Alcotest.fail "OPAM_SWITCH_PREFIX is required to locate Hamlet"
 
 let find_test_services_cmi_directory () =
   let relative = ".hamlet_test_services.objs/byte/hamlet_test_services.cmi" in
@@ -52,7 +43,7 @@ let find_test_services_cmi_directory () =
   let candidates =
     [
       Filename.concat
-        (Filename.dirname executable_directory)
+        (Filename.dirname (Filename.dirname executable_directory))
         (Filename.concat "test/support" relative);
       Filename.concat (Sys.getcwd ())
         (Filename.concat "_build/default/test/support" relative);
@@ -89,8 +80,8 @@ let test_binary_ast_preserves_locations () =
   let source_file = "live-unsaved-buffer.ml" in
   let structure = parse ~source_file "\n\nlet answer = 42\n" in
   match
-    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file structure
-      (fun descriptor ->
+    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file
+      structure (fun descriptor ->
         let before = Unix.stat descriptor.path in
         Alcotest.(check int)
           "descriptor length" before.st_size descriptor.byte_length;
@@ -99,7 +90,8 @@ let test_binary_ast_preserves_locations () =
           (Digest.file descriptor.path |> Digest.to_hex);
         Compiler_pparse.read_ast Compiler_pparse.Structure descriptor.path)
   with
-  | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   | Ok
       [
         {
@@ -182,27 +174,29 @@ let removed label path =
 let test_serialized_probe_cleanup_on_success () =
   let path = ref None in
   let result =
-    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file:"cleanup.ml"
-      (parse "let value = 1") (fun descriptor ->
+    Hamlet_subtractor_resolver_client.with_serialized_probe
+      ~source_file:"cleanup.ml" (parse "let value = 1") (fun descriptor ->
         path := Some descriptor.Protocol.path)
   in
   begin match result with
   | Ok () -> ()
-  | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   end;
   removed "normal return removes AST" (Option.get !path)
 
 let test_serialized_probe_cleanup_on_callback_exception () =
   let path = ref None in
   let result =
-    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file:"cleanup.ml"
-      (parse "let value = 1") (fun descriptor ->
+    Hamlet_subtractor_resolver_client.with_serialized_probe
+      ~source_file:"cleanup.ml" (parse "let value = 1") (fun descriptor ->
         path := Some descriptor.Protocol.path;
         failwith "callback failure")
   in
   begin match result with
   | Error (Hamlet_subtractor_resolver_client.Ast_serialization_failed _) -> ()
-  | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   | Ok _ -> Alcotest.fail "callback exception unexpectedly succeeded"
   end;
   removed "callback exception removes AST" (Option.get !path)
@@ -214,8 +208,8 @@ let test_serialized_probe_cleanup_on_child_timeout () =
       { default_limits with timeout_seconds = 0.05 }
   in
   let result =
-    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file:"cleanup.ml"
-      (parse "let value = 1") (fun descriptor ->
+    Hamlet_subtractor_resolver_client.with_serialized_probe
+      ~source_file:"cleanup.ml" (parse "let value = 1") (fun descriptor ->
         path := Some descriptor.Protocol.path;
         run_peer "timeout" ~limits ~request:(fake_request ~descriptor ()) ())
   in
@@ -223,7 +217,8 @@ let test_serialized_probe_cleanup_on_child_timeout () =
   | Ok (Error (Hamlet_subtractor_resolver_transport.Timeout _)) -> ()
   | Ok (Error error) ->
       Alcotest.fail (Hamlet_subtractor_resolver_transport.message error)
-  | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   | Ok (Ok _) -> Alcotest.fail "timed out child unexpectedly succeeded"
   end;
   removed "child timeout removes AST" (Option.get !path)
@@ -293,7 +288,8 @@ let expect_correlation label mode predicate =
     when predicate error ->
       ()
   | Error error ->
-      Alcotest.fail (label ^ ": " ^ Hamlet_subtractor_resolver_transport.message error)
+      Alcotest.fail
+        (label ^ ": " ^ Hamlet_subtractor_resolver_transport.message error)
   | Ok _ -> Alcotest.fail (label ^ " unexpectedly succeeded")
 
 let test_typing_failure_correlation () =
@@ -309,7 +305,8 @@ let test_typing_failure_correlation () =
 
 let test_transport_request_limit () =
   let limits =
-    Hamlet_subtractor_resolver_transport.{ default_limits with request_bytes = 8 }
+    Hamlet_subtractor_resolver_transport.
+      { default_limits with request_bytes = 8 }
   in
   match run_peer "malformed" ~limits () with
   | Error (Hamlet_subtractor_resolver_transport.Request_too_large _) -> ()
@@ -321,7 +318,8 @@ let test_transport_request_limit () =
 
 let test_transport_response_limit () =
   let limits =
-    Hamlet_subtractor_resolver_transport.{ default_limits with response_bytes = 64 }
+    Hamlet_subtractor_resolver_transport.
+      { default_limits with response_bytes = 64 }
   in
   match run_peer "oversized-response" ~limits () with
   | Error (Hamlet_subtractor_resolver_transport.Response_too_large _) -> ()
@@ -333,7 +331,8 @@ let test_transport_response_limit () =
 
 let test_transport_stderr_limit () =
   let limits =
-    Hamlet_subtractor_resolver_transport.{ default_limits with stderr_bytes = 64 }
+    Hamlet_subtractor_resolver_transport.
+      { default_limits with stderr_bytes = 64 }
   in
   match run_peer "oversized-stderr" ~limits () with
   | Error (Hamlet_subtractor_resolver_transport.Stderr_too_large _) -> ()
@@ -416,13 +415,14 @@ let test_resolver_recomputes_context_fingerprint () =
   let source_file = "semantic_validation.ml" in
   let structure = parse ~source_file "let value = 1" in
   match
-    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file structure
-      (fun descriptor ->
+    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file
+      structure (fun descriptor ->
         request_for_structure ~claimed_fingerprint:"tampered" ~source_file
           structure descriptor
         |> Hamlet_subtractor_resolver_transport.run)
   with
-  | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   | Ok result ->
       expect_process_failure "fingerprint mismatch is named"
         "context_fingerprint mismatch" result
@@ -431,19 +431,22 @@ let test_resolver_derives_synthetic_unit () =
   let source_file = "semantic_validation.ml" in
   let structure = parse ~source_file "let value = 1" in
   match
-    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file structure
-      (fun descriptor ->
+    Hamlet_subtractor_resolver_client.with_serialized_probe ~source_file
+      structure (fun descriptor ->
         request_for_structure ~unit_name:"Hamlet_subtractor_probe_tampered"
           ~source_file structure descriptor
         |> Hamlet_subtractor_resolver_transport.run)
   with
-  | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   | Ok result ->
       expect_process_failure "probe unit mismatch is named"
         "probe_unit mismatch" result
 
 let test_resolver_rejects_oversized_ast () =
-  let path, channel = Filename.open_temp_file "hamlet-subtractor-large-" ".ast" in
+  let path, channel =
+    Filename.open_temp_file "hamlet-subtractor-large-" ".ast"
+  in
   let size = (64 * 1024 * 1024) + 1 in
   Fun.protect ~finally:(fun () -> Sys.remove path) @@ fun () ->
   Unix.LargeFile.ftruncate
@@ -526,14 +529,16 @@ let resolve_pair ~source_file source =
       ~source_file prepared
     |> function
     | Ok value -> value
-    | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+    | Error error ->
+        Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   in
   (prepared, direct, process)
 
 let check_engine_parity label direct process =
   Alcotest.(check bool)
     (label ^ " outcomes") true
-    (Hamlet_subtractor_engine.outcomes direct = Hamlet_subtractor_engine.outcomes process);
+    (Hamlet_subtractor_engine.outcomes direct
+    = Hamlet_subtractor_engine.outcomes process);
   Alcotest.(check bool)
     (label ^ " catalogues") true
     (Hamlet_subtractor_engine.catalogues direct
@@ -560,7 +565,8 @@ let test_process_and_in_process_parity () =
       ~source_file prepared
     |> function
     | Ok value -> value
-    | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
+    | Error error ->
+        Alcotest.fail (Hamlet_subtractor_resolver_client.message error)
   in
   let direct_values = Hamlet_subtractor_engine.resolved_values direct in
   let process_values = Hamlet_subtractor_engine.resolved_values process in
@@ -787,7 +793,8 @@ let test_in_process_proof_is_invariant_under_nonsemantic_flags () =
 
 let test_source_tree_site_lookup () =
   match Hamlet_subtractor_resolver_transport.find_resolver () with
-  | Error error -> Alcotest.fail (Hamlet_subtractor_resolver_transport.message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_resolver_transport.message error)
   | Ok resolver ->
       Alcotest.(check bool)
         "absolute resolver" false
@@ -802,7 +809,8 @@ let test_source_tree_candidate_derivation () =
       ~executable_name:"/workspace/_build/editor/.ppx/driver/ppx.exe"
   in
   let expected =
-    if Sys.win32 then "/workspace/_build/editor/subtractor/hamlet-subtractor-resolver.exe"
+    if Sys.win32 then
+      "/workspace/_build/editor/subtractor/hamlet-subtractor-resolver.exe"
     else "/workspace/_build/editor/subtractor/hamlet_subtractor_resolver.exe"
   in
   Alcotest.(check bool) "same build context" true (List.mem expected candidates)

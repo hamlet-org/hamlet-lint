@@ -24,21 +24,12 @@ let contains text fragment =
   loop 0
 
 let find_hamlet_cmi_directory () =
-  let relative = ".hamlet.objs/byte/hamlet.cmi" in
-  let executable_directory = Filename.dirname Sys.executable_name in
-  let candidates =
-    [
-      Filename.concat
-        (Filename.dirname executable_directory)
-        (Filename.concat "lib" relative);
-      Filename.concat (Sys.getcwd ())
-        (Filename.concat "_build/default/lib" relative);
-      Filename.concat (Sys.getcwd ()) (Filename.concat "lib" relative);
-    ]
-  in
-  match List.find_opt Sys.file_exists candidates with
-  | Some cmi -> Filename.dirname cmi
-  | None -> Alcotest.fail "cannot locate Hamlet CMI fixture"
+  match Sys.getenv_opt "OPAM_SWITCH_PREFIX" with
+  | Some prefix ->
+      let cmi = Filename.concat prefix "lib/hamlet/hamlet.cmi" in
+      if Sys.file_exists cmi then Filename.dirname cmi
+      else Alcotest.failf "cannot locate installed Hamlet CMI at %s" cmi
+  | None -> Alcotest.fail "OPAM_SWITCH_PREFIX is required to locate Hamlet"
 
 let with_hamlet f =
   let directory = find_hamlet_cmi_directory () in
@@ -66,8 +57,9 @@ let marker_attributes structure =
       method! expression expression =
         List.iter
           (fun attribute ->
-            if String.equal attribute.attr_name.txt "hamlet.subtractor.marker.v1" then
-              attributes := attribute :: !attributes)
+            if
+              String.equal attribute.attr_name.txt "hamlet.subtractor.marker.v1"
+            then attributes := attribute :: !attributes)
           expression.pexp_attributes;
         super#expression expression
     end
@@ -204,7 +196,9 @@ let test_diagnostics_are_actionable_and_marker_local () =
       }
   in
   let refusal = Hamlet_subtractor_compiler_compat.Evidence_failed refusal in
-  let actual_loc = Hamlet_subtractor_ppx.compiler_refusal_loc prepared refusal in
+  let actual_loc =
+    Hamlet_subtractor_ppx.compiler_refusal_loc prepared refusal
+  in
   Alcotest.(check int) "second marker location" 30 actual_loc.loc_start.pos_cnum;
   let typing_message =
     Hamlet_subtractor_ppx.compiler_refusal_message prepared

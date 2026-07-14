@@ -15,8 +15,8 @@ let parse ?(source_file = "probe.ml") source =
   Parse.implementation lexbuf
 
 let inspect ?(source_file = "probe.ml") structure =
-  Hamlet_subtractor_compiler_compat.inspect_probe ~tool_name:"ocamlopt" ~source_file
-    structure
+  Hamlet_subtractor_compiler_compat.inspect_probe ~tool_name:"ocamlopt"
+    ~source_file structure
 
 let fail_refusal = function
   | Hamlet_subtractor_compiler_compat.Dependency_scan -> "dependency scan"
@@ -75,7 +75,9 @@ let test_failure_does_not_poison_next_session () =
     "successful structure items" 1 observation.structure_items
 
 let find_fixture_cmi_directory () =
-  let relative = ".subtractor_dep_fixture.objs/byte/subtractor_dep_fixture.cmi" in
+  let relative =
+    ".subtractor_dep_fixture.objs/byte/subtractor_dep_fixture.cmi"
+  in
   let executable_directory = Filename.dirname Sys.executable_name in
   let candidates =
     [
@@ -370,7 +372,8 @@ let test_wrong_channel_is_refused_before_typing () =
   let prepared =
     parse
       "let value = Combinators.catch source ~handler:(function\n\
-       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:wrong-channel\"]))"
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \
+       \"s:wrong-channel\"]))"
     |> Hamlet_subtractor_probe.prepare
   in
   match refusal_reason prepared with
@@ -437,7 +440,9 @@ let test_nested_owners_keep_distinct_ids () =
 
 let test_refused_marker_is_not_a_typed_lookup_failure () =
   let prepared =
-    parse "let marker =\n(assert false [@hamlet.subtractor.marker.v1 \"e:no-owner\"])"
+    parse
+      "let marker =\n\
+       (assert false [@hamlet.subtractor.marker.v1 \"e:no-owner\"])"
     |> Hamlet_subtractor_probe.prepare
   in
   Alcotest.(check int) "one refusal" 1 (List.length prepared.refusals);
@@ -506,7 +511,8 @@ let test_resolve_request_success_and_correlation () =
   let module Protocol = Hamlet_subtractor_core.Protocol in
   let request = resolver_request [] in
   let response =
-    Hamlet_subtractor_compiler_compat.resolve_request request |> require_observation
+    Hamlet_subtractor_compiler_compat.resolve_request request
+    |> require_observation
   in
   Alcotest.(check int)
     "empty result set" 0
@@ -576,21 +582,12 @@ end
 |}
 
 let find_hamlet_cmi_directory () =
-  let relative = ".hamlet.objs/byte/hamlet.cmi" in
-  let executable_directory = Filename.dirname Sys.executable_name in
-  let candidates =
-    [
-      Filename.concat
-        (Filename.dirname executable_directory)
-        (Filename.concat "lib" relative);
-      Filename.concat (Sys.getcwd ())
-        (Filename.concat "_build/default/lib" relative);
-      Filename.concat (Sys.getcwd ()) (Filename.concat "lib" relative);
-    ]
-  in
-  match List.find_opt Sys.file_exists candidates with
-  | Some cmi -> Filename.dirname cmi
-  | None -> Alcotest.fail "cannot locate Hamlet CMI fixture"
+  match Sys.getenv_opt "OPAM_SWITCH_PREFIX" with
+  | Some prefix ->
+      let cmi = Filename.concat prefix "lib/hamlet/hamlet.cmi" in
+      if Sys.file_exists cmi then Filename.dirname cmi
+      else Alcotest.failf "cannot locate installed Hamlet CMI at %s" cmi
+  | None -> Alcotest.fail "OPAM_SWITCH_PREFIX is required to locate Hamlet"
 
 let with_include_directory directory f =
   let previous_include_dirs = !Compiler_clflags.include_dirs in
@@ -613,7 +610,8 @@ let resolve_exact
     ?(source_file = "exact_probe.ml")
     source =
   let prepared =
-    parse ~source_file (exact_prelude ^ source) |> Hamlet_subtractor_probe.prepare
+    parse ~source_file (exact_prelude ^ source)
+    |> Hamlet_subtractor_probe.prepare
   in
   with_include_directory (find_hamlet_cmi_directory ()) @@ fun () ->
   match
@@ -722,7 +720,8 @@ let caught =
         "proper subset forwards directly" "Remote.Errors.second"
         (Longident.name path)
   | Ok _ -> Alcotest.fail "proper subset unexpectedly used Cases.dispatch"
-  | Error error -> Alcotest.fail (Hamlet_subtractor_generator.error_message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_generator.error_message error)
 
 let test_transparent_alias_stays_structural () =
   let engine =
@@ -771,7 +770,8 @@ let caught =
       ] ->
       ()
   | Ok _ -> Alcotest.fail "transparent alias was not forwarded structurally"
-  | Error error -> Alcotest.fail (Hamlet_subtractor_generator.error_message error)
+  | Error error ->
+      Alcotest.fail (Hamlet_subtractor_generator.error_message error)
 
 let test_exact_requirement_provide () =
   let engine =
@@ -1352,10 +1352,12 @@ let caught =
   let native = resolve_exact ~tool_name:"ocamlopt" source in
   Alcotest.(check bool)
     "mode-independent outcomes" true
-    (Hamlet_subtractor_engine.outcomes byte = Hamlet_subtractor_engine.outcomes native);
+    (Hamlet_subtractor_engine.outcomes byte
+    = Hamlet_subtractor_engine.outcomes native);
   Alcotest.(check bool)
     "mode-independent catalogues" true
-    (Hamlet_subtractor_engine.catalogues byte = Hamlet_subtractor_engine.catalogues native)
+    (Hamlet_subtractor_engine.catalogues byte
+    = Hamlet_subtractor_engine.catalogues native)
 
 let () =
   Alcotest.run "hamlet elaboration private bridge"

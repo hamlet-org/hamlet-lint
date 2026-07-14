@@ -14,8 +14,8 @@ match __input with
     Automatic_propagation_external.Storage.Errors.Cases.dispatch
       (({
           (Automatic_propagation_external.Storage.Errors.Cases.propagate ()) with
-          Automatic_propagation_external.Storage.Errors.Cases.storage_missing =
-            (fun _ -> assert false)
+          Automatic_propagation_external.Storage.Errors.Cases.storage_missing
+            = (fun _ -> assert false)
         })[@warning "-23"]) error
 | _ -> .
 
@@ -110,7 +110,8 @@ match __input with
     ((Automatic_propagation_external.Logger.Tag.give witness (module
         struct let log _ = Hamlet.Combinators.return () end))
     [@merlin.loc ])
-| #Automatic_propagation_external.Clock.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Automatic_propagation_external.Clock.Tag.r as witness ->
+    Hamlet.Dispatch.need witness
 | _ -> .
 
 case_requirement_dependent match-1:
@@ -161,7 +162,8 @@ match __input with
 case_provision_error_then_catch match-1:
 match __input with
 | #Automatic_propagation_external.Provision.Tag.r as witness ->
-    ((Automatic_propagation_external.Provision.Tag.give witness (module Provision_live))
+    ((Automatic_propagation_external.Provision.Tag.give witness (module
+        Provision_live))
     [@merlin.loc ])
 | _ -> .
 | _ -> assert false
@@ -174,23 +176,25 @@ match __input with
     Automatic_propagation_external.Provision.Errors.Cases.dispatch
       (({
           (Automatic_propagation_external.Provision.Errors.Cases.propagate ()) with
-          Automatic_propagation_external.Provision.Errors.Cases.provision_fallback =
-            (fun _ -> assert false)
+          Automatic_propagation_external.Provision.Errors.Cases.provision_fallback
+            = (fun _ -> assert false)
         })[@warning "-23"]) error
 | _ -> .
 
 case_linear_cross_cu match-1:
 match __input with
-| #Automatic_propagation_external.Linear.Errors.e1 -> ((Hamlet.Combinators.return ())
-    [@merlin.loc ])
-| #Automatic_propagation_external.Linear.Errors.e2 -> ((Hamlet.Combinators.return ())
-    [@merlin.loc ])
+| #Automatic_propagation_external.Linear.Errors.e1 ->
+    ((Hamlet.Combinators.return ())[@merlin.loc ])
+| #Automatic_propagation_external.Linear.Errors.e2 ->
+    ((Hamlet.Combinators.return ())[@merlin.loc ])
 | #Automatic_propagation_external.Linear.Errors.error as error ->
     Automatic_propagation_external.Linear.Errors.Cases.dispatch
       (({
           (Automatic_propagation_external.Linear.Errors.Cases.propagate ()) with
-          Automatic_propagation_external.Linear.Errors.Cases.e1 = (fun _ -> assert false);
-          Automatic_propagation_external.Linear.Errors.Cases.e2 = (fun _ -> assert false)
+          Automatic_propagation_external.Linear.Errors.Cases.e1 =
+            (fun _ -> assert false);
+          Automatic_propagation_external.Linear.Errors.Cases.e2 =
+            (fun _ -> assert false)
         })[@warning "-23"]) error
 | _ -> .
 
@@ -198,12 +202,13 @@ case_error_wrapped match-1:
 match __input with
 | #Automatic_propagation_wrapped.Wrapped_fixture.Remote.Errors.first ->
     ((Hamlet.Combinators.return "first")[@merlin.loc ])
-| #Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.error as error ->
+| #Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.error as
+    error ->
     Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.Cases.dispatch
       (({
           (Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.Cases.propagate
              ()) with
-          Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.Cases.first =
-            (fun _ -> assert false)
+          Automatic_propagation_wrapped__Wrapped_fixture.Remote.Errors.Cases.first
+            = (fun _ -> assert false)
         })[@warning "-23"]) error
 | _ -> .

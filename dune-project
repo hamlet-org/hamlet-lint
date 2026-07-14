@@ -48,6 +48,7 @@
     (>= 1.7.0)
     :with-test))
   (merlin :with-test)
+  (ocaml-lsp-server :with-test)
   (fmt
    (and
     (>= 0.11.0)
