@@ -96,3 +96,7 @@
   hamlet_subtractor_resolver_runtime
   ppx_hamlet
   ppxlib))
+
+(documentation
+ (package hamlet-subtractor)
+ (mld_files index))
