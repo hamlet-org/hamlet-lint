@@ -1,0 +1,281 @@
+(** Extract the upstream effect's row tags for the slot the combinator targets:
+
+    - [`Catch] looks at slot 1 ([`'e`], the errors row).
+    - [`Provide] looks at slot 2 ([`'r`], the services row).
+
+    The {b key trick} for accuracy: when upstream is a let-bound variable, the
+    variable's [Texp_ident] carries the value description's [val_type], which is
+    the {i pre-widening} narrow row the upstream was given at its definition
+    site. The widening that fools OCaml's covariant subtyping mutates the
+    [exp_type] at the call site only. So reading [val_type] from [Texp_ident]
+    gives us the truth.
+
+    For inline upstreams (no let-binding) we used to fall back unconditionally
+    to [exp_type], which is already widened : the LIMITATIONS §1.1
+    false-negative documented prior to this module's recursive extension.
+
+    {1 Recursive residual for chained inline combinators}
+
+    When upstream is itself a [Texp_apply] of a known combinator (catch /
+    provide / their Layer counterparts), we compute the inner combinator's
+    {b residual row} on the slot the OUTER cares about, by recursing. The catch
+    / provide effect on each slot:
+
+    {v
+    Combinator                     Slot 1 (errors)            Slot 2 (services)
+    ------------------------------ ------------------------- ---------------------------
+    Combinators.catch              handler-driven            pass-through (recurse)
+    Combinators.catch_filter       handler-driven            pass-through (recurse)
+    Combinators.catch_cause        handler-driven            pass-through (recurse)
+    Combinators.catch_cause_filter handler-driven            pass-through (recurse)
+    Combinators.map_fail          handler codomain (skip)   pass-through (recurse)
+    Combinators.provide            pass-through (recurse)    handler-driven
+    Combinators.scoped_with      pass-through (recurse)    handler-driven
+    Layer.catch                    handler-driven (skip)     pass-through (recurse)
+    Layer.catch_cause              handler-driven            pass-through (recurse)
+    Layer.provide_to_effect        pass-through (recurse)    handler-driven
+    Layer.provide_to_layer         pass-through (recurse)    handler-driven
+    Layer.provide_merge_to_layer   pass-through (recurse)    handler-driven
+    v}
+
+    "Handler-driven" cases that we successfully detect:
+
+    - {b catch} with pure-propagate handler (every arm is [fail (alias)] : the
+      [%hamlet.propagate_e] expansion or hand-rolled equivalent): residual on
+      slot 1 = inner upstream's residual on slot 1.
+    - {b provide} with pure-need handler (every arm is [Dispatch.need (alias)]):
+      residual on slot 2 = inner upstream's residual on slot 2 (handler is a
+      no-op, equivalent to [%hamlet.propagate_s] for all tags).
+    - {b provide} with pure-give handler (every arm is [<X>.Tag.give alias _]):
+      residual on slot 2 = inner upstream's residual on slot 2, minus the union
+      of give-tags collected from the arm patterns.
+
+    Anything else (handler shape we don't recognise, [Layer.catch] whose handler
+    returns [Layer.make ...] rather than [fail], [map_fail] whose handler
+    returns a tag value, etc.) → fallback to widened [exp_type], same
+    false-negative posture as before.
+
+    Slot pass-through is unconditional: an outer catch over an inner provide
+    sees inner provide as a slot-1 pass-through (provide doesn't touch errors),
+    and vice versa. *)
+
+open Typedtree
+module Observation = Hamlet_subtractor_core.Observation
+module Kind = Hamlet_subtractor_core.Kind
+
+(** Args helpers : local copies of {!Walker.extract_upstream} /
+    {!Walker.extract_handler}, kept here to avoid a circular dependency between
+    [upstream.ml] (which now needs to inspect arg lists for recursion) and
+    [walker.ml] (which uses [upstream.ml]). The walker delegates to these in
+    {!Walker.try_candidate} too.
+
+    Both helpers ignore [Omitted] arg slots : those represent the
+    not-yet-provided positions of a partial application, and the [unstage]
+    machinery below splices in the missing positional value by combining the
+    outer apply's arg list with the inner partial's. *)
+let extract_upstream args =
+  List.find_map
+    (fun (lbl, a) ->
+      match (lbl, a) with Asttypes.Nolabel, Arg e -> Some e | _ -> None)
+    args
+
+let extract_handler ~(label : string) args =
+  List.find_map
+    (fun (lbl, a) ->
+      match (lbl, a) with
+      | Asttypes.Labelled lbl, Arg e when lbl = label -> Some e
+      | _ -> None)
+    args
+
+(** Unstage a [Texp_apply] so that downstream classification works for both the
+    direct form ([catch eff ~handler:h]) and the partial-then-applied form that
+    the [%revapply] [|>] pipe produces ([eff |> catch ~handler:h] becomes
+    [Texp_apply (<partial catch ~handler:h>, [Nolabel, Arg eff])] at typedtree
+    level : see ppx-hamlet test/cases/chained_cases dump).
+
+    Returns [Some (ident_callee, combined_args)] when:
+    - The outer apply's callee is itself a [Texp_apply] whose callee is a
+      [Texp_ident], and at least one positional slot in the inner apply is
+      [Omitted] (signal that this is a partial waiting for upstream).
+    - We can splice the outer's positional [Arg]s into the [Omitted] slots of
+      the inner, producing a canonical full-arg list.
+
+    Returns [None] for the direct form (no unstaging needed) or for shapes that
+    don't fit (multi-level partial chains, named-arg-only outer call, etc.). The
+    walker / recursion fall back to the direct path. *)
+let unstage_apply (e : Typedtree.expression) :
+    (Typedtree.expression * (Asttypes.arg_label * Typedtree.apply_arg) list)
+    option =
+  let open Typedtree in
+  match e.exp_desc with
+  | Texp_apply (outer_callee, outer_args) -> (
+      match outer_callee.exp_desc with
+      | Texp_apply (inner_callee, inner_args) -> (
+          match inner_callee.exp_desc with
+          | Texp_ident _ ->
+              (* Splice outer positional Args into inner Omitted positional
+                 slots. Tracks an outer-arg cursor; named outer args (rare
+                 but allowed by OCaml when the inner partial omitted a
+                 named slot too) are appended verbatim. *)
+              let outer_pos_args =
+                List.filter_map
+                  (fun (lbl, a) ->
+                    match (lbl, a) with
+                    | Asttypes.Nolabel, Arg _ -> Some a
+                    | _ -> None)
+                  outer_args
+              in
+              let outer_named_args =
+                List.filter
+                  (fun (lbl, _) ->
+                    match lbl with Asttypes.Nolabel -> false | _ -> true)
+                  outer_args
+              in
+              let cursor = ref outer_pos_args in
+              let spliced =
+                List.map
+                  (fun (lbl, a) ->
+                    match (lbl, a) with
+                    | Asttypes.Nolabel, Omitted _ -> (
+                        match !cursor with
+                        | [] -> (lbl, a)
+                        | next :: rest ->
+                            cursor := rest;
+                            (lbl, next))
+                    | _ -> (lbl, a))
+                  inner_args
+              in
+              if !cursor = [] && outer_named_args = [] then
+                Some (inner_callee, spliced)
+              else if !cursor = [] then
+                Some (inner_callee, spliced @ outer_named_args)
+              else
+                (* Some outer positional args couldn't be placed : shape
+                   doesn't match a clean partial-then-apply. *)
+                None
+          | _ -> None)
+      | _ -> None)
+  | _ -> None
+
+(** Walk a type to slot [slot] of a [(_, _, _) Hamlet.t] / [Layer.t]
+    application. Returns [None] when the type is not a 3-arg Hamlet-rooted [t].
+    The Hamlet-root check (via
+    {!Hamlet_subtractor_classify.path_root_is_hamlet}) prevents grabbing
+    arguments off unrelated 3-arg [t] types. *)
+let hamlet_slot (ty : Types.type_expr) ~(slot : int) : Types.type_expr option =
+  let ty = Ctype.expand_head Env.empty ty in
+  match Types.get_desc ty with
+  | Tconstr (path, args, _) ->
+      if
+        List.length args = 3
+        && (Path.name path = "Hamlet.t"
+           || Path.last path = "t"
+              && Hamlet_subtractor_classify.path_root_is_hamlet path)
+      then Some (List.nth args slot)
+      else None
+  | _ -> None
+
+(** Incomplete row observation read from a recognized Hamlet or Layer slot. The
+    compatibility support retains names and does not claim exact proof status.
+*)
+let observation_at_slot (ty : Types.type_expr) ~(slot : int) :
+    Observation.t option =
+  match hamlet_slot ty ~slot with
+  | Some t ->
+      let kind = if slot = 1 then Kind.Error else Kind.Requirement in
+      Some (Observation.of_tags ~kind (Hamlet_subtractor_tags.present_tags t))
+  | None -> None
+
+(** Recursive residual computation. [slot] is the slot the OUTER combinator
+    cares about (1 = errors, 2 = services). For a let-bound [Texp_ident] we read
+    [vd.val_type]; for an inline [Texp_apply] of a known combinator we recurse,
+    propagating through pass-through slots and handling the "handler-driven"
+    slots when the handler matches a recognised pure shape. *)
+let rec residual ~(slot : int) (e : expression) : Observation.t option =
+  match e.exp_desc with
+  | Texp_ident (_, _, vd) -> observation_at_slot vd.val_type ~slot
+  | Texp_apply (callee, args) -> classify_and_recurse ~slot e ~callee ~args
+  | _ -> observation_at_slot e.exp_type ~slot
+
+(** Common direct-form handler shared by the direct-callee branch and the
+    unstaged callee branch. [outer_e] is always the original outer apply
+    expression, so the widened-fallback location stays accurate. *)
+and classify_and_recurse
+    ~slot
+    (outer_e : expression)
+    ~(callee : expression)
+    ~(args : (Asttypes.arg_label * apply_arg) list) : Observation.t option =
+  match callee.exp_desc with
+  | Texp_ident (path, _, vd) -> (
+      match Hamlet_subtractor_classify.classify_path path vd.val_type vd with
+      | Other -> observation_at_slot outer_e.exp_type ~slot
+      | Match info -> residual_through ~slot ~info args outer_e)
+  | Texp_apply _ -> (
+      (* The pipe form [eff |> catch ~handler:H] yields a staged apply: outer
+         apply with one positional [Arg eff] over an inner apply (the
+         partial [catch ~handler:H]). Unstage and try again. *)
+      match unstage_apply outer_e with
+      | Some (inner_callee, combined_args) ->
+          classify_and_recurse ~slot outer_e ~callee:inner_callee
+            ~args:combined_args
+      | None -> observation_at_slot outer_e.exp_type ~slot)
+  | _ -> observation_at_slot outer_e.exp_type ~slot
+
+(** Residual through one inner combinator application. The combinator slot
+    determines which slot it touches:
+
+    - [`Catch] touches slot 1 (errors), passes slot 2 (services) through.
+    - [`Provide] touches slot 2 (services), passes slot 1 (errors) through.
+
+    For pass-through slots we recurse on the inner positional upstream. For
+    touched slots we delegate to the handler-shape detector and either recurse
+    (pure-propagate / pure-need) or arithmetic-then-recurse (pure-give), or fall
+    back.
+
+    The [info.handler_label] is forwarded to [extract_handler] so each
+    combinator's handler is found at the correct label. *)
+and residual_through
+    ~slot
+    ~(info : Hamlet_subtractor_classify.info)
+    args
+    (outer_e : expression) : Observation.t option =
+  let upstream = extract_upstream args in
+  let handler = extract_handler ~label:info.handler_label args in
+  let pass_through () =
+    match upstream with
+    | Some up -> residual ~slot up
+    | None -> observation_at_slot outer_e.exp_type ~slot
+  in
+  let touched () =
+    match (info.slot, handler, upstream) with
+    | `Catch, Some h, Some up -> (
+        match
+          Hamlet_subtractor_propagate.classify_catch_handler ~peel:info.peel h
+        with
+        | Catch_pure_propagate -> residual ~slot up
+        | Catch_other -> observation_at_slot outer_e.exp_type ~slot)
+    | `Provide, Some h, Some up -> (
+        match
+          Hamlet_subtractor_propagate.classify_provide_handler ~peel:info.peel h
+        with
+        | Provide_residual discharged -> (
+            match residual ~slot up with
+            | Some upstream ->
+                Some (Observation.subtract upstream ~handled:discharged)
+            | None -> None)
+        | Provide_other -> observation_at_slot outer_e.exp_type ~slot)
+    | _ -> observation_at_slot outer_e.exp_type ~slot
+  in
+  match (info.slot, slot) with
+  | `Catch, 1 -> touched ()
+  | `Catch, _ -> pass_through ()
+  | `Provide, 2 -> touched ()
+  | `Provide, _ -> pass_through ()
+
+(** Incomplete observation reachable from upstream's relevant row slot. [None]
+    when neither the recursion nor the fallback can recognise a Hamlet or Layer
+    value. *)
+let row_observation (up : expression) ~(kind : [ `Catch | `Provide ]) :
+    Observation.t option =
+  let slot = match kind with `Catch -> 1 | `Provide -> 2 in
+  residual ~slot up

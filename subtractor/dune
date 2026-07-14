@@ -1,0 +1,99 @@
+(library
+ (name hamlet_subtractor_engine)
+ (public_name hamlet-subtractor.engine)
+ (wrapped false)
+ (modules
+  hamlet_subtractor_catalogue
+  hamlet_subtractor_engine
+  hamlet_subtractor_generator
+  hamlet_subtractor_replace
+  hamlet_subtractor_resolver_protocol)
+ (libraries hamlet_subtractor_core ppxlib yojson)
+ (preprocess
+  (pps ppxlib.metaquot)))
+
+(library
+ (name hamlet_subtractor_private)
+ (package hamlet-subtractor)
+ (wrapped false)
+ (modules
+  hamlet_subtractor_compiler_compat
+  hamlet_subtractor_compiler_evidence
+  hamlet_subtractor_probe
+  hamlet_subtractor_resolver_server
+  hamlet_subtractor_version)
+ (libraries
+  compiler-libs.common
+  hamlet_subtractor_core
+  hamlet_subtractor_engine
+  hamlet_subtractor_evidence_support
+  ppxlib
+  unix))
+
+(executable
+ (name hamlet_subtractor_resolver)
+ (modules hamlet_subtractor_resolver)
+ (libraries hamlet_subtractor_private))
+
+(install
+ (package hamlet-subtractor)
+ (section
+  (site
+   (hamlet-subtractor resolver)))
+ (files
+  (hamlet_subtractor_resolver.exe as hamlet-subtractor-resolver)))
+
+(rule
+ (targets hamlet_subtractor_resolver_ready.ml)
+ (deps hamlet_subtractor_resolver.exe)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let built = ()"))))
+
+(generate_sites_module
+ (module hamlet_subtractor_sites)
+ (sites hamlet-subtractor))
+
+(library
+ (name hamlet_subtractor_resolver_runtime)
+ (package hamlet-subtractor)
+ (wrapped false)
+ (modules
+  hamlet_subtractor_resolver_client
+  hamlet_subtractor_monotonic
+  hamlet_subtractor_resolver_ready
+  hamlet_subtractor_resolver_transport
+  hamlet_subtractor_sites)
+ (foreign_stubs
+  (language c)
+  (names hamlet_subtractor_monotonic_stubs))
+ (libraries
+  compiler-libs.common
+  dune-site
+  hamlet_subtractor_core
+  hamlet_subtractor_engine
+  hamlet_subtractor_private
+  ppxlib
+  unix))
+
+(rule
+ (targets hamlet_subtractor_version.ml)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo
+    "let configured = \"%{version:hamlet-subtractor}\"\\nlet value = if configured = \"\" then \"dev\" else configured"))))
+
+(library
+ (name hamlet_subtractor_ppx)
+ (public_name hamlet-subtractor.ppx)
+ (kind ppx_rewriter)
+ (modules hamlet_subtractor_ppx)
+ (libraries
+  hamlet_subtractor_core
+  hamlet_subtractor_engine
+  hamlet_subtractor_private
+  hamlet_subtractor_resolver_runtime
+  ppx_hamlet
+  ppxlib))

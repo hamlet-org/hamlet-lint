@@ -1,0 +1,11 @@
+(library
+ (name hamlet_subtractor_evidence_support)
+ (package hamlet-subtractor)
+ (wrapped false)
+ (modules
+  hamlet_subtractor_classify
+  hamlet_subtractor_compiler_compat_505
+  hamlet_subtractor_propagate
+  hamlet_subtractor_tags
+  hamlet_subtractor_upstream)
+ (libraries compiler-libs.common hamlet_subtractor_core))
