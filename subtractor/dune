@@ -80,10 +80,9 @@
 (rule
  (targets hamlet_subtractor_version.ml)
  (action
-  (with-stdout-to
+  (write-file
    %{targets}
-   (echo
-    "let configured = \"%{version:hamlet-subtractor}\"\\nlet value = if configured = \"\" then \"dev\" else configured"))))
+   "let configured = \"%{version:hamlet-subtractor}\"\nlet value = if configured = \"\" then \"dev\" else configured\n")))
 
 (library
  (name hamlet_subtractor_ppx)
