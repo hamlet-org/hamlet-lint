@@ -493,6 +493,43 @@ let test_generic_pipeline_two_error_slots () =
   check_rendered "first slot" "handle_slot_0" rendered;
   check_rendered "second slot" "handle_slot_1" rendered
 
+let test_generic_supported_primitive_flows () =
+  let sources =
+    [
+      ( "ensuring",
+        "Hamlet.Combinators.ensuring source\n~f:(Hamlet.Combinators.success ())"
+      );
+      ( "acquire_use_release",
+        "Hamlet.Combinators.acquire_use_release source\n\
+         ~use:(fun value -> Hamlet.Combinators.success value)\n\
+         ~release:(fun _ _ -> Hamlet.Combinators.success ())" );
+      ("scoped", "Hamlet.Combinators.scoped source");
+      ( "scoped_with",
+        "Hamlet.Combinators.scoped_with source\n\
+         ~handler:(fun scope -> function\n\
+         | #Hamlet.Scope.Tag.r as witness ->\n\
+         Hamlet.Scope.Tag.give witness scope\n\
+         | requirement -> Hamlet.Dispatch.need requirement)" );
+      ("sandbox", "Hamlet.Combinators.sandbox source");
+    ]
+  in
+  List.iter
+    (fun (name, upstream) ->
+      let rendered =
+        generic_transform
+          (Printf.sprintf
+             "let[@hamlet.generic] helper source =\n\
+              Hamlet.Combinators.catch (%s) ~handler:(function\n\
+              | `Handled -> Hamlet.Combinators.success ()\n\
+              | [%%hamlet.propagate_e.auto] -> .)"
+             upstream)
+        |> render_structure
+      in
+      check_rendered
+        (name ^ " retains generic dispatch")
+        "Evidence.dispatch" rendered)
+    sources
+
 let test_generic_guard_forwards_when_false () =
   let rendered =
     generic_transform
@@ -716,6 +753,29 @@ let test_generic_refusals () =
      ~handler:(function | [%hamlet.propagate_e.auto] -> .)" (function
     | Generic_definition.Unsupported_source_flow -> true
     | _ -> false);
+  List.iter
+    (fun (name, upstream) ->
+      expect_generic_refusal name
+        (Printf.sprintf
+           "let[@hamlet.generic] helper source =\n\
+            Hamlet.Combinators.catch (%s)\n\
+            ~handler:(function | [%%hamlet.propagate_e.auto] -> .)"
+           upstream) (function
+        | Generic_definition.Unsupported_source_flow -> true
+        | _ -> false))
+    [
+      ("sandbox_cause carrier", "Hamlet.Combinators.sandbox_cause source");
+      ("add_finalizer carrier", "Hamlet.Combinators.add_finalizer source");
+      ( "add_finalizer_exit carrier",
+        "Hamlet.Combinators.add_finalizer_exit (fun _ -> source)" );
+      ( "acquire_release carrier",
+        "Hamlet.Combinators.acquire_release source\n\
+         ~release:(fun _ _ -> Hamlet.Combinators.success ())" );
+      ("Scope.use carrier", "Hamlet.Scope.use scope source");
+      ( "Scope.use_with carrier",
+        "Hamlet.Scope.use_with scope source\n\
+         ~handler:(fun _ requirement -> Hamlet.Dispatch.need requirement)" );
+    ];
   expect_generic_refusal "multiple symbolic inputs"
     "let[@hamlet.generic] helper left source =\n\
      Hamlet.Combinators.catch\n\
@@ -794,6 +854,8 @@ let () =
             test_generic_two_alternating_slots;
           Alcotest.test_case "two pipeline slots" `Quick
             test_generic_pipeline_two_error_slots;
+          Alcotest.test_case "supported primitive source flows" `Quick
+            test_generic_supported_primitive_flows;
           Alcotest.test_case "guard fallback" `Quick
             test_generic_guard_forwards_when_false;
           Alcotest.test_case "fun match handler" `Quick

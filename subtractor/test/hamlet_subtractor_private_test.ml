@@ -987,6 +987,168 @@ let helper source =
     |> symbolic_exact_leaves
     |> leaf_labels)
 
+let test_symbolic_cleanup_and_resource_families () =
+  let input = symbolic_identity Hamlet_subtractor_core.Kind.Error "Input" in
+  let cleanup = symbolic_identity Hamlet_subtractor_core.Kind.Error "Cleanup" in
+  let use = symbolic_identity Hamlet_subtractor_core.Kind.Error "Use" in
+  let release = symbolic_identity Hamlet_subtractor_core.Kind.Error "Release" in
+  let logger =
+    symbolic_identity Hamlet_subtractor_core.Kind.Requirement "Logger"
+  in
+  let ensuring =
+    resolve_symbolic_helper
+      {|
+let helper source =
+  Hamlet.Combinators.ensuring source
+    ~f:(Hamlet.Combinators.fail (`Cleanup 1))
+|}
+    |> fun symbolic -> evaluate_symbolic symbolic [ input; cleanup ] [ logger ]
+  in
+  Alcotest.(check (list string))
+    "ensuring preserves source and cleanup errors" [ "Cleanup"; "Input" ]
+    (ensuring
+    |> Hamlet_subtractor_core.Effect_certificate.errors
+    |> symbolic_exact_leaves
+    |> leaf_labels);
+  Alcotest.(check (list string))
+    "ensuring preserves requirements" [ "Logger" ]
+    (ensuring
+    |> Hamlet_subtractor_core.Effect_certificate.requirements
+    |> symbolic_exact_leaves
+    |> leaf_labels);
+  let bracket =
+    resolve_symbolic_helper
+      {|
+let helper source =
+  Hamlet.Combinators.acquire_use_release source
+    ~use:(fun _ -> Hamlet.Combinators.fail (`Use 1))
+    ~release:(fun _ _ -> Hamlet.Combinators.fail (`Release 1))
+|}
+    |> fun symbolic ->
+    evaluate_symbolic symbolic [ input; use; release ] [ logger ]
+  in
+  Alcotest.(check (list string))
+    "bracket unions acquire, use, and release errors"
+    [ "Input"; "Release"; "Use" ]
+    (bracket
+    |> Hamlet_subtractor_core.Effect_certificate.errors
+    |> symbolic_exact_leaves
+    |> leaf_labels);
+  Alcotest.(check (list string))
+    "bracket preserves requirements" [ "Logger" ]
+    (bracket
+    |> Hamlet_subtractor_core.Effect_certificate.requirements
+    |> symbolic_exact_leaves
+    |> leaf_labels)
+
+let test_symbolic_scope_families () =
+  let input = symbolic_identity Hamlet_subtractor_core.Kind.Error "Input" in
+  let scope =
+    symbolic_identity Hamlet_subtractor_core.Kind.Requirement "Scope"
+  in
+  let logger =
+    symbolic_identity Hamlet_subtractor_core.Kind.Requirement "Logger"
+  in
+  let scoped =
+    resolve_symbolic_helper
+      "let helper source = Hamlet.Combinators.scoped source"
+    |> fun symbolic -> evaluate_symbolic symbolic [ input ] [ scope ]
+  in
+  Alcotest.(check (list string))
+    "scoped preserves errors" [ "Input" ]
+    (scoped
+    |> Hamlet_subtractor_core.Effect_certificate.errors
+    |> symbolic_exact_leaves
+    |> leaf_labels);
+  Alcotest.(check int)
+    "scoped discharges the scope requirement" 0
+    (scoped
+    |> Hamlet_subtractor_core.Effect_certificate.requirements
+    |> symbolic_exact_leaves
+    |> List.length);
+  let scoped_with =
+    resolve_symbolic_helper
+      {|
+let helper source =
+  Hamlet.Combinators.scoped_with source
+    ~handler:(fun scope -> function
+      | #Hamlet.Scope.Tag.r as witness ->
+          Hamlet.Scope.Tag.give witness scope
+      | requirement -> Hamlet.Dispatch.need requirement)
+|}
+  in
+  let handled, explicitly_forwarded =
+    scoped_with
+    |> Hamlet_subtractor_core.Generic_contract.requirements
+    |> subtract_partition
+  in
+  Alcotest.(check (list string))
+    "scoped_with discharges Scope" [ "Scope" ] (leaf_labels handled);
+  Alcotest.(check int)
+    "scoped_with fallback remains implicit" 0
+    (List.length explicitly_forwarded);
+  let scoped_with =
+    evaluate_symbolic scoped_with [ input ] (handled @ [ logger ])
+  in
+  Alcotest.(check (list string))
+    "scoped_with forwards other requirements" [ "Logger" ]
+    (scoped_with
+    |> Hamlet_subtractor_core.Effect_certificate.requirements
+    |> symbolic_exact_leaves
+    |> leaf_labels)
+
+let test_symbolic_sandbox () =
+  let input = symbolic_identity Hamlet_subtractor_core.Kind.Error "Input" in
+  let logger =
+    symbolic_identity Hamlet_subtractor_core.Kind.Requirement "Logger"
+  in
+  let output =
+    resolve_symbolic_helper
+      "let helper source = Hamlet.Combinators.sandbox source"
+    |> fun symbolic -> evaluate_symbolic symbolic [ input ] [ logger ]
+  in
+  Alcotest.(check int)
+    "sandbox clears typed errors" 0
+    (output
+    |> Hamlet_subtractor_core.Effect_certificate.errors
+    |> symbolic_exact_leaves
+    |> List.length);
+  Alcotest.(check (list string))
+    "sandbox preserves requirements" [ "Logger" ]
+    (output
+    |> Hamlet_subtractor_core.Effect_certificate.requirements
+    |> symbolic_exact_leaves
+    |> leaf_labels);
+  let sandbox_cause =
+    resolve_symbolic_helper
+      "let helper source = Hamlet.Combinators.sandbox_cause source"
+  in
+  begin match
+    sandbox_cause
+    |> Hamlet_subtractor_core.Generic_contract.errors
+    |> Hamlet_subtractor_core.Generic_contract.expression_view
+  with
+  | Hamlet_subtractor_core.Generic_contract.Evidence { evidence; _ } -> (
+      match
+        Hamlet_subtractor_core.Effect_certificate.evidence_view evidence
+      with
+      | Hamlet_subtractor_core.Effect_certificate.Opaque_reasons
+          [ Hamlet_subtractor_core.Effect_certificate.Unproven_origin ] ->
+          ()
+      | _ -> Alcotest.fail "sandbox_cause error evidence was unexpectedly exact"
+      )
+  | _ -> Alcotest.fail "sandbox_cause did not replace the error channel"
+  end;
+  let requirements =
+    Hamlet_subtractor_core.Generic_contract.evaluate_expression
+      ~input:(symbolic_certificate [ input ] [ logger ])
+      (Hamlet_subtractor_core.Generic_contract.requirements sandbox_cause)
+    |> symbolic_get_ok "evaluate sandbox_cause requirements"
+  in
+  Alcotest.(check (list string))
+    "sandbox_cause still preserves requirements" [ "Logger" ]
+    (requirements |> symbolic_exact_leaves |> leaf_labels)
+
 let test_symbolic_prior_owner_dependency () =
   let handled = symbolic_identity Hamlet_subtractor_core.Kind.Error "Handled" in
   let recovery =
@@ -1853,6 +2015,12 @@ let () =
             test_symbolic_composition_families;
           Alcotest.test_case "symbolic recovery and clear families" `Quick
             test_symbolic_filter_and_clear_families;
+          Alcotest.test_case "symbolic cleanup and resource families" `Quick
+            test_symbolic_cleanup_and_resource_families;
+          Alcotest.test_case "symbolic scope families" `Quick
+            test_symbolic_scope_families;
+          Alcotest.test_case "symbolic sandbox clears typed errors" `Quick
+            test_symbolic_sandbox;
           Alcotest.test_case "symbolic prior owners compose" `Quick
             test_symbolic_prior_owner_dependency;
           Alcotest.test_case "parameter-dependent builder is refused" `Quick
