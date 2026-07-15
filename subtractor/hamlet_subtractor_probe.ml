@@ -12,6 +12,7 @@ let upstream_attribute = "hamlet.subtractor.upstream.v1"
 let callee_attribute = "hamlet.subtractor.callee.v1"
 let handler_attribute = "hamlet.subtractor.handler.v1"
 let owner_attribute = "hamlet.subtractor.owner.v1"
+let generic_output_link_attribute = "hamlet.subtractor.generic_output_link.v1"
 
 type propagation_kind = Error_propagation | Requirement_propagation
 
@@ -396,6 +397,14 @@ let add_upstream_attribute ~kind ~id expression =
 let add_evidence_attribute ~name ~id expression =
   add_string_attribute ~name ~value:id expression
 
+let add_value_binding_attribute ~name ~id binding =
+  let loc = binding.pvb_loc in
+  let attribute =
+    A.attribute ~loc ~name:{ txt = name; loc }
+      ~payload:(PStr [ A.pstr_eval ~loc (A.estring ~loc id) [] ])
+  in
+  { binding with pvb_attributes = attribute :: binding.pvb_attributes }
+
 let replace_direct_upstream upstream_index replacement args =
   List.mapi
     (fun index (label, argument) ->
@@ -427,7 +436,11 @@ let isolate_candidate candidate marker =
   let binding_name = "_hamlet_subtractor_upstream_" ^ digest in
   let pattern = A.ppat_var ~loc:upstream.pexp_loc { txt = binding_name; loc } in
   let marked_upstream = add_upstream_attribute ~kind ~id:marker.id upstream in
-  let binding = A.value_binding ~loc ~pat:pattern ~expr:marked_upstream in
+  let binding =
+    A.value_binding ~loc ~pat:pattern ~expr:marked_upstream
+    |> add_value_binding_attribute ~name:generic_output_link_attribute
+         ~id:marker.id
+  in
   let replacement =
     A.pexp_ident ~loc:upstream.pexp_loc
       { txt = Lident binding_name; loc = upstream.pexp_loc }

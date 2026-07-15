@@ -209,16 +209,8 @@ cat > "$consumer/dune" <<'EOF'
   (staged_pps hamlet-subtractor.ppx)))
 EOF
 
-cat > "$consumer/main.ml" <<'EOF'
+cat > "$consumer/services.ml" <<'EOF'
 open Hamlet
-
-[%%hamlet.service
-module type Storage = sig
-  type missing = [ `Missing of string ]
-  type timeout = [ `Timeout of int ]
-
-  val read : unit -> (string, [> missing | timeout ], 'r) t
-end]
 
 [%%hamlet.service
 module type Logger = sig
@@ -235,6 +227,11 @@ module type Metrics = sig
   val increment : string -> (unit, 'e, 'r) t
 end]
 
+[%%hamlet.service
+module type Audit = sig
+  val record : string -> (unit, 'e, 'r) t
+end]
+
 module Logger_live = Logger.Make (struct
   let log _ = Combinators.return ()
 end)
@@ -247,122 +244,104 @@ module Metrics_live = Metrics.Make (struct
   let increment _ = Combinators.return ()
 end)
 
-module Chain_errors = struct
-  type old_a = [ `Old_a ]
-  type old_b = [ `Old_b ]
-  type old_c = [ `Old_c ]
-  type old = [ old_a | old_b | old_c ]
-  type introduced_one = [ `Introduced_one ]
-  type introduced_two = [ `Introduced_two ]
-  type after_first = [ old_b | old_c | introduced_one ]
-  type after_second = [ old_c | introduced_one | introduced_two ]
+module Audit_live = Audit.Make (struct
+  let record _ = Combinators.return ()
+end)
+EOF
+
+cat > "$consumer/error_helpers.ml" <<'EOF'
+open Hamlet
+
+let[@hamlet.generic] recover_missing source =
+  Combinators.catch source ~handler:(function
+    | `Missing -> Combinators.return "generic missing"
+    | [%hamlet.propagate_e.auto] -> .)
+
+let[@hamlet.generic] recover_missing_and_timeout source =
+  Combinators.catch
+    (recover_missing source)
+    ~handler:(function
+      | `Timeout -> Combinators.return "generic timeout"
+      | [%hamlet.propagate_e.auto] -> .)
+EOF
+
+cat > "$consumer/requirement_helpers.ml" <<'EOF'
+open Hamlet
+open Services
+
+let[@hamlet.generic] provide_logger source =
+  Combinators.provide source ~handler:(function
+    | #Logger.Tag.r as witness -> Logger.Tag.give witness (module Logger_live)
+    | [%hamlet.propagate_s.auto] -> .)
+
+let[@hamlet.generic] provide_logger_and_clock source =
+  Combinators.provide
+    (provide_logger source)
+    ~handler:(function
+      | #Clock.Tag.r as witness -> Clock.Tag.give witness (module Clock_live)
+      | [%hamlet.propagate_s.auto] -> .)
+EOF
+
+cat > "$consumer/main.ml" <<'EOF'
+open Hamlet
+open Services
+
+module Errors = struct
+  type offline = [ `Offline ]
+  type denied = [ `Denied ]
 end
 
 let error_source =
-  Combinators.fail (`Missing "gone" : Storage.Errors.error)
+  if Sys.opaque_identity true then Combinators.fail `Missing
+  else if Sys.opaque_identity true then Combinators.fail `Timeout
+  else if Sys.opaque_identity true then Combinators.fail `Offline
+  else Combinators.fail `Denied
 
-let error_effect =
-  Combinators.catch error_source ~handler:(fun error ->
-      match error with
-      | #Storage.Errors.missing -> Combinators.return "recovered"
-      | [%hamlet.propagate_e.auto] -> .)
+let generic_error_effect =
+  Error_helpers.recover_missing_and_timeout error_source
 
-let chained_error_source : (string, Chain_errors.old, never) t =
-  Combinators.fail (`Old_a : Chain_errors.old)
+let error_after_offline =
+  Combinators.catch
+    (Error_helpers.recover_missing_and_timeout error_source)
+    ~handler:(function
+    | #Errors.offline -> Combinators.return "handled offline"
+    | [%hamlet.propagate_e.auto] -> .)
 
-let chained_error_effect =
-  let after_first_handler =
-    Combinators.catch chained_error_source ~handler:(function
-      | #Chain_errors.old_a -> Combinators.return "handled old A"
-      | [%hamlet.propagate_e.auto] -> .)
-  in
-  let with_new_error =
-    let after_first_handler =
-      (after_first_handler :> (string, Chain_errors.after_first, never) t)
-    in
-    let open Combinators in
-    let* _ = after_first_handler in
-    (fail (`Introduced_one : Chain_errors.introduced_one)
-      :> (string, Chain_errors.after_first, never) t)
-  in
-  with_new_error
-  |> Combinators.catch ~handler:(function
-       | #Chain_errors.old_b ->
-           (Combinators.fail
-              (`Introduced_two : Chain_errors.introduced_two)
-             :> (string, Chain_errors.after_second, never) t)
-       | [%hamlet.propagate_e.auto] -> .)
-  |> Combinators.catch ~handler:(function
-       | #Chain_errors.introduced_one ->
-           Combinators.return "handled introduced error"
-       | [%hamlet.propagate_e.auto] -> .)
+let error_done =
+  Combinators.catch error_after_offline ~handler:(function
+    | #Errors.denied -> Combinators.return "handled denied")
 
-let chained_error_done : (string, never, never) t =
-  Combinators.catch chained_error_effect ~handler:(function
-    | `Old_c -> Combinators.return "handled old C"
-    | `Introduced_two -> Combinators.return "handled introduced error 2")
-
-let alternating_error_source : (string, Chain_errors.old, never) t =
-  Combinators.fail (`Old_b : Chain_errors.old)
-
-let alternating_error_effect =
-  alternating_error_source
-  |> Combinators.catch ~handler:(function
-       | #Chain_errors.old_a -> Combinators.return "handled old A"
-       | [%hamlet.propagate_e.auto] -> .)
-  |> Combinators.chain ~handler:(fun value -> Combinators.return value)
-  |> Combinators.catch ~handler:(function
-       | `Old_b -> Combinators.fail `Introduced_one
-       | `Old_c -> Combinators.fail `Introduced_two)
-  |> Combinators.catch ~handler:(function
-       | #Chain_errors.introduced_one ->
-           Combinators.return "handled alternating error"
-       | [%hamlet.propagate_e.auto] -> .)
-
-let alternating_error_done : (string, never, never) t =
-  Combinators.catch alternating_error_effect ~handler:(function
-    | `Introduced_two -> Combinators.return "handled alternating error 2")
-
-let requirement_source () =
+let requirement_source =
   let open Combinators in
   let* (module Logger) = Logger.Tag.summon in
-  let* () = Logger.log "ciao" in
+  let* () = Logger.log "request started" in
   let* (module Clock) = Clock.Tag.summon in
   let* now = Clock.now () in
+  let* (module Metrics) = Metrics.Tag.summon in
+  let* () = Metrics.increment "request.ready" in
+  let* (module Audit) = Audit.Tag.summon in
+  let* () = Audit.record "request completed" in
   return (Printf.sprintf "ready at %d" now)
 
-let requirement_effect =
-  Combinators.provide (requirement_source ()) ~handler:(fun requirement ->
-      match requirement with
-      | #Logger.Tag.r as witness ->
-          Logger.Tag.give witness (module Logger_live)
-      | [%hamlet.propagate_s.auto] -> .)
+let generic_requirement_effect =
+  Requirement_helpers.provide_logger_and_clock requirement_source
 
-type after_logger = [ Clock.Tag.r | Metrics.Tag.r ]
-
-let requirement_with_metrics =
-  let requirement_effect =
-    (requirement_effect :> (string, never, after_logger) t)
-  in
-  let open Combinators in
-  let* value = requirement_effect in
-  let* (module Metrics) = Metrics.Tag.summon in
-  return value
-
-let requirement_after_clock =
-  Combinators.provide requirement_with_metrics ~handler:(function
-    | #Clock.Tag.r as witness -> Clock.Tag.give witness (module Clock_live)
+let requirement_after_metrics =
+  Combinators.provide
+    (Requirement_helpers.provide_logger_and_clock requirement_source)
+    ~handler:(function
+    | #Metrics.Tag.r as witness ->
+        Metrics.Tag.give witness (module Metrics_live)
     | [%hamlet.propagate_s.auto] -> .)
 
-let requirement_done : (string, never, never) t =
-  Combinators.provide requirement_after_clock ~handler:(function
-    | #Metrics.Tag.r as witness -> Metrics.Tag.give witness (module Metrics_live))
+let requirement_done =
+  Combinators.provide requirement_after_metrics ~handler:(function
+    | #Audit.Tag.r as witness -> Audit.Tag.give witness (module Audit_live))
 
-let error_hover = error_effect
-let requirement_hover = requirement_effect
-let chained_error_hover = chained_error_effect
-let alternating_error_hover = alternating_error_effect
-let chained_requirement_hover = requirement_after_clock
+let generic_error_hover = generic_error_effect
+let error_after_offline_hover = error_after_offline
+let generic_requirement_hover = generic_requirement_effect
+let requirement_after_metrics_hover = requirement_after_metrics
 
 let check expected = function
   | Ok actual when String.equal actual expected -> Printf.printf "%s\n" actual
@@ -370,16 +349,16 @@ let check expected = function
   | Error _ -> failwith "unexpected typed failure"
 
 let () =
-  check "recovered" (Interpreter.run error_effect);
-  check "handled introduced error" (Interpreter.run chained_error_done);
-  check "handled alternating error" (Interpreter.run alternating_error_done);
+  check "generic missing" (Interpreter.run error_done);
   check "ready at 42" (Interpreter.run requirement_done)
 EOF
 
 reject_file_text "$consumer/main.ml" "let error_source :"
-reject_file_text "$consumer/main.ml" "let requirement_source () :"
-reject_file_text "$consumer/main.ml" ": Logger.Tag.t"
-reject_file_text "$consumer/main.ml" ": Clock.Tag.t"
+reject_file_text "$consumer/main.ml" "let requirement_source :"
+reject_file_text "$consumer/main.ml" "let requirement_done :"
+reject_file_text "$consumer/main.ml" ":>"
+reject_file_text "$consumer/error_helpers.ml" "[%hamlet.forward.auto]"
+reject_file_text "$consumer/requirement_helpers.ml" "[%hamlet.forward.auto]"
 
 export HAMLET_SUBTRACTOR_RESOLVER_TRACE="$trace"
 unset DUNE_DIR_LOCATIONS DUNE_SOURCEROOT
@@ -393,83 +372,67 @@ unset DUNE_DIR_LOCATIONS DUNE_SOURCEROOT
 test -s "$trace" || fail "installed resolver was not executed by Dune"
 : > "$trace"
 
-error_position=$(awk '/^let error_hover = error_effect$/ {
-  print NR ":" (index($0, "error_effect") - 1)
+generic_error_position=$(awk '/^let generic_error_hover = generic_error_effect$/ {
+  print NR ":" (index($0, "generic_error_effect") - 1)
 }' "$consumer/main.ml")
-requirement_position=$(awk '/^let requirement_hover = requirement_effect$/ {
-  print NR ":" (index($0, "requirement_effect") - 1)
+error_after_offline_position=$(awk '/^let error_after_offline_hover = error_after_offline$/ {
+  print NR ":" (index($0, "error_after_offline") - 1)
 }' "$consumer/main.ml")
-chained_error_position=$(awk '/^let chained_error_hover = chained_error_effect$/ {
-  print NR ":" (index($0, "chained_error_effect") - 1)
+generic_requirement_position=$(awk '/^let generic_requirement_hover = generic_requirement_effect$/ {
+  print NR ":" (index($0, "generic_requirement_effect") - 1)
 }' "$consumer/main.ml")
-alternating_error_position=$(awk '/^let alternating_error_hover = alternating_error_effect$/ {
-  print NR ":" (index($0, "alternating_error_effect") - 1)
-}' "$consumer/main.ml")
-chained_requirement_position=$(awk '/^let chained_requirement_hover = requirement_after_clock$/ {
-  print NR ":" (index($0, "requirement_after_clock") - 1)
+requirement_after_metrics_position=$(awk '/^let requirement_after_metrics_hover = requirement_after_metrics$/ {
+  print NR ":" (index($0, "requirement_after_metrics") - 1)
 }' "$consumer/main.ml")
 
-test -n "$error_position" || fail "error hover position was not found"
-test -n "$requirement_position" || fail "requirement hover position was not found"
-test -n "$chained_error_position" || fail "chained error hover position was not found"
-test -n "$alternating_error_position" ||
-  fail "alternating error hover position was not found"
-test -n "$chained_requirement_position" ||
-  fail "chained requirement hover position was not found"
+test -n "$generic_error_position" || fail "generic error hover position was not found"
+test -n "$error_after_offline_position" || fail "offline error hover position was not found"
+test -n "$generic_requirement_position" || fail "generic requirement hover position was not found"
+test -n "$requirement_after_metrics_position" || fail "metrics requirement hover position was not found"
 
-error_hover=$(
+generic_error_hover=$(
   cd "$consumer"
-  "$launcher" ocamlmerlin single type-enclosing -position "$error_position" \
+  "$launcher" ocamlmerlin single type-enclosing -position "$generic_error_position" \
     -index 0 -verbosity 0 -filename main.ml < main.ml
 )
-requirement_hover=$(
+error_after_offline_hover=$(
+  cd "$consumer"
+  "$launcher" ocamlmerlin single type-enclosing -position "$error_after_offline_position" \
+    -index 0 -verbosity 0 -filename main.ml < main.ml
+)
+generic_requirement_hover=$(
   cd "$consumer"
   "$launcher" ocamlmerlin single type-enclosing \
-    -position "$requirement_position" -index 0 -verbosity 0 \
+    -position "$generic_requirement_position" -index 0 -verbosity 0 \
     -filename main.ml < main.ml
 )
-chained_error_hover=$(
+requirement_after_metrics_hover=$(
   cd "$consumer"
   "$launcher" ocamlmerlin single type-enclosing \
-    -position "$chained_error_position" -index 0 -verbosity 0 \
-    -filename main.ml < main.ml
-)
-alternating_error_hover=$(
-  cd "$consumer"
-  "$launcher" ocamlmerlin single type-enclosing \
-    -position "$alternating_error_position" -index 0 -verbosity 0 \
-    -filename main.ml < main.ml
-)
-chained_requirement_hover=$(
-  cd "$consumer"
-  "$launcher" ocamlmerlin single type-enclosing \
-    -position "$chained_requirement_position" -index 0 -verbosity 0 \
+    -position "$requirement_after_metrics_position" -index 0 -verbosity 0 \
     -filename main.ml < main.ml
 )
 
-error_hover_compact=$(printf '%s' "$error_hover" | tr -d '[:space:]')
-requirement_hover_compact=$(printf '%s' "$requirement_hover" | tr -d '[:space:]')
-chained_error_hover_compact=$(printf '%s' "$chained_error_hover" | tr -d '[:space:]')
-alternating_error_hover_compact=$(printf '%s' "$alternating_error_hover" | tr -d '[:space:]')
-chained_requirement_hover_compact=$(printf '%s' "$chained_requirement_hover" | tr -d '[:space:]')
-require_text "$error_hover_compact" '"class":"return"'
-require_text "$requirement_hover_compact" '"class":"return"'
-require_text "$chained_error_hover_compact" '"class":"return"'
-require_text "$alternating_error_hover_compact" '"class":"return"'
-require_text "$chained_requirement_hover_compact" '"class":"return"'
-require_one_of "$error_hover" "Timeout" "Storage.Errors.timeout"
-reject_text "$error_hover" "Missing"
-reject_text "$error_hover" "Storage.Errors.missing"
-require_text "$requirement_hover" "Clock"
-reject_text "$requirement_hover" "Logger"
-require_text "$chained_error_hover" "Old_c"
-require_text "$chained_error_hover" "Introduced_two"
-reject_text "$chained_error_hover" "Introduced_one"
-require_text "$alternating_error_hover" "Introduced_two"
-reject_text "$alternating_error_hover" "Introduced_one"
-require_text "$chained_requirement_hover" "Metrics"
-reject_text "$chained_requirement_hover" "Clock"
-reject_text "$chained_requirement_hover" "Logger"
+generic_error_hover_compact=$(printf '%s' "$generic_error_hover" | tr -d '[:space:]')
+error_after_offline_hover_compact=$(printf '%s' "$error_after_offline_hover" | tr -d '[:space:]')
+generic_requirement_hover_compact=$(printf '%s' "$generic_requirement_hover" | tr -d '[:space:]')
+requirement_after_metrics_hover_compact=$(printf '%s' "$requirement_after_metrics_hover" | tr -d '[:space:]')
+require_text "$generic_error_hover_compact" '"class":"return"'
+require_text "$error_after_offline_hover_compact" '"class":"return"'
+require_text "$generic_requirement_hover_compact" '"class":"return"'
+require_text "$requirement_after_metrics_hover_compact" '"class":"return"'
+require_text "$generic_error_hover" "Offline"
+require_text "$generic_error_hover" "Denied"
+reject_text "$generic_error_hover" "Missing"
+reject_text "$generic_error_hover" "Timeout"
+require_text "$error_after_offline_hover" "Denied"
+reject_text "$error_after_offline_hover" "Offline"
+require_text "$generic_requirement_hover" "Metrics"
+require_text "$generic_requirement_hover" "Audit"
+reject_text "$generic_requirement_hover" "Logger"
+reject_text "$generic_requirement_hover" "Clock"
+require_text "$requirement_after_metrics_hover" "Audit"
+reject_text "$requirement_after_metrics_hover" "Metrics"
 
 test -s "$trace" || fail "installed resolver was not executed by Merlin"
 while IFS= read -r executed; do
@@ -480,11 +443,10 @@ while IFS= read -r executed; do
 done < "$trace"
 
 printf '%s\n' "installed resolver: ok"
-printf '%s\n' "raw Merlin error hover: narrow"
-printf '%s\n' "raw Merlin requirement hover: narrow"
-printf '%s\n' "raw Merlin chained error hover: narrow"
-printf '%s\n' "raw Merlin alternating error hover: narrow"
-printf '%s\n' "raw Merlin chained requirement hover: narrow"
+printf '%s\n' "raw Merlin generic error hover: narrow"
+printf '%s\n' "raw Merlin residual error hover: narrow"
+printf '%s\n' "raw Merlin generic requirement hover: narrow"
+printf '%s\n' "raw Merlin residual requirement hover: narrow"
 
 if [ "$keep_work" = 1 ]; then
   quoted_launcher=$(shell_quote "$launcher")

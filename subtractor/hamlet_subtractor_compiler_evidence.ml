@@ -16,6 +16,8 @@ let upstream_attribute = "hamlet.subtractor.upstream.v1"
 let callee_attribute = "hamlet.subtractor.callee.v1"
 let handler_attribute = "hamlet.subtractor.handler.v1"
 let owner_attribute = "hamlet.subtractor.owner.v1"
+let generic_owner_attribute =
+  Hamlet_subtractor_generic_definition.owner_attribute
 let error_leaf_attribute = "hamlet.subtractor.error_leaf.v1"
 let error_union_attribute = "hamlet.subtractor.error_union.v1"
 let error_cases_attribute = "hamlet.subtractor.error_cases.v1"
@@ -1113,9 +1115,10 @@ type value_binding_origin = {
   identifier : Ident.t;
   uid : Shape.Uid.t;
   rhs : expression;
+  attributes : Parsetree.attributes;
 }
 
-let find_value_binding bindings path uid =
+let find_value_binding_origin bindings path uid =
   List.find_map
     (fun (binding : value_binding_origin) ->
       let same_identifier =
@@ -1123,10 +1126,13 @@ let find_value_binding bindings path uid =
         | Path.Pident identifier -> Ident.same identifier binding.identifier
         | Path.Pdot _ | Path.Papply _ | Path.Pextra_ty _ -> false
       in
-      if Shape.Uid.equal uid binding.uid || same_identifier then
-        Some binding.rhs
+      if Shape.Uid.equal uid binding.uid || same_identifier then Some binding
       else None)
     bindings
+
+let find_value_binding bindings path uid =
+  find_value_binding_origin bindings path uid
+  |> Option.map (fun binding -> binding.rhs)
 
 let canonical_simple_producer expression =
   match expression.exp_desc with
@@ -1680,6 +1686,11 @@ let resolve_target_channel
       resolve_channel ~context_digest ~kind ~origin:Proof.Closed_row
         upstream.exp_env occurrence_type
   | _
+    when has_attribute Hamlet_subtractor_generic_call.specialized_attribute
+           upstream.exp_attributes ->
+      resolve_channel ~context_digest ~kind ~origin:Proof.Closed_row
+        upstream.exp_env occurrence_type
+  | _
     when local_application_has_parameter_dependent_channel ~bindings ~kind
            upstream ->
       refuse Polymorphic_parameter
@@ -1763,6 +1774,12 @@ let rec type_pattern_paths : type kind. kind general_pattern -> Path.t list =
         []
 
 let alias_variable = Hamlet_subtractor_propagate.alias_var
+
+let pattern_variable : type kind. kind general_pattern -> Ident.t option =
+ fun pattern ->
+  match pattern.pat_desc with
+  | Tpat_var (identifier, _, _) -> Some identifier
+  | _ -> alias_variable pattern
 
 let is_ident = Hamlet_subtractor_propagate.is_ident_var
 
@@ -1848,9 +1865,106 @@ type classified_arm = {
   arm : Residual.arm;
   identity : Identity.t;
   members : Atom.t list;
+  structural : bool;
   action : Residual.action;
   rhs : expression;
 }
+
+let rec fully_bound_payload_pattern : type kind. kind general_pattern -> bool =
+ fun pattern ->
+  match pattern.pat_desc with
+  | Tpat_value value ->
+      fully_bound_payload_pattern
+        (value : tpat_value_argument :> value general_pattern)
+  | Tpat_var _ -> true
+  | Tpat_alias (inner, _, _, _, _) -> fully_bound_payload_pattern inner
+  | Tpat_tuple patterns ->
+      List.for_all
+        (fun (_, pattern) -> fully_bound_payload_pattern pattern)
+        patterns
+  | Tpat_any | Tpat_constant _ | Tpat_construct _ | Tpat_variant _
+  | Tpat_record _ | Tpat_array _ | Tpat_or _ | Tpat_lazy _ | Tpat_exception _ ->
+      false
+
+let rec structural_variant_pattern : type kind.
+    context_digest:string ->
+    kind general_pattern ->
+    (Identity.t * Atom.t list) option =
+ fun ~context_digest pattern ->
+  match pattern.pat_desc with
+  | Tpat_value value ->
+      structural_variant_pattern ~context_digest
+        (value : tpat_value_argument :> value general_pattern)
+  | Tpat_alias (inner, _, _, _, _) ->
+      structural_variant_pattern ~context_digest inner
+  | Tpat_variant (label, payload, _) ->
+      let identity =
+        Identity.make
+          ~module_path:[ "Hamlet_subtractor"; "Current_expression" ]
+          ~declaration_name:("error_" ^ label) ~interface_digest:context_digest
+        |> function
+        | Ok identity -> identity
+        | Error _ -> refuse (Core_validation_failed "invalid structural leaf")
+      in
+      let payload =
+        match payload with
+        | None -> Atom.No_payload
+        | Some payload when fully_bound_payload_pattern payload ->
+            Atom.Payload
+              (normalize_payload ~context_digest pattern.pat_env
+                 payload.pat_type)
+        | Some _ -> refuse Unsupported_pattern
+      in
+      let atom =
+        Atom.make ~kind:Kind.Error ~declaration:identity ~label ~payload
+        |> function
+        | Ok atom -> atom
+        | Error _ -> refuse (Core_validation_failed "invalid structural atom")
+      in
+      Some (identity, [ atom ])
+  | _ -> None
+
+let classify_typed_arm ~context_digest ~kind (Arm (pattern, guard, rhs)) =
+  let identity, tag_path, members, structural =
+    match type_pattern_paths pattern with
+    | [ path ] ->
+        let identity, tag_path, members =
+          identity_for_pattern ~context_digest ~kind pattern.pat_env path
+        in
+        (identity, Some tag_path, members, false)
+    | [] when Kind.equal kind Kind.Error -> (
+        match structural_variant_pattern ~context_digest pattern with
+        | Some (identity, members) -> (identity, None, members, true)
+        | None -> refuse Unsupported_pattern)
+    | [] | _ :: _ :: _ -> refuse Unsupported_pattern
+  in
+  let action =
+    match kind with
+    | Kind.Error -> classify_error_rhs rhs (alias_variable pattern)
+    | Kind.Requirement -> (
+        match tag_path with
+        | Some tag_path ->
+            classify_requirement_rhs ~tag_path rhs (alias_variable pattern)
+        | None -> refuse Unsupported_pattern)
+  in
+  let guard =
+    match guard with None -> Residual.Unguarded | Some _ -> Residual.Guarded
+  in
+  let target =
+    if structural then
+      match members with
+      | [ atom ] -> Residual.Structural_member atom
+      | [] | _ :: _ :: _ -> refuse Unsupported_pattern
+    else Residual.Complete_leaf identity
+  in
+  {
+    arm = Residual.arm ~target ~guard ~action;
+    identity;
+    members;
+    structural;
+    action;
+    rhs;
+  }
 
 let classify_arms ~context_digest ~kind ~marker_id handler =
   let arms =
@@ -1864,41 +1978,52 @@ let classify_arms ~context_digest ~kind ~marker_id handler =
         if rest = [] then List.rev preceding else refuse Unsupported_pattern
     | arm :: rest -> before_marker (arm :: preceding) rest
   in
-  before_marker [] arms
-  |> List.map (fun (Arm (pattern, guard, rhs)) ->
-      let path =
-        match type_pattern_paths pattern with
-        | [ path ] -> path
-        | [] | _ :: _ :: _ -> refuse Unsupported_pattern
-      in
-      let identity, tag_path, members =
-        identity_for_pattern ~context_digest ~kind pattern.pat_env path
-      in
-      let action =
+  before_marker [] arms |> List.map (classify_typed_arm ~context_digest ~kind)
+
+let classify_generic_handler ~context_digest ~kind handler =
+  let arms =
+    match arms_of_handler handler with
+    | Some arms -> arms
+    | None -> refuse Unsupported_pattern
+  in
+  let preceding, fallback =
+    match List.rev arms with
+    | fallback :: reversed -> (List.rev reversed, fallback)
+    | [] -> refuse Unsupported_pattern
+  in
+  let fallback_forwards =
+    match fallback with
+    | Arm (pattern, None, rhs) when type_pattern_paths pattern = [] -> (
         match kind with
-        | Kind.Error -> classify_error_rhs rhs (alias_variable pattern)
-        | Kind.Requirement ->
-            classify_requirement_rhs ~tag_path rhs (alias_variable pattern)
-      in
-      let guard =
-        match guard with
-        | None -> Residual.Unguarded
-        | Some _ -> Residual.Guarded
-      in
-      {
-        arm =
-          Residual.arm ~target:(Residual.Complete_leaf identity) ~guard ~action;
-        identity;
-        members;
-        action;
-        rhs;
-      })
+        | Kind.Error ->
+            Residual.Forward = classify_error_rhs rhs (pattern_variable pattern)
+        | Kind.Requirement -> (
+            match (pattern_variable pattern, rhs.exp_desc) with
+            | Some identifier, Texp_apply (callee, arguments) -> (
+                match
+                  (callee.exp_desc, first_positional_argument arguments)
+                with
+                | Texp_ident (path, _, description), Some argument ->
+                    is_ident argument identifier
+                    && canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc
+                         ~module_name:"Dispatch" ~value_name:"need" path
+                         description
+                | _ -> false)
+            | _ -> false))
+    | Arm _ -> false
+  in
+  if not fallback_forwards then refuse Unsupported_pattern;
+  List.map (classify_typed_arm ~context_digest ~kind) preceding
 
 type expression_nodes = {
   upstreams : (string, expression list) Hashtbl.t;
   callees : (string, expression list) Hashtbl.t;
   handlers : (string, expression list) Hashtbl.t;
   markers : (string, expression list) Hashtbl.t;
+  generic_outputs :
+    ( string,
+      Effect_certificate.t * Hamlet_subtractor_catalogue.t list )
+    Hashtbl.t;
   mutable bindings : value_binding_origin list;
 }
 
@@ -1906,16 +2031,21 @@ let add_node table id expression =
   let existing = Option.value (Hashtbl.find_opt table id) ~default:[] in
   Hashtbl.replace table id (expression :: existing)
 
-let collect_expression_nodes structure =
+let collect_expression_nodes ?(generic_outputs = []) structure =
   let nodes =
     {
       upstreams = Hashtbl.create 16;
       callees = Hashtbl.create 16;
       handlers = Hashtbl.create 16;
       markers = Hashtbl.create 16;
+      generic_outputs = Hashtbl.create (List.length generic_outputs);
       bindings = [];
     }
   in
+  List.iter
+    (fun (id, certificate, catalogues) ->
+      Hashtbl.replace nodes.generic_outputs id (certificate, catalogues))
+    generic_outputs;
   let iterator =
     let default = Tast_iterator.default_iterator in
     {
@@ -1941,7 +2071,13 @@ let collect_expression_nodes structure =
           List.iter
             (fun (identifier, uid) ->
               nodes.bindings <-
-                { identifier; uid; rhs = binding.vb_expr } :: nodes.bindings)
+                {
+                  identifier;
+                  uid;
+                  rhs = binding.vb_expr;
+                  attributes = binding.vb_attributes;
+                }
+                :: nodes.bindings)
             !bound;
           default.value_binding self binding);
       expr =
@@ -1977,21 +2113,31 @@ let marker_dependencies nodes marker_id upstream =
       default with
       expr =
         (fun self expression ->
-          let owners =
-            attribute_values owner_attribute expression.exp_attributes
-            |> List.filter (fun id -> not (String.equal id marker_id))
-          in
-          if owners <> [] then dependencies := owners @ !dependencies
-          else (
-            (match expression.exp_desc with
-            | Texp_ident (path, _, description) ->
-                let uid = description.Types.val_uid in
-                if not (List.exists (Shape.Uid.equal uid) !visited) then (
-                  visited := uid :: !visited;
-                  Option.iter (self.expr self)
-                    (find_value_binding nodes.bindings path uid))
-            | _ -> ());
-            default.expr self expression));
+          if
+            has_attribute Hamlet_subtractor_generic_call.specialized_attribute
+              expression.exp_attributes
+          then ()
+          else
+            let owners =
+              attribute_values owner_attribute expression.exp_attributes
+              @ attribute_values generic_owner_attribute
+                  expression.exp_attributes
+              @ attribute_values
+                  Hamlet_subtractor_generic_definition.nested_call_attribute
+                  expression.exp_attributes
+              |> List.filter (fun id -> not (String.equal id marker_id))
+            in
+            if owners <> [] then dependencies := owners @ !dependencies
+            else (
+              (match expression.exp_desc with
+              | Texp_ident (path, _, description) ->
+                  let uid = description.Types.val_uid in
+                  if not (List.exists (Shape.Uid.equal uid) !visited) then (
+                    visited := uid :: !visited;
+                    Option.iter (self.expr self)
+                      (find_value_binding nodes.bindings path uid))
+              | _ -> ());
+              default.expr self expression));
     }
   in
   iterator.expr iterator upstream;
@@ -2244,11 +2390,39 @@ let recovery_certificate
     | None -> opaque ()
   with Refuse _ -> opaque ()
 
+let source_plan_leaf kind identity members =
+  match kind with
+  | Kind.Error -> (
+      Leaf.error ~identity ~members ~materialization:Leaf.Direct |> function
+      | Ok leaf -> leaf
+      | Error _ -> refuse Unsupported_pattern)
+  | Kind.Requirement -> (
+      match members with
+      | [ member ] -> (
+          Leaf.requirement ~identity ~member
+            ~materialization:Leaf.Requirement_tag
+          |> function
+          | Ok leaf -> leaf
+          | Error _ -> refuse Unsupported_pattern)
+      | _ -> refuse (Grouped_requirement identity))
+
 type source_plan =
   | Known_source of Effect_certificate.t
+  | Generic_input_source
   | Dependency_source of string
   | Chained_source of source_plan list
   | Recovered_source of { source : source_plan; recoveries : source_plan list }
+  | Caught_source of {
+      source : source_plan;
+      handled : Leaf.t list;
+      explicitly_forwarded : Leaf.t list;
+      recoveries : source_plan list;
+    }
+  | Provided_source of {
+      source : source_plan;
+      handled : Leaf.t list;
+      explicitly_forwarded : Leaf.t list;
+    }
   | Errors_from_output of {
       source : source_plan;
       output : Effect_certificate.t;
@@ -2262,7 +2436,7 @@ type source_plan =
   | Opaque_errors of source_plan
 
 let rec source_plan_dependencies = function
-  | Known_source _ -> []
+  | Known_source _ | Generic_input_source -> []
   | Dependency_source id -> [ id ]
   | Chained_source plans ->
       plans
@@ -2272,6 +2446,11 @@ let rec source_plan_dependencies = function
       source :: recoveries
       |> List.concat_map source_plan_dependencies
       |> List.sort_uniq String.compare
+  | Caught_source { source; recoveries; _ } ->
+      source :: recoveries
+      |> List.concat_map source_plan_dependencies
+      |> List.sort_uniq String.compare
+  | Provided_source { source; _ } -> source_plan_dependencies source
   | Errors_from_output { source; _ }
   | Requirements_from_output { source; _ }
   | Cleared_errors source
@@ -2283,15 +2462,63 @@ let chain_source_plans = function
   | [ plan ] -> plan
   | plans -> Chained_source plans
 
+let scope_requirement_source ~context_digest application =
+  let scope_name =
+    Longident.unflatten [ "Hamlet"; "Scope"; "Tag"; "r" ] |> Option.get
+  in
+  let _, declaration =
+    try
+      Env.lookup_type ~use:false ~loc:application.exp_loc scope_name
+        application.exp_env
+    with _ ->
+      refuse (Core_validation_failed "cannot resolve Hamlet.Scope.Tag.r")
+  in
+  let row =
+    match declaration.Types.type_manifest with
+    | Some manifest when declaration.type_private = Asttypes.Public ->
+        expand_exact_row application.exp_env manifest
+    | Some _ | None ->
+        refuse (Core_validation_failed "Hamlet.Scope.Tag.r is not transparent")
+  in
+  let scope =
+    match requirement_leaves_of_row ~context_digest application.exp_env row with
+    | [ scope ]
+      when List.exists
+             (fun member -> String.equal (Atom.label member) "Scope")
+             (Leaf.members scope) ->
+        scope
+    | [] | [ _ ] | _ :: _ :: _ ->
+        refuse
+          (Core_validation_failed
+             "scope combinator output does not expose exactly one Scope tag")
+  in
+  let requirements =
+    proof_of_leaves ~kind:Kind.Requirement
+      ~origin:(Proof.Composition { operation = Proof.Summon; inputs = [] })
+      [ scope ]
+  in
+  Known_source
+    (exact_certificate
+       ~errors:(empty_proof Kind.Error Proof.Return)
+       ~requirements)
+
 let rec source_plan_for_expression
     ~context_digest
     ~nodes
     ~marker_id
     ~kind
+    ~generic_input
     ~seen
     expression =
   let owners =
-    attribute_values owner_attribute expression.exp_attributes
+    (attribute_values owner_attribute expression.exp_attributes
+    @
+    if Option.is_some generic_input then
+      attribute_values generic_owner_attribute expression.exp_attributes
+      @ attribute_values
+          Hamlet_subtractor_generic_definition.nested_call_attribute
+          expression.exp_attributes
+    else [])
     |> List.filter (fun id -> not (String.equal id marker_id))
     |> List.sort_uniq String.compare
   in
@@ -2314,320 +2541,520 @@ let rec source_plan_for_expression
         in
         (certificate, catalogues)
       in
-      begin match intrinsic_certificate ~context_digest expression with
-      | Some (certificate, catalogues) -> (Known_source certificate, catalogues)
-      | None -> (
+      let rec generic_call_output expression =
+        let resolved_output ids =
+          match List.sort_uniq String.compare ids with
+          | [] -> None
+          | [ id ] -> Hashtbl.find_opt nodes.generic_outputs id
+          | _ -> refuse Higher_order_flow
+        in
+        let call_ids =
+          attribute_values Hamlet_subtractor_generic_call.call_attribute
+            expression.exp_attributes
+        in
+        let link_ids =
+          attribute_values upstream_attribute expression.exp_attributes
+          @ attribute_values
+              Hamlet_subtractor_probe.generic_output_link_attribute
+              expression.exp_attributes
+        in
+        let nested =
           match expression.exp_desc with
-          | Texp_ident (path, _, description) when dependencies <> [] ->
-              let uid = description.Types.val_uid in
-              if List.exists (Shape.Uid.equal uid) seen then
-                refuse Higher_order_flow;
-              begin match find_value_binding nodes.bindings path uid with
-              | Some rhs ->
-                  source_plan_for_expression ~context_digest ~nodes ~marker_id
-                    ~kind ~seen:(uid :: seen) rhs
-              | None -> refuse Higher_order_flow
-              end
           | Texp_let (_, _, body) | Texp_struct_item (_, body) ->
-              source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
-                ~seen body
-          | Texp_sequence (_, last) ->
-              source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
-                ~seen last
-          | Texp_letop { let_; ands; body; _ }
-            when canonical_binding_operator expression let_ "let*"
-                 && List.for_all
-                      (fun operator ->
-                        canonical_binding_operator expression operator "and*")
-                      ands ->
-              let expressions =
-                let_.bop_exp
-                :: List.map (fun operator -> operator.bop_exp) ands
-                @ [ body.c_rhs ]
-              in
-              source_plans_for_expressions ~context_digest ~nodes ~marker_id
-                ~kind ~seen expressions
-          | Texp_apply (callee, arguments) ->
-              let callee, arguments =
-                match Hamlet_subtractor_upstream.unstage_apply expression with
-                | Some application -> application
-                | None -> (callee, arguments)
-              in
-              let application =
-                { expression with exp_desc = Texp_apply (callee, arguments) }
-              in
-              begin match canonical_combinator_name callee with
-              | Some "chain" ->
-                  begin match
-                    ( positional_arguments arguments,
-                      labelled_argument "handler" arguments,
-                      labelled_argument "f" arguments )
-                  with
-                  | source :: _, Some handler, _
-                  | source :: _, None, Some handler ->
-                      let source_plan, source_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
+              generic_call_output body
+          | Texp_sequence (_, last) -> generic_call_output last
+          | Texp_apply (callee, _) -> generic_call_output callee
+          | Texp_ident (path, _, description) ->
+              Option.bind
+                (find_value_binding_origin nodes.bindings path
+                   description.Types.val_uid)
+                (fun (binding : value_binding_origin) ->
+                  attribute_values
+                    Hamlet_subtractor_probe.generic_output_link_attribute
+                    binding.attributes
+                  |> List.sort_uniq String.compare
+                  |> function
+                  | [ id ] -> Hashtbl.find_opt nodes.generic_outputs id
+                  | [] -> None
+                  | _ -> refuse Higher_order_flow)
+          | _ -> None
+        in
+        match resolved_output call_ids with
+        | Some output -> Some output
+        | None -> (
+            match resolved_output link_ids with
+            | Some output -> Some output
+            | None -> nested)
+      in
+      begin match generic_call_output expression with
+      | Some (certificate, catalogues) -> (Known_source certificate, catalogues)
+      | None ->
+          begin match Hashtbl.find_opt nodes.generic_outputs marker_id with
+          | Some (certificate, catalogues) ->
+              (Known_source certificate, catalogues)
+          | None ->
+              begin match intrinsic_certificate ~context_digest expression with
+              | Some (certificate, catalogues) ->
+                  (Known_source certificate, catalogues)
+              | None -> (
+                  match expression.exp_desc with
+                  | Texp_ident (_, _, description)
+                    when Option.exists
+                           (Shape.Uid.equal description.Types.val_uid)
+                           generic_input ->
+                      (Generic_input_source, [])
+                  | Texp_ident (path, _, description) ->
+                      let uid = description.Types.val_uid in
+                      let binding =
+                        find_value_binding_origin nodes.bindings path uid
                       in
-                      let handler_plan, handler_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen handler
+                      let linked_output =
+                        Option.bind binding
+                          (fun (binding : value_binding_origin) ->
+                            attribute_values
+                              Hamlet_subtractor_probe
+                              .generic_output_link_attribute binding.attributes
+                            |> List.sort_uniq String.compare
+                            |> function
+                            | [ id ] ->
+                                Hashtbl.find_opt nodes.generic_outputs id
+                            | [] -> None
+                            | _ -> refuse Higher_order_flow)
                       in
-                      ( chain_source_plans [ source_plan; handler_plan ],
-                        source_catalogues @ handler_catalogues )
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some ("catch" | "catch_cause") ->
-                  begin match
-                    ( positional_arguments arguments,
-                      labelled_argument "handler" arguments )
-                  with
-                  | source :: _, Some handler ->
-                      let source_plan, source_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
-                      in
-                      let handler_plan, handler_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen handler
-                      in
-                      ( Recovered_source
-                          {
-                            source = source_plan;
-                            recoveries = [ handler_plan ];
-                          },
-                        source_catalogues @ handler_catalogues )
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some ("catch_filter" | "catch_cause_filter") ->
-                  begin match
-                    ( positional_arguments arguments,
-                      labelled_argument "handler" arguments,
-                      labelled_argument "on_no_match" arguments )
-                  with
-                  | source :: _, Some handler, Some on_no_match ->
-                      let source_plan, source_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
-                      in
-                      let handler_plan, handler_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen handler
-                      in
-                      let no_match_plan, no_match_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen on_no_match
-                      in
-                      ( Recovered_source
-                          {
-                            source = source_plan;
-                            recoveries = [ handler_plan; no_match_plan ];
-                          },
-                        source_catalogues @ handler_catalogues
-                        @ no_match_catalogues )
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some "both" ->
-                  begin match positional_arguments arguments with
-                  | [ left; right ] ->
-                      source_plans_for_expressions ~context_digest ~nodes
-                        ~marker_id ~kind ~seen [ left; right ]
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some "map" ->
-                  begin match positional_arguments arguments with
-                  | source :: _ ->
+                      begin match linked_output with
+                      | Some (certificate, catalogues) ->
+                          (Known_source certificate, catalogues)
+                      | None ->
+                          let rhs =
+                            Option.map
+                              (fun (binding : value_binding_origin) ->
+                                binding.rhs)
+                              binding
+                          in
+                          if
+                            dependencies <> []
+                            || Option.is_some generic_input
+                            || Option.exists
+                                 (fun rhs ->
+                                   Option.is_some (generic_call_output rhs))
+                                 rhs
+                          then (
+                            if List.exists (Shape.Uid.equal uid) seen then
+                              refuse Higher_order_flow;
+                            match rhs with
+                            | Some rhs ->
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input
+                                  ~seen:(uid :: seen) rhs
+                            | None -> refuse Higher_order_flow)
+                          else known_source ()
+                      end
+                  | Texp_let (_, _, body) | Texp_struct_item (_, body) ->
                       source_plan_for_expression ~context_digest ~nodes
-                        ~marker_id ~kind ~seen source
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some "suspend" ->
-                  begin match positional_arguments arguments with
-                  | callback :: _ ->
-                      source_plan_for_function_result ~context_digest ~nodes
-                        ~marker_id ~kind ~seen callback
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some ("or_die" | "thaw" | "sandbox") ->
-                  begin match positional_arguments arguments with
-                  | source :: _ ->
-                      let source_plan, catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
+                        ~marker_id ~kind ~generic_input ~seen body
+                  | Texp_sequence (_, last) ->
+                      source_plan_for_expression ~context_digest ~nodes
+                        ~marker_id ~kind ~generic_input ~seen last
+                  | Texp_letop { let_; ands; body; _ }
+                    when canonical_binding_operator expression let_ "let*"
+                         && List.for_all
+                              (fun operator ->
+                                canonical_binding_operator expression operator
+                                  "and*")
+                              ands ->
+                      let expressions =
+                        let_.bop_exp
+                        :: List.map (fun operator -> operator.bop_exp) ands
+                        @ [ body.c_rhs ]
                       in
-                      (Cleared_errors source_plan, catalogues)
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some "map_fail" ->
-                  begin match positional_arguments arguments with
-                  | source :: _ ->
-                      let source_plan, source_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
-                      in
-                      let output, output_catalogues =
-                        output_channel Kind.Error application
-                      in
-                      ( Errors_from_output { source = source_plan; output },
-                        source_catalogues @ output_catalogues )
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some "sandbox_cause" ->
-                  begin match positional_arguments arguments with
-                  | source :: _ ->
-                      let source_plan, catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
-                      in
-                      (Opaque_errors source_plan, catalogues)
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some "scoped" ->
-                  begin match positional_arguments arguments with
-                  | source :: _ ->
-                      let source_plan, catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
-                      in
-                      (Cleared_requirements source_plan, catalogues)
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some ("provide" | "scoped_with") ->
-                  begin match positional_arguments arguments with
-                  | source :: _ ->
-                      let source_plan, source_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
-                      in
-                      let output, output_catalogues =
-                        output_channel Kind.Requirement application
-                      in
-                      ( Requirements_from_output { source = source_plan; output },
-                        source_catalogues @ output_catalogues )
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some ("add_finalizer" | "add_finalizer_exit") ->
-                  begin match positional_arguments arguments with
-                  | finalizer :: _ ->
-                      let finalizer_plan, finalizer_catalogues =
-                        if
-                          Option.equal String.equal
-                            (canonical_combinator_name callee)
-                            (Some "add_finalizer_exit")
-                        then
-                          source_plan_for_function_result ~context_digest ~nodes
-                            ~marker_id ~kind ~seen finalizer
-                        else
-                          source_plan_for_expression ~context_digest ~nodes
-                            ~marker_id ~kind ~seen finalizer
-                      in
-                      let output, output_catalogues =
-                        output_channel Kind.Requirement application
-                      in
-                      ( Requirements_from_output
-                          { source = finalizer_plan; output },
-                        finalizer_catalogues @ output_catalogues )
-                  | [] -> refuse Higher_order_flow
-                  end
-              | Some "acquire_release" ->
-                  begin match
-                    ( positional_arguments arguments,
-                      labelled_argument "release" arguments )
-                  with
-                  | acquire :: _, Some release ->
-                      let acquire_plan, acquire_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen acquire
-                      in
-                      let release_plan, release_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen release
-                      in
-                      let output, output_catalogues =
-                        output_channel Kind.Requirement application
-                      in
-                      ( Requirements_from_output
-                          {
-                            source =
-                              chain_source_plans [ acquire_plan; release_plan ];
-                            output;
-                          },
-                        acquire_catalogues @ release_catalogues
-                        @ output_catalogues )
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some "acquire_use_release" ->
-                  begin match
-                    ( positional_arguments arguments,
-                      labelled_argument "use" arguments,
-                      labelled_argument "release" arguments )
-                  with
-                  | acquire :: _, Some use, Some release ->
-                      let acquire_plan, acquire_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen acquire
-                      in
-                      let use_plan, use_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen use
-                      in
-                      let release_plan, release_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen release
-                      in
-                      ( chain_source_plans
-                          [ acquire_plan; use_plan; release_plan ],
-                        acquire_catalogues @ use_catalogues @ release_catalogues
-                      )
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some
-                  ( "catch_defect" | "tap" | "tap_fail" | "tap_defect"
-                  | "tap_cause" ) ->
-                  begin match
-                    ( positional_arguments arguments,
-                      labelled_argument "handler" arguments,
-                      labelled_argument "f" arguments )
-                  with
-                  | source :: _, Some handler, _
-                  | source :: _, None, Some handler ->
-                      let source_plan, source_catalogues =
-                        source_plan_for_expression ~context_digest ~nodes
-                          ~marker_id ~kind ~seen source
-                      in
-                      let handler_plan, handler_catalogues =
-                        source_plan_for_function_result ~context_digest ~nodes
-                          ~marker_id ~kind ~seen handler
-                      in
-                      ( chain_source_plans [ source_plan; handler_plan ],
-                        source_catalogues @ handler_catalogues )
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some "ensuring" ->
-                  begin match
-                    ( positional_arguments arguments,
-                      labelled_argument "f" arguments )
-                  with
-                  | source :: _, Some finalizer ->
                       source_plans_for_expressions ~context_digest ~nodes
-                        ~marker_id ~kind ~seen [ source; finalizer ]
-                  | _ -> refuse Higher_order_flow
-                  end
-              | Some _ | None ->
-                  if dependencies = [] then known_source ()
-                  else refuse Higher_order_flow
+                        ~marker_id ~kind ~generic_input ~seen expressions
+                  | Texp_apply (callee, arguments) ->
+                      let callee, arguments =
+                        match
+                          Hamlet_subtractor_upstream.unstage_apply expression
+                        with
+                        | Some application -> application
+                        | None -> (callee, arguments)
+                      in
+                      let application =
+                        {
+                          expression with
+                          exp_desc = Texp_apply (callee, arguments);
+                        }
+                      in
+                      begin match canonical_combinator_name callee with
+                      | Some "chain" ->
+                          begin match
+                            ( positional_arguments arguments,
+                              labelled_argument "handler" arguments,
+                              labelled_argument "f" arguments )
+                          with
+                          | source :: _, Some handler, _
+                          | source :: _, None, Some handler ->
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              let handler_plan, handler_catalogues =
+                                source_plan_for_function_result ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  handler
+                              in
+                              ( chain_source_plans [ source_plan; handler_plan ],
+                                source_catalogues @ handler_catalogues )
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some ("catch" | "catch_cause") ->
+                          begin match
+                            ( positional_arguments arguments,
+                              labelled_argument "handler" arguments )
+                          with
+                          | source :: _, Some handler ->
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              begin match generic_input with
+                              | Some _ ->
+                                  let classified =
+                                    classify_generic_handler ~context_digest
+                                      ~kind:Kind.Error handler
+                                  in
+                                  let recoveries, recovery_catalogues =
+                                    classified
+                                    |> List.filter (fun arm ->
+                                        Residual.Forward <> arm.action)
+                                    |> List.map (fun arm ->
+                                        source_plan_for_expression
+                                          ~context_digest ~nodes ~marker_id
+                                          ~kind ~generic_input ~seen arm.rhs)
+                                    |> List.split
+                                  in
+                                  let leaves action =
+                                    classified
+                                    |> List.filter_map (fun arm ->
+                                        if
+                                          action = arm.action
+                                          && Residual.Unguarded
+                                             = Residual.guard arm.arm
+                                        then
+                                          Some
+                                            (source_plan_leaf Kind.Error
+                                               arm.identity arm.members)
+                                        else None)
+                                  in
+                                  ( Caught_source
+                                      {
+                                        source = source_plan;
+                                        handled = leaves Residual.Handle;
+                                        explicitly_forwarded =
+                                          leaves Residual.Forward;
+                                        recoveries;
+                                      },
+                                    source_catalogues
+                                    @ List.concat recovery_catalogues )
+                              | None ->
+                                  let handler_plan, handler_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen handler
+                                  in
+                                  ( Recovered_source
+                                      {
+                                        source = source_plan;
+                                        recoveries = [ handler_plan ];
+                                      },
+                                    source_catalogues @ handler_catalogues )
+                              end
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some ("catch_filter" | "catch_cause_filter") ->
+                          begin match
+                            ( positional_arguments arguments,
+                              labelled_argument "handler" arguments,
+                              labelled_argument "on_no_match" arguments )
+                          with
+                          | source :: _, Some handler, Some on_no_match ->
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              let handler_plan, handler_catalogues =
+                                source_plan_for_function_result ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  handler
+                              in
+                              let no_match_plan, no_match_catalogues =
+                                source_plan_for_function_result ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  on_no_match
+                              in
+                              ( Recovered_source
+                                  {
+                                    source = source_plan;
+                                    recoveries = [ handler_plan; no_match_plan ];
+                                  },
+                                source_catalogues @ handler_catalogues
+                                @ no_match_catalogues )
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some "both" ->
+                          begin match positional_arguments arguments with
+                          | [ left; right ] ->
+                              source_plans_for_expressions ~context_digest
+                                ~nodes ~marker_id ~kind ~generic_input ~seen
+                                [ left; right ]
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some "map" ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              source_plan_for_expression ~context_digest ~nodes
+                                ~marker_id ~kind ~generic_input ~seen source
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some "suspend" ->
+                          begin match positional_arguments arguments with
+                          | callback :: _ ->
+                              source_plan_for_function_result ~context_digest
+                                ~nodes ~marker_id ~kind ~generic_input ~seen
+                                callback
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some ("or_die" | "thaw" | "sandbox") ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              let source_plan, catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              (Cleared_errors source_plan, catalogues)
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some "map_fail" ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              let output, output_catalogues =
+                                output_channel Kind.Error application
+                              in
+                              ( Errors_from_output
+                                  { source = source_plan; output },
+                                source_catalogues @ output_catalogues )
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some "sandbox_cause" ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              let source_plan, catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              (Opaque_errors source_plan, catalogues)
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some "scoped" ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              let source_plan, catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              (Cleared_requirements source_plan, catalogues)
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some ("provide" | "scoped_with") ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              begin match
+                                ( generic_input,
+                                  labelled_argument "handler" arguments )
+                              with
+                              | Some _, Some handler ->
+                                  let classified =
+                                    classify_generic_handler ~context_digest
+                                      ~kind:Kind.Requirement handler
+                                  in
+                                  let leaves action =
+                                    classified
+                                    |> List.filter_map (fun arm ->
+                                        if
+                                          action = arm.action
+                                          && Residual.Unguarded
+                                             = Residual.guard arm.arm
+                                        then
+                                          Some
+                                            (source_plan_leaf Kind.Requirement
+                                               arm.identity arm.members)
+                                        else None)
+                                  in
+                                  ( Provided_source
+                                      {
+                                        source = source_plan;
+                                        handled = leaves Residual.Handle;
+                                        explicitly_forwarded =
+                                          leaves Residual.Forward;
+                                      },
+                                    source_catalogues )
+                              | _ ->
+                                  let output, output_catalogues =
+                                    output_channel Kind.Requirement application
+                                  in
+                                  ( Requirements_from_output
+                                      { source = source_plan; output },
+                                    source_catalogues @ output_catalogues )
+                              end
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some ("add_finalizer" | "add_finalizer_exit") ->
+                          begin match positional_arguments arguments with
+                          | finalizer :: _ ->
+                              let finalizer_plan, finalizer_catalogues =
+                                if
+                                  Option.equal String.equal
+                                    (canonical_combinator_name callee)
+                                    (Some "add_finalizer_exit")
+                                then
+                                  source_plan_for_function_result
+                                    ~context_digest ~nodes ~marker_id ~kind
+                                    ~generic_input ~seen finalizer
+                                else
+                                  source_plan_for_expression ~context_digest
+                                    ~nodes ~marker_id ~kind ~generic_input ~seen
+                                    finalizer
+                              in
+                              ( chain_source_plans
+                                  [
+                                    finalizer_plan;
+                                    scope_requirement_source ~context_digest
+                                      application;
+                                  ],
+                                finalizer_catalogues )
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some "acquire_release" ->
+                          begin match
+                            ( positional_arguments arguments,
+                              labelled_argument "release" arguments )
+                          with
+                          | acquire :: _, Some release ->
+                              let acquire_plan, acquire_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  acquire
+                              in
+                              let release_plan, release_catalogues =
+                                source_plan_for_function_result ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  release
+                              in
+                              ( chain_source_plans
+                                  [
+                                    acquire_plan;
+                                    release_plan;
+                                    scope_requirement_source ~context_digest
+                                      application;
+                                  ],
+                                acquire_catalogues @ release_catalogues )
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some "acquire_use_release" ->
+                          begin match
+                            ( positional_arguments arguments,
+                              labelled_argument "use" arguments,
+                              labelled_argument "release" arguments )
+                          with
+                          | acquire :: _, Some use, Some release ->
+                              let acquire_plan, acquire_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  acquire
+                              in
+                              let use_plan, use_catalogues =
+                                source_plan_for_function_result ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  use
+                              in
+                              let release_plan, release_catalogues =
+                                source_plan_for_function_result ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  release
+                              in
+                              ( chain_source_plans
+                                  [ acquire_plan; use_plan; release_plan ],
+                                acquire_catalogues @ use_catalogues
+                                @ release_catalogues )
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some
+                          ( "catch_defect" | "tap" | "tap_fail" | "tap_defect"
+                          | "tap_cause" ) ->
+                          begin match
+                            ( positional_arguments arguments,
+                              labelled_argument "handler" arguments,
+                              labelled_argument "f" arguments )
+                          with
+                          | source :: _, Some handler, _
+                          | source :: _, None, Some handler ->
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              let handler_plan, handler_catalogues =
+                                source_plan_for_function_result ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  handler
+                              in
+                              ( chain_source_plans [ source_plan; handler_plan ],
+                                source_catalogues @ handler_catalogues )
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some "ensuring" ->
+                          begin match
+                            ( positional_arguments arguments,
+                              labelled_argument "f" arguments )
+                          with
+                          | source :: _, Some finalizer ->
+                              source_plans_for_expressions ~context_digest
+                                ~nodes ~marker_id ~kind ~generic_input ~seen
+                                [ source; finalizer ]
+                          | _ -> refuse Higher_order_flow
+                          end
+                      | Some _ | None ->
+                          if dependencies = [] then known_source ()
+                          else refuse Higher_order_flow
+                      end
+                  | Texp_match (_, cases, _, _) ->
+                      cases
+                      |> List.map (fun (case : computation case) -> case.c_rhs)
+                      |> source_plans_for_expressions ~context_digest ~nodes
+                           ~marker_id ~kind ~generic_input ~seen
+                  | Texp_ifthenelse (_, if_true, Some if_false) ->
+                      source_plans_for_expressions ~context_digest ~nodes
+                        ~marker_id ~kind ~generic_input ~seen
+                        [ if_true; if_false ]
+                  | _ ->
+                      if dependencies = [] then known_source ()
+                      else refuse Higher_order_flow)
               end
-          | Texp_match (_, cases, _, _) ->
-              cases
-              |> List.map (fun (case : computation case) -> case.c_rhs)
-              |> source_plans_for_expressions ~context_digest ~nodes ~marker_id
-                   ~kind ~seen
-          | Texp_ifthenelse (_, if_true, Some if_false) ->
-              source_plans_for_expressions ~context_digest ~nodes ~marker_id
-                ~kind ~seen [ if_true; if_false ]
-          | _ ->
-              if dependencies = [] then known_source ()
-              else refuse Higher_order_flow)
+          end
       end
 
 and source_plan_for_function_result
@@ -2635,17 +3062,18 @@ and source_plan_for_function_result
     ~nodes
     ~marker_id
     ~kind
+    ~generic_input
     ~seen
     expression =
   match expression.exp_desc with
   | Texp_function (_, Tfunction_body body) ->
       source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind ~seen
-        body
+        ~generic_input body
   | Texp_function (_, Tfunction_cases { cases; _ }) ->
       cases
       |> List.map (fun (case : value case) -> case.c_rhs)
       |> source_plans_for_expressions ~context_digest ~nodes ~marker_id ~kind
-           ~seen
+           ~generic_input ~seen
   | _ -> refuse Higher_order_flow
 
 and source_plans_for_expressions
@@ -2653,16 +3081,121 @@ and source_plans_for_expressions
     ~nodes
     ~marker_id
     ~kind
+    ~generic_input
     ~seen
     expressions =
   let plans, catalogues =
     expressions
     |> List.map
          (source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
-            ~seen)
+            ~generic_input ~seen)
     |> List.split
   in
   (chain_source_plans plans, List.concat catalogues)
+
+let generic_expression_error message =
+  refuse (Core_validation_failed ("invalid generic source plan: " ^ message))
+
+let generic_result message = function
+  | Ok value -> value
+  | Error _ -> generic_expression_error message
+
+let rec symbolic_certificate_of_source_plan dependencies = function
+  | Known_source certificate -> Core.Generic_contract.concrete certificate
+  | Generic_input_source -> Core.Generic_contract.input_certificate
+  | Dependency_source id -> (
+      match List.assoc_opt id dependencies with
+      | Some certificate -> certificate
+      | None ->
+          refuse
+            (Core_validation_failed ("unresolved symbolic dependency " ^ id)))
+  | Chained_source plans ->
+      plans
+      |> List.map (symbolic_certificate_of_source_plan dependencies)
+      |> Core.Generic_contract.chain ~inputs:[]
+      |> generic_result "chain composition"
+  | Recovered_source { source; recoveries } ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      let recoveries =
+        List.map (symbolic_certificate_of_source_plan dependencies) recoveries
+      in
+      let recovery =
+        Core.Generic_contract.chain ~inputs:[] recoveries
+        |> generic_result "recovery composition"
+      in
+      let combined =
+        Core.Generic_contract.chain ~inputs:[] (source :: recoveries)
+        |> generic_result "recovery requirements"
+      in
+      Core.Generic_contract.with_errors ~source:combined
+        ~errors:(Core.Generic_contract.errors recovery)
+      |> generic_result "recovery result"
+  | Caught_source { source; handled; explicitly_forwarded; recoveries } ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      let recoveries =
+        List.map (symbolic_certificate_of_source_plan dependencies) recoveries
+      in
+      Core.Generic_contract.catch ~inputs:[] ~source ~handled
+        ~explicitly_forwarded ~recoveries
+      |> generic_result "concrete catch"
+  | Provided_source { source; handled; explicitly_forwarded } ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      Core.Generic_contract.provide ~inputs:[] ~source ~handled
+        ~explicitly_forwarded ~handlers:[]
+      |> generic_result "concrete provide"
+  | Errors_from_output { source; output } ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      Core.Generic_contract.with_errors ~source
+        ~errors:
+          (output
+          |> Core.Generic_contract.concrete
+          |> Core.Generic_contract.errors)
+      |> generic_result "error replacement"
+  | Requirements_from_output { source; output } ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      Core.Generic_contract.with_requirements ~source
+        ~requirements:
+          (output
+          |> Core.Generic_contract.concrete
+          |> Core.Generic_contract.requirements)
+      |> generic_result "requirement replacement"
+  | Cleared_errors source ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      Core.Generic_contract.with_errors ~source
+        ~errors:(Core.Generic_contract.clear Kind.Error)
+      |> generic_result "cleared errors"
+  | Cleared_requirements source ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      Core.Generic_contract.with_requirements ~source
+        ~requirements:(Core.Generic_contract.clear Kind.Requirement)
+      |> generic_result "cleared requirements"
+  | Opaque_errors source ->
+      let source = symbolic_certificate_of_source_plan dependencies source in
+      Core.Generic_contract.with_errors ~source
+        ~errors:
+          (Core.Generic_contract.opaque Kind.Error
+             [ Effect_certificate.Unproven_origin ])
+      |> generic_result "opaque errors"
+
+let symbolic_source_certificate
+    ~context_digest
+    ~marker_id
+    ~kind
+    ~input_uid
+    ~dependencies
+    structure
+    expression =
+  try
+    let nodes = collect_expression_nodes structure in
+    let source_plan, catalogues =
+      source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
+        ~generic_input:(Some input_uid) ~seen:[] expression
+    in
+    let certificate =
+      symbolic_certificate_of_source_plan dependencies source_plan
+    in
+    Ok (certificate, catalogues)
+  with Refuse reason -> Error reason
 
 type node = {
   marker : Core.Marker.t;
@@ -2694,10 +3227,12 @@ let extract_node ~context_digest nodes marker_id marker_expression =
   let dependencies = marker_dependencies nodes marker_id upstream in
   let source_plan, source_catalogues =
     source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind ~seen:[]
-      upstream
+      ~generic_input:None upstream
   in
-  if source_plan_dependencies source_plan <> dependencies then
-    refuse Higher_order_flow;
+  if
+    source_plan_dependencies source_plan <> dependencies
+    && not (Hashtbl.mem nodes.generic_outputs marker_id)
+  then refuse Higher_order_flow;
   let classified_arms =
     classify_arms ~context_digest ~kind ~marker_id handler
   in
@@ -2780,6 +3315,16 @@ let align_input_with_arms (node : node) input =
   let kind = Proof.kind input in
   let input_atoms = Proof.atoms input in
   let specs = normalized_arm_members node.arm_members in
+  let structural_arm members =
+    List.exists
+      (fun arm ->
+        match Residual.target arm with
+        | Residual.Structural_member atom ->
+            member_present atom members
+            && List.exists (Atom.equal_structural atom) input_atoms
+        | Residual.Complete_leaf _ -> false)
+      node.arms
+  in
   List.iter
     (fun (identity, members) ->
       let missing =
@@ -2804,7 +3349,9 @@ let align_input_with_arms (node : node) input =
   check_disjoint [] specs;
   let missing =
     List.filter
-      (fun (identity, _) -> Option.is_none (Proof.find_leaf input identity))
+      (fun (identity, members) ->
+        Option.is_none (Proof.find_leaf input identity)
+        && not (structural_arm members))
       specs
   in
   if missing = [] then input
@@ -2889,6 +3436,8 @@ let output_certificate (node : node) source residual =
 
 let rec resolve_source_plan dependencies = function
   | Known_source certificate -> (certificate, [])
+  | Generic_input_source -> refuse Higher_order_flow
+  | Caught_source _ | Provided_source _ -> refuse Higher_order_flow
   | Dependency_source id -> (
       match
         List.find_map
@@ -3122,8 +3671,8 @@ let engine_backend =
   in
   Hamlet_subtractor_engine.{ dependencies; resolve }
 
-let extract_engine_context ~context_digest structure =
-  let expressions = collect_expression_nodes structure in
+let extract_engine_context ~context_digest ~generic_outputs structure =
+  let expressions = collect_expression_nodes ~generic_outputs structure in
   let marker_ids =
     Hashtbl.to_seq_keys expressions.markers
     |> List.of_seq
@@ -3151,8 +3700,10 @@ let extract_engine_context ~context_digest structure =
   in
   ({ nodes = List.rev nodes; failures = List.rev failures }, List.rev markers)
 
-let elaborate_typedtree ~context_digest structure =
-  let context, markers = extract_engine_context ~context_digest structure in
+let elaborate_typedtree ?(generic_outputs = []) ~context_digest structure =
+  let context, markers =
+    extract_engine_context ~context_digest ~generic_outputs structure
+  in
   let catalogues =
     context.nodes
     |> List.concat_map (fun (node : node) -> node.catalogues)
@@ -3178,3 +3729,980 @@ let elaborate_typedtree ~context_digest structure =
                      });
             }
       | [] -> assert false)
+
+let generic_helper_attribute =
+  Hamlet_subtractor_generic_definition.helper_attribute
+
+let generic_callee_attribute =
+  Hamlet_subtractor_generic_definition.callee_attribute
+
+let generic_upstream_attribute =
+  Hamlet_subtractor_generic_definition.upstream_attribute
+
+let generic_handler_attribute =
+  Hamlet_subtractor_generic_definition.handler_attribute
+
+let generic_slot_attribute = Hamlet_subtractor_generic_definition.slot_attribute
+
+let generic_nested_call_attribute =
+  Hamlet_subtractor_generic_definition.nested_call_attribute
+
+let generic_nested_callee_attribute =
+  Hamlet_subtractor_generic_definition.nested_callee_attribute
+
+let generic_nested_source_attribute =
+  Hamlet_subtractor_generic_definition.nested_source_attribute
+
+let generic_nested_specialized_attribute =
+  Hamlet_subtractor_generic_definition.nested_specialized_attribute
+
+type generic_definition = {
+  attachment_id : string;
+  helper : string;
+  contract : Core.Generic_contract.t;
+  catalogues : Hamlet_subtractor_catalogue.t list;
+}
+
+type generic_call =
+  | Ignored_generic_call of { attachment_id : string }
+  | Resolved_generic_call of {
+      attachment_id : string;
+      marker_links : string list;
+      contract : Core.Generic_contract.t;
+      input : Effect_certificate.t;
+      output : Effect_certificate.t;
+      catalogues : Hamlet_subtractor_catalogue.t list;
+      location : Location.t;
+    }
+
+type generic_refusal = { location : Location.t; reason : refusal_reason }
+
+let generic_refusal_message refusal =
+  match refusal.reason with
+  | Core_validation_failed message
+    when String.starts_with ~prefix:"missing retained contract for " message ->
+      message
+      ^ "; call the [@hamlet.generic] helper directly because aliases and \
+         higher-order calls cannot be specialized"
+  | _ ->
+      let location = refusal.location in
+      let span =
+        Core.Source_span.make ~file:location.loc_start.pos_fname
+          ~start_offset:location.loc_start.pos_cnum
+          ~end_offset:location.loc_end.pos_cnum
+          ~start_line:location.loc_start.pos_lnum
+          ~start_column:
+            (location.loc_start.pos_cnum - location.loc_start.pos_bol)
+          ~end_line:location.loc_end.pos_lnum
+          ~end_column:(location.loc_end.pos_cnum - location.loc_end.pos_bol)
+        |> function
+        | Ok span -> span
+        | Error _ ->
+            Core.Source_span.make ~file:"generic" ~start_offset:0 ~end_offset:0
+              ~start_line:1 ~start_column:0 ~end_line:1 ~end_column:0
+            |> Result.get_ok
+      in
+      let marker =
+        Core.Marker.make
+          ~id:(Core.Marker.id_of_string "e:generic" |> Result.get_ok)
+          ~kind:Kind.Error ~span
+      in
+      refusal_message { marker; reason = refusal.reason }
+
+type generic_nodes = {
+  owners : (string, expression list) Hashtbl.t;
+  callees : (string, expression list) Hashtbl.t;
+  upstreams : (string, expression list) Hashtbl.t;
+  handlers : (string, expression list) Hashtbl.t;
+  slots : (string, expression list) Hashtbl.t;
+  calls : (string, expression list) Hashtbl.t;
+  call_sources : (string, expression list) Hashtbl.t;
+  call_specialized : (string, expression list) Hashtbl.t;
+  nested_calls : (string, expression list) Hashtbl.t;
+  nested_callees : (string, expression list) Hashtbl.t;
+  nested_sources : (string, expression list) Hashtbl.t;
+  nested_specialized : (string, expression list) Hashtbl.t;
+  mutable helpers : value_binding list;
+  mutable companions : string list;
+  mutable bindings : value_binding_origin list;
+}
+
+let collect_generic_nodes structure =
+  let nodes =
+    {
+      owners = Hashtbl.create 16;
+      callees = Hashtbl.create 16;
+      upstreams = Hashtbl.create 16;
+      handlers = Hashtbl.create 16;
+      slots = Hashtbl.create 16;
+      calls = Hashtbl.create 16;
+      call_sources = Hashtbl.create 16;
+      call_specialized = Hashtbl.create 16;
+      nested_calls = Hashtbl.create 16;
+      nested_callees = Hashtbl.create 16;
+      nested_sources = Hashtbl.create 16;
+      nested_specialized = Hashtbl.create 16;
+      helpers = [];
+      companions = [];
+      bindings = [];
+    }
+  in
+  let default = Tast_iterator.default_iterator in
+  let iterator =
+    {
+      default with
+      value_binding =
+        (fun self binding ->
+          if
+            attribute_values generic_helper_attribute binding.vb_attributes
+            <> []
+          then nodes.helpers <- binding :: nodes.helpers;
+          let bound = ref [] in
+          let pattern_default = Tast_iterator.default_iterator in
+          let pattern_iterator =
+            {
+              pattern_default with
+              pat =
+                (fun (type kind) self (pattern : kind general_pattern) ->
+                  (match pattern.pat_desc with
+                  | Tpat_var (identifier, _, uid)
+                  | Tpat_alias (_, identifier, _, uid, _) ->
+                      bound := (identifier, uid) :: !bound
+                  | _ -> ());
+                  pattern_default.pat self pattern);
+            }
+          in
+          pattern_iterator.pat pattern_iterator binding.vb_pat;
+          List.iter
+            (fun (identifier, uid) ->
+              nodes.bindings <-
+                {
+                  identifier;
+                  uid;
+                  rhs = binding.vb_expr;
+                  attributes = binding.vb_attributes;
+                }
+                :: nodes.bindings)
+            !bound;
+          default.value_binding self binding);
+      module_binding =
+        (fun self binding ->
+          nodes.companions <-
+            attribute_values Hamlet_subtractor_generic_contract.attribute_name
+              binding.mb_attributes
+            @ nodes.companions;
+          default.module_binding self binding);
+      expr =
+        (fun self expression ->
+          let collect name table =
+            attribute_values name expression.exp_attributes
+            |> List.iter (fun id -> add_node table id expression)
+          in
+          collect generic_owner_attribute nodes.owners;
+          collect generic_callee_attribute nodes.callees;
+          collect Hamlet_subtractor_generic_call.callee_attribute nodes.callees;
+          collect generic_upstream_attribute nodes.upstreams;
+          collect generic_handler_attribute nodes.handlers;
+          collect generic_slot_attribute nodes.slots;
+          collect Hamlet_subtractor_generic_call.call_attribute nodes.calls;
+          collect Hamlet_subtractor_generic_call.source_attribute
+            nodes.call_sources;
+          collect Hamlet_subtractor_generic_call.specialized_attribute
+            nodes.call_specialized;
+          collect generic_nested_call_attribute nodes.nested_calls;
+          collect generic_nested_callee_attribute nodes.nested_callees;
+          collect generic_nested_source_attribute nodes.nested_sources;
+          collect generic_nested_specialized_attribute nodes.nested_specialized;
+          default.expr self expression);
+    }
+  in
+  iterator.structure iterator structure;
+  nodes
+
+let generic_helper_link binding =
+  match attribute_values generic_helper_attribute binding.vb_attributes with
+  | [ payload ] -> (
+      try
+        match Yojson.Safe.from_string payload with
+        | `Assoc fields -> (
+            match
+              ( List.assoc_opt "helper" fields,
+                List.assoc_opt "source_parameter" fields )
+            with
+            | Some (`String helper), Some (`Int source_parameter)
+              when String.trim helper <> "" && source_parameter >= 0 ->
+                (helper, source_parameter)
+            | _ -> refuse Higher_order_flow)
+        | _ -> refuse Higher_order_flow
+      with Yojson.Json_error _ -> refuse Higher_order_flow)
+  | _ -> refuse Higher_order_flow
+
+let provisional_contract nodes helper =
+  nodes.companions
+  |> List.filter_map (fun payload ->
+      match Hamlet_subtractor_generic_contract.decode_provisional payload with
+      | Ok contract when String.equal contract.helper helper -> Some contract
+      | Ok _ | Error _ -> None)
+  |> function
+  | [ contract ] -> contract
+  | _ -> refuse Higher_order_flow
+
+let helper_uid binding =
+  match binding.vb_pat.pat_desc with
+  | Tpat_var (_, _, uid) | Tpat_alias (_, _, _, uid, _) -> uid
+  | _ -> refuse Higher_order_flow
+
+let helper_fingerprint helper =
+  Digest.string ("hamlet-subtractor-generic-helper-v1:" ^ helper)
+  |> Digest.to_hex
+
+let retained_contract_payload helper path env =
+  let companion = Hamlet_subtractor_generic_contract.companion_name helper in
+  let declaration =
+    try
+      match path with
+      | Path.Pdot (parent, _) ->
+          Env.find_module (Path.Pdot (parent, companion)) env
+      | Path.Pident _ ->
+          Env.find_module_by_name (Longident.Lident companion) env |> snd
+      | Path.Papply _ | Path.Pextra_ty _ -> refuse Higher_order_flow
+    with Not_found ->
+      refuse
+        (Core_validation_failed ("missing retained contract for " ^ helper))
+  in
+  attribute_values Hamlet_subtractor_generic_contract.retained_attribute_name
+    declaration.Types.md_attributes
+  |> function
+  | [ payload ] -> payload
+  | _ ->
+      refuse
+        (Core_validation_failed
+           ("missing or duplicate retained contract for " ^ helper))
+
+let retained_contract_identity path =
+  let compilation_unit, suffix =
+    match split_path path with
+    | Some flattened -> flattened
+    | None -> refuse Higher_order_flow
+  in
+  let module_prefix =
+    match List.rev (compilation_unit :: suffix) with
+    | _helper :: (_ :: _ as reversed_prefix) -> List.rev reversed_prefix
+    | [] | [ _ ] ->
+        refuse
+          (Core_validation_failed
+             "retained generic helper has no compilation-unit path")
+  in
+  let interface_digest =
+    try Env.crc_of_unit compilation_unit |> Digest.BLAKE128.to_hex
+    with _ ->
+      refuse
+        (Core_validation_failed
+           ("missing interface digest for " ^ compilation_unit))
+  in
+  (module_prefix, interface_digest)
+
+let generic_contract_for_callee ~definitions callee =
+  match callee.exp_desc with
+  | Texp_ident (path, _, _) ->
+      let helper = Path.last path in
+      let contract =
+        match
+          match path with
+          | Path.Pident _ ->
+              List.find_opt
+                (fun (definition : generic_definition) ->
+                  String.equal definition.helper helper)
+                definitions
+          | Path.Pdot _ | Path.Papply _ | Path.Pextra_ty _ -> None
+        with
+        | Some definition -> definition.contract
+        | None -> (
+            let contract =
+              retained_contract_payload helper path callee.exp_env
+              |> Core.Generic_resolution.decode_definition
+              |> function
+              | Ok contract -> contract
+              | Error _ ->
+                  refuse
+                    (Core_validation_failed
+                       ("invalid retained contract for " ^ helper))
+            in
+            let module_prefix, interface_digest =
+              retained_contract_identity path
+            in
+            match
+              Core.Generic_contract.rebase ~module_prefix ~interface_digest
+                contract
+            with
+            | Ok contract -> contract
+            | Error _ ->
+                refuse
+                  (Core_validation_failed
+                     ("invalid retained contract identity for " ^ helper)))
+      in
+      if
+        not
+          (String.equal
+             (Core.Generic_contract.helper_fingerprint contract)
+             (helper_fingerprint helper))
+      then
+        refuse
+          (Core_validation_failed
+             ("generic helper fingerprint mismatch for " ^ helper));
+      contract
+  | _ -> refuse Higher_order_flow
+
+let helper_source_origin binding source_parameter =
+  match binding.vb_expr.exp_desc with
+  | Texp_function (parameters, _) -> (
+      match List.nth_opt parameters source_parameter with
+      | Some parameter ->
+          let uid =
+            match parameter.fp_kind with
+            | Tparam_pat pattern | Tparam_optional_default (pattern, _) -> (
+                match pattern.pat_desc with
+                | Tpat_var (_, _, uid) -> uid
+                | _ -> refuse Higher_order_flow)
+          in
+          (parameter.fp_param, uid)
+      | None -> refuse Higher_order_flow)
+  | _ -> refuse Higher_order_flow
+
+let generic_require table marker_id attribute =
+  require_node table ~marker_id ~attribute
+
+let rec handled_callback expression =
+  match expression.exp_desc with
+  | Texp_let (_, _, body) | Texp_struct_item (_, body) -> handled_callback body
+  | Texp_apply (_, arguments) -> labelled_argument "handled" arguments
+  | _ -> None
+
+let slot_handled_callback slot_expression =
+  let callbacks = ref [] in
+  let iterator =
+    let default = Tast_iterator.default_iterator in
+    {
+      default with
+      expr =
+        (fun self expression ->
+          Option.iter
+            (fun callback -> callbacks := callback :: !callbacks)
+            (handled_callback expression);
+          default.expr self expression);
+    }
+  in
+  iterator.expr iterator slot_expression;
+  match !callbacks with
+  | [ callback ] -> callback
+  | _ -> refuse Unsupported_handler_rhs
+
+let classify_generic_arms ~context_digest ~kind ~count handler =
+  let arms =
+    match arms_of_handler handler with
+    | Some arms -> arms
+    | None -> refuse Unsupported_pattern
+  in
+  let rec take accumulated remaining arms =
+    if remaining = 0 then List.rev accumulated
+    else
+      match arms with
+      | arm :: rest -> take (arm :: accumulated) (remaining - 1) rest
+      | [] -> refuse Unsupported_pattern
+  in
+  take [] count arms
+  |> List.map (fun (Arm (pattern, guard, rhs)) ->
+      let identity, tag_path, members, structural =
+        match type_pattern_paths pattern with
+        | [ path ] ->
+            let identity, tag_path, members =
+              identity_for_pattern ~context_digest ~kind pattern.pat_env path
+            in
+            (identity, Some tag_path, members, false)
+        | [] when Kind.equal kind Kind.Error -> (
+            match structural_variant_pattern ~context_digest pattern with
+            | Some (identity, members) -> (identity, None, members, true)
+            | None -> refuse Unsupported_pattern)
+        | [] | _ :: _ :: _ -> refuse Unsupported_pattern
+      in
+      let action =
+        match kind with
+        | Kind.Error -> classify_error_rhs rhs (alias_variable pattern)
+        | Kind.Requirement -> (
+            match tag_path with
+            | Some tag_path ->
+                classify_requirement_rhs ~tag_path rhs (alias_variable pattern)
+            | None -> refuse Unsupported_pattern)
+      in
+      let guard =
+        match guard with
+        | None -> Residual.Unguarded
+        | Some _ -> Residual.Guarded
+      in
+      {
+        arm =
+          Residual.arm ~target:(Residual.Complete_leaf identity) ~guard ~action;
+        identity;
+        members;
+        structural;
+        action;
+        rhs;
+      })
+
+let leaf_for_classified kind classified =
+  match (kind, classified.structural) with
+  | Kind.Error, true -> (
+      Leaf.error ~identity:classified.identity ~members:classified.members
+        ~materialization:Leaf.Structural_variant
+      |> function
+      | Ok leaf -> leaf
+      | Error _ -> refuse Unsupported_pattern)
+  | Kind.Error, false | Kind.Requirement, false ->
+      named_leaf kind classified.identity classified.members
+  | Kind.Requirement, true -> refuse Unsupported_pattern
+
+let symbolic_input_for_expression
+    ~context_digest
+    ~nodes
+    ~source_uid
+    ~marker_id
+    ~kind
+    ~resolved
+    expression =
+  let source_nodes =
+    {
+      upstreams = Hashtbl.create 0;
+      callees = Hashtbl.create 0;
+      handlers = Hashtbl.create 0;
+      markers = Hashtbl.create 0;
+      generic_outputs = Hashtbl.create 0;
+      bindings = nodes.bindings;
+    }
+  in
+  let dependencies =
+    Hashtbl.fold
+      (fun id certificate values -> (id, certificate) :: values)
+      resolved []
+  in
+  let plan, catalogues =
+    source_plan_for_expression ~context_digest ~nodes:source_nodes ~marker_id
+      ~kind ~generic_input:(Some source_uid) ~seen:[] expression
+  in
+  (symbolic_certificate_of_source_plan dependencies plan, catalogues)
+
+let generic_recoveries ~context_digest ~bindings classified =
+  classified
+  |> List.filter (fun arm ->
+      match arm.action with Residual.Handle -> true | Forward -> false)
+  |> List.map (recovery_certificate ~context_digest ~bindings)
+  |> List.split
+
+let generic_recovery_expression kind recoveries =
+  match recoveries with
+  | [] -> Core.Generic_contract.clear kind
+  | _ ->
+      let symbolic = List.map Core.Generic_contract.concrete recoveries in
+      let certificate =
+        Core.Generic_contract.chain ~inputs:[] symbolic |> function
+        | Ok certificate -> certificate
+        | Error _ -> refuse (Core_validation_failed "invalid generic recovery")
+      in
+      begin match kind with
+      | Kind.Error -> Core.Generic_contract.errors certificate
+      | Kind.Requirement -> Core.Generic_contract.requirements certificate
+      end
+
+type generic_event =
+  | Local_generic_marker of Hamlet_subtractor_generic_contract.slot * expression
+  | Nested_generic_call of string * expression
+
+let with_generic_context message operation =
+  try operation ()
+  with Refuse Higher_order_flow -> refuse (Core_validation_failed message)
+
+let helper_body binding =
+  match binding.vb_expr.exp_desc with
+  | Texp_function (_, Tfunction_body body) -> body
+  | Texp_function (_, Tfunction_cases _) -> refuse Higher_order_flow
+  | _ -> refuse Higher_order_flow
+
+let generic_contract_for_binding ~context_digest ~definitions nodes binding =
+  let helper, source_parameter = generic_helper_link binding in
+  let provisional = provisional_contract nodes helper in
+  if provisional.source_parameter <> source_parameter then
+    refuse Higher_order_flow;
+  let _, source_uid = helper_source_origin binding source_parameter in
+  let nested_ids = ref [] in
+  let default = Tast_iterator.default_iterator in
+  let iterator =
+    {
+      default with
+      expr =
+        (fun self expression ->
+          nested_ids :=
+            attribute_values generic_nested_call_attribute
+              expression.exp_attributes
+            @ !nested_ids;
+          default.expr self expression);
+    }
+  in
+  iterator.expr iterator binding.vb_expr;
+  let nested_ids = List.sort_uniq String.compare !nested_ids in
+  let resolved =
+    Hashtbl.create (List.length provisional.slots + List.length nested_ids)
+  in
+  let catalogues = ref [] in
+  let ordered_slots = ref [] in
+  let next_nested_ordinal = ref (List.length provisional.slots) in
+  let process_local (provisional_slot : Hamlet_subtractor_generic_contract.slot)
+      =
+    let marker_id = provisional_slot.marker_id in
+    let kind =
+      match provisional_slot.kind with
+      | Hamlet_subtractor_generic_contract.Error -> Kind.Error
+      | Requirement -> Kind.Requirement
+    in
+    let callee =
+      generic_require nodes.callees marker_id generic_callee_attribute
+    in
+    verify_owner_callee kind callee;
+    ignore (generic_require nodes.owners marker_id generic_owner_attribute);
+    let upstream =
+      generic_require nodes.upstreams marker_id generic_upstream_attribute
+    in
+    let source, source_catalogues =
+      with_generic_context ("cannot trace automatic marker source " ^ marker_id)
+        (fun () ->
+          symbolic_input_for_expression ~context_digest ~nodes ~source_uid
+            ~marker_id ~kind ~resolved upstream)
+    in
+    let handler =
+      generic_require nodes.handlers marker_id generic_handler_attribute
+    in
+    let slot_expression =
+      generic_require nodes.slots marker_id generic_slot_attribute
+    in
+    let handled_callback = slot_handled_callback slot_expression in
+    let classified =
+      with_generic_context
+        ("cannot classify automatic marker handler " ^ marker_id) (fun () ->
+          classify_generic_arms ~context_digest ~kind
+            ~count:provisional_slot.handled_cases handled_callback)
+    in
+    let claimed = List.map (leaf_for_classified kind) classified in
+    let handled =
+      classified
+      |> List.filter_map (fun classified ->
+          match (Residual.guard classified.arm, classified.action) with
+          | Residual.Unguarded, Residual.Handle ->
+              Some (leaf_for_classified kind classified)
+          | Residual.Unguarded, Residual.Forward
+          | Residual.Guarded, (Residual.Handle | Residual.Forward) ->
+              None)
+    in
+    let explicitly_forwarded =
+      classified
+      |> List.filter_map (fun classified ->
+          match (Residual.guard classified.arm, classified.action) with
+          | Residual.Unguarded, Residual.Forward ->
+              Some (leaf_for_classified kind classified)
+          | Residual.Unguarded, Residual.Handle
+          | Residual.Guarded, (Residual.Handle | Residual.Forward) ->
+              None)
+    in
+    let recoveries, recovery_catalogues =
+      match kind with
+      | Kind.Error ->
+          with_generic_context
+            ("cannot trace automatic marker recovery " ^ marker_id) (fun () ->
+              generic_recoveries ~context_digest ~bindings:nodes.bindings
+                classified)
+      | Kind.Requirement -> ([], [])
+    in
+    catalogues :=
+      source_catalogues @ List.concat recovery_catalogues @ !catalogues;
+    let recovery = generic_recovery_expression kind recoveries in
+    let input =
+      match kind with
+      | Kind.Error -> Core.Generic_contract.errors source
+      | Kind.Requirement -> Core.Generic_contract.requirements source
+    in
+    let id =
+      Core.Generic_contract.slot_id marker_id |> function
+      | Ok id -> id
+      | Error _ -> refuse Higher_order_flow
+    in
+    let slot =
+      Core.Generic_contract.slot ~id ~ordinal:provisional_slot.ordinal ~kind
+        ~input ~claimed ~handled ~explicitly_forwarded ~recovery
+      |> function
+      | Ok slot -> slot
+      | Error _ ->
+          refuse (Core_validation_failed "invalid generic evidence slot")
+    in
+    let output =
+      (match kind with
+        | Kind.Error ->
+            Core.Generic_contract.catch ~inputs:[] ~source ~handled
+              ~explicitly_forwarded
+              ~recoveries:(List.map Core.Generic_contract.concrete recoveries)
+        | Kind.Requirement ->
+            Core.Generic_contract.provide ~inputs:[] ~source ~handled
+              ~explicitly_forwarded ~handlers:[])
+      |> function
+      | Ok output -> output
+      | Error _ -> refuse (Core_validation_failed "invalid generic slot output")
+    in
+    Hashtbl.replace resolved marker_id output;
+    ignore handler;
+    ordered_slots := slot :: !ordered_slots
+  in
+  let process_nested id =
+    if not (Hashtbl.mem nodes.nested_specialized id) then
+      refuse
+        (Core_validation_failed
+           "the generic source flows through a call that is not a direct \
+            [@hamlet.generic] helper");
+    let callee =
+      generic_require nodes.nested_callees id generic_nested_callee_attribute
+    in
+    let source_expression =
+      generic_require nodes.nested_sources id generic_nested_source_attribute
+    in
+    ignore
+      (generic_require nodes.nested_specialized id
+         generic_nested_specialized_attribute);
+    let inner =
+      with_generic_context "cannot resolve nested generic-helper contract"
+        (fun () -> generic_contract_for_callee ~definitions callee)
+    in
+    let source, source_catalogues =
+      with_generic_context "cannot trace nested generic-helper source"
+        (fun () ->
+          symbolic_input_for_expression ~context_digest ~nodes ~source_uid
+            ~marker_id:id ~kind:Kind.Error ~resolved source_expression)
+    in
+    catalogues := source_catalogues @ !catalogues;
+    Core.Generic_contract.slots inner
+    |> List.iter (fun slot ->
+        let id =
+          Core.Generic_contract.namespace_slot_id ~namespace:id
+            (Core.Generic_contract.slot_id_value slot)
+          |> function
+          | Ok id -> id
+          | Error _ ->
+              refuse
+                (Core_validation_failed "invalid nested evidence slot identity")
+        in
+        let input =
+          Core.Generic_contract.substitute_expression ~input:source
+            (Core.Generic_contract.slot_input slot)
+        in
+        let recovery =
+          Core.Generic_contract.substitute_expression ~input:source
+            (Core.Generic_contract.slot_recovery slot)
+        in
+        let composed =
+          Core.Generic_contract.slot ~id ~ordinal:!next_nested_ordinal
+            ~kind:(Core.Generic_contract.slot_kind slot)
+            ~input
+            ~claimed:(Core.Generic_contract.slot_claimed slot)
+            ~handled:(Core.Generic_contract.slot_handled slot)
+            ~explicitly_forwarded:
+              (Core.Generic_contract.slot_explicitly_forwarded slot)
+            ~recovery
+          |> function
+          | Ok slot -> slot
+          | Error _ ->
+              refuse (Core_validation_failed "invalid composed evidence slot")
+        in
+        incr next_nested_ordinal;
+        ordered_slots := composed :: !ordered_slots);
+    let output =
+      Core.Generic_contract.substitute ~input:source
+        (Core.Generic_contract.output inner)
+    in
+    Hashtbl.replace resolved id output
+  in
+  let local_events =
+    provisional.slots
+    |> List.map (fun (slot : Hamlet_subtractor_generic_contract.slot) ->
+        let marker =
+          generic_require nodes.slots slot.marker_id generic_slot_attribute
+        in
+        Local_generic_marker (slot, marker))
+  in
+  let nested_events =
+    List.map
+      (fun id ->
+        Nested_generic_call
+          ( id,
+            generic_require nodes.nested_calls id generic_nested_call_attribute
+          ))
+      nested_ids
+  in
+  let event_location = function
+    | Local_generic_marker (_, expression) | Nested_generic_call (_, expression)
+      ->
+        expression.exp_loc
+  in
+  let event_id = function
+    | Local_generic_marker (slot, _) -> slot.marker_id
+    | Nested_generic_call (id, _) -> id
+  in
+  let event_source = function
+    | Local_generic_marker (slot, _) ->
+        generic_require nodes.upstreams slot.marker_id
+          generic_upstream_attribute
+    | Nested_generic_call (id, _) ->
+        generic_require nodes.nested_sources id generic_nested_source_attribute
+  in
+  let dependency_nodes =
+    {
+      upstreams = Hashtbl.create 0;
+      callees = Hashtbl.create 0;
+      handlers = Hashtbl.create 0;
+      markers = Hashtbl.create 0;
+      generic_outputs = Hashtbl.create 0;
+      bindings = nodes.bindings;
+    }
+  in
+  let event_dependencies event =
+    marker_dependencies dependency_nodes (event_id event) (event_source event)
+  in
+  let compare_events first second =
+    Int.compare (event_location first).loc_start.pos_cnum
+      (event_location second).loc_start.pos_cnum
+  in
+  let process_event = function
+    | Local_generic_marker (slot, _) -> process_local slot
+    | Nested_generic_call (id, _) -> process_nested id
+  in
+  let rec process_events pending =
+    match pending with
+    | [] -> ()
+    | _ ->
+        let ready, waiting =
+          List.partition
+            (fun event ->
+              event_dependencies event |> List.for_all (Hashtbl.mem resolved))
+            pending
+        in
+        if ready = [] then
+          refuse
+            (Core_validation_failed
+               "generic-helper composition contains an unresolved or cyclic \
+                symbolic dependency")
+        else (
+          ready |> List.sort compare_events |> List.iter process_event;
+          process_events waiting)
+  in
+  process_events (local_events @ nested_events);
+  let output, output_catalogues =
+    with_generic_context "cannot trace generic-helper output" (fun () ->
+        symbolic_input_for_expression ~context_digest ~nodes ~source_uid
+          ~marker_id:("generic-output:" ^ helper)
+          ~kind:Kind.Error ~resolved (helper_body binding))
+  in
+  catalogues := output_catalogues @ !catalogues;
+  ignore (helper_uid binding);
+  let fingerprint = helper_fingerprint helper in
+  let contract =
+    Core.Generic_contract.create ~helper_fingerprint:fingerprint
+      ~definition_context:context_digest ~effect_parameter:source_parameter
+      ~slots:(List.rev !ordered_slots) ~output
+    |> function
+    | Ok contract -> contract
+    | Error _ -> refuse (Core_validation_failed "invalid generic contract")
+  in
+  {
+    attachment_id = "definition:" ^ helper;
+    helper;
+    contract;
+    catalogues = List.sort_uniq Hamlet_subtractor_catalogue.compare !catalogues;
+  }
+
+let generic_definitions_typedtree ~context_digest structure =
+  let nodes = collect_generic_nodes structure in
+  let rec loop accumulated = function
+    | [] -> Ok (List.rev accumulated)
+    | binding :: rest -> (
+        try
+          let helper, _ = generic_helper_link binding in
+          let definition =
+            with_generic_context
+              ("cannot resolve generic-helper definition " ^ helper) (fun () ->
+                generic_contract_for_binding ~context_digest
+                  ~definitions:(List.rev accumulated) nodes binding)
+          in
+          loop (definition :: accumulated) rest
+        with Refuse reason -> Error { location = binding.vb_loc; reason })
+  in
+  loop [] (List.rev nodes.helpers)
+
+let contract_for_call ~definitions callee =
+  match callee.exp_desc with
+  | Texp_ident _ -> generic_contract_for_callee ~definitions callee
+  | _ -> refuse Fake_or_aliased_callee
+
+let exact_generic_call_input ~context_digest ~bindings source =
+  let _, error_certificate, error_catalogues =
+    certificate_for_input ~context_digest ~bindings ~kind:Kind.Error source
+  in
+  let _, requirement_certificate, requirement_catalogues =
+    certificate_for_input ~context_digest ~bindings ~kind:Kind.Requirement
+      source
+  in
+  let input =
+    Effect_certificate.create
+      ~errors:(Effect_certificate.errors error_certificate)
+      ~requirements:(Effect_certificate.requirements requirement_certificate)
+    |> function
+    | Ok input -> input
+    | Error _ -> refuse (Core_validation_failed "invalid generic caller input")
+  in
+  (input, error_catalogues @ requirement_catalogues)
+
+let validate_call_source_position _contract call source =
+  match call.exp_desc with
+  | Texp_apply (_, arguments) ->
+      let positional = positional_arguments arguments in
+      let source_position = List.length positional - 2 in
+      begin match List.nth_opt positional source_position with
+      | Some candidate when candidate == source -> ()
+      | Some candidate
+        when candidate.exp_loc.loc_start.pos_cnum
+             = source.exp_loc.loc_start.pos_cnum
+             && candidate.exp_loc.loc_end.pos_cnum
+                = source.exp_loc.loc_end.pos_cnum ->
+          ()
+      | Some _ | None ->
+          refuse
+            (Core_validation_failed
+               "generic helper source argument position mismatch")
+      end
+  | _ ->
+      refuse
+        (Core_validation_failed
+           "generic helper call is not a direct application")
+
+let generic_evaluation_error = function
+  | Core.Generic_contract.Opaque_expression { kind; _ } ->
+      "opaque " ^ Core.Kind.to_string kind ^ " input"
+  | Core.Generic_contract.Certificate_error _ -> "invalid effect certificate"
+  | Core.Generic_contract.Residual_error code -> (
+      match code with
+      | Core.Diagnostic.Leaf_outside_universe identity ->
+          "contract leaf is outside caller input: "
+          ^ Identity.to_string identity
+      | Core.Diagnostic.Atoms_outside_universe _ ->
+          "contract structural variant is outside caller input"
+      | _ -> "residual subtraction failed")
+  | Core.Generic_contract.Evaluated_wrong_kind { expected; actual } ->
+      Printf.sprintf "expected %s evidence, got %s"
+        (Core.Kind.to_string expected)
+        (Core.Kind.to_string actual)
+
+let expression_has_generic_call_id id expression =
+  let found = ref false in
+  let default = Tast_iterator.default_iterator in
+  let iterator =
+    {
+      default with
+      expr =
+        (fun self expression ->
+          if
+            attribute_values Hamlet_subtractor_generic_call.call_attribute
+              expression.exp_attributes
+            |> List.exists (String.equal id)
+          then found := true;
+          default.expr self expression);
+    }
+  in
+  iterator.expr iterator expression;
+  !found
+
+let marker_links_for_generic_call bindings id =
+  bindings
+  |> List.concat_map (fun (binding : value_binding_origin) ->
+      if expression_has_generic_call_id id binding.rhs then
+        attribute_values Hamlet_subtractor_probe.generic_output_link_attribute
+          binding.attributes
+      else [])
+  |> List.sort_uniq String.compare
+
+let generic_calls_typedtree ~context_digest ~definitions structure =
+  let nodes = collect_generic_nodes structure in
+  let ids =
+    Hashtbl.to_seq_keys nodes.calls |> List.of_seq |> List.sort String.compare
+  in
+  let rec loop accumulated = function
+    | [] -> Ok (List.rev accumulated)
+    | id :: rest -> (
+        let call =
+          generic_require nodes.calls id
+            Hamlet_subtractor_generic_call.call_attribute
+        in
+        if not (Hashtbl.mem nodes.call_specialized id) then
+          loop (Ignored_generic_call { attachment_id = id } :: accumulated) rest
+        else
+          try
+            let callee =
+              generic_require nodes.callees id
+                Hamlet_subtractor_generic_call.callee_attribute
+            in
+            let source =
+              generic_require nodes.call_sources id
+                Hamlet_subtractor_generic_call.source_attribute
+            in
+            ignore
+              (generic_require nodes.call_specialized id
+                 Hamlet_subtractor_generic_call.specialized_attribute);
+            let contract = contract_for_call ~definitions callee in
+            validate_call_source_position contract call source;
+            let input, catalogues =
+              exact_generic_call_input ~context_digest ~bindings:nodes.bindings
+                source
+            in
+            begin match
+              Core.Generic_contract.instantiate_slots ~input contract
+            with
+            | Ok _ -> ()
+            | Error error ->
+                refuse
+                  (Core_validation_failed
+                     ("generic helper contract instantiation failed: "
+                     ^ generic_evaluation_error error))
+            end;
+            let output =
+              Core.Generic_contract.evaluate ~input
+                (Core.Generic_contract.output contract)
+              |> function
+              | Ok output -> output
+              | Error error ->
+                  refuse
+                    (Core_validation_failed
+                       ("generic helper output evaluation failed: "
+                       ^ generic_evaluation_error error))
+            in
+            let result =
+              let marker_links =
+                marker_links_for_generic_call nodes.bindings id
+              in
+              Resolved_generic_call
+                {
+                  attachment_id = id;
+                  marker_links;
+                  contract;
+                  input;
+                  output;
+                  catalogues =
+                    List.sort_uniq Hamlet_subtractor_catalogue.compare
+                      catalogues;
+                  location = call.exp_loc;
+                }
+            in
+            loop (result :: accumulated) rest
+          with Refuse reason -> Error { location = call.exp_loc; reason })
+  in
+  loop [] ids

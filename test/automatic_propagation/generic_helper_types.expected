@@ -1,0 +1,2 @@
+case_generic_first result=unit errors=principal[Recovery,Timeout] requirements=Hamlet.never
+case_generic_second result=unit errors=principal[Offline,Recovery] requirements=Hamlet.never

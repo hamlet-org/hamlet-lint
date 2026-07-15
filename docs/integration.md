@@ -1,233 +1,150 @@
 # Compiler and editor integration
 
-Automatic propagation is implemented entirely by
-`hamlet-subtractor.ppx`. Dune, the OCaml compiler, Merlin, and OCaml-LSP need no
-Hamlet-specific plugin.
+Applications configure one PPX. The resolver is an implementation detail: the
+PPX starts it when typed evidence is needed, and consumers never invoke it from
+Dune or the shell.
 
-For application setup, see [Automatic Propagation](./automatic-propagation.md).
-This guide explains how the PPX uses the compiler and why builds and editor
-hovers receive the same result.
+## Why `staged_pps` is required
 
-## One PPX lifecycle
+Dune processes an OCaml module twice for two different purposes.
 
-The bundle performs these steps:
+1. It first asks `ocamldep` which other modules the source imports. Some of
+   those modules may not have been compiled yet.
+2. After building the imported modules, it runs the PPX for `ocamlc`,
+   `ocamlopt`, or Merlin and then type-checks the result.
 
-1. Run ordinary `ppx_hamlet` rewriting.
-2. Find automatic markers and their `catch` or `provide` owners.
-3. Keep a base AST and create a temporary probe AST.
-4. Send the probe and current compiler context to the resolver process.
-5. Receive exact, compiler-independent evidence for every marker.
-6. Compute the residual rows and generate forwarding cases.
-7. Insert the cases and type constraints into the base AST.
-8. Remove internal attributes and return ordinary OCaml syntax.
+A compiled public interface is a `.cmi` file. It contains the types and
+declaration identities exported by a module. Hamlet Subtractor needs those
+facts to distinguish, for example, a real `Storage.Errors.read_error` from an
+unrelated type with the same printed name.
 
-The caller then type-checks the returned AST normally. The Typedtree created
-for the probe is discarded; it is evidence used to generate code, not a
-substitute for the final compiler check.
+With ordinary `pps`, Dune expects the early dependency pass to produce the
+final expansion. That is too soon for cross-module proofs because an imported
+`.cmi` may not exist. With `staged_pps`, the dependency pass receives a safe
+syntax-only result and the later compiler pass performs automatic
+elaboration, after dependency interfaces are available.
 
-## Why Dune uses two PPX phases
+```lisp
+(preprocess
+ (staged_pps hamlet-subtractor.ppx))
+```
 
-On a clean build, Dune first needs to discover which modules a source file
-imports. At that point some imported `.cmi` interfaces do not exist, so the PPX
-cannot prove cross-module effects. The `ocamldep` invocation therefore returns
-a dependency-safe AST and does not start the resolver.
+Targets that use no subtractor marker, generic definition, or generic call may use
+`(pps ppx_hamlet)` instead.
 
-After Dune builds those interfaces, it invokes the staged PPX from `ocamlc`,
-`ocamlopt`, or Merlin. That invocation has enough type information to resolve
-every marker and return the final expansion.
+## What happens in the later pass
 
-This is the reason for `staged_pps`. The public guide shows the required
-[Dune setup](./automatic-propagation.md#dune-setup).
+The PPX:
 
-## Compiler context
+1. runs ordinary `ppx_hamlet` rewriting;
+2. keeps the program it will eventually return as the base AST;
+3. creates a temporary probe AST with links between each marker and each
+   plausible direct helper call;
+4. sends the probe and compiler context to the resolver;
+5. receives immutable evidence and call classifications, computes residual
+   rows, and generates forwarding code;
+6. inserts that code into the base AST and removes all internal links.
 
-The probe must be typed as the same module that the caller will type next. The
-PPX therefore sends the resolver the source filename and the compiler settings
-available through the standard PPX context, including:
+The probe is typed only to obtain evidence. It is discarded. The compiler or
+Merlin then types the final generated program normally, so the proof cannot
+replace the ordinary OCaml type check.
 
-- visible and hidden include directories;
-- modules opened by command-line flags;
-- package wrapping identity;
-- principal, recursive-type, alias-dependency, and unboxed-type modes;
-- PPX cookies and the current tool name;
-- exact OCaml, AST, protocol, PPX, and resolver versions.
-
-The resolver recreates this context in a fresh compiler store. It suppresses
-warnings and delayed checks while typing the temporary probe, because the final
-compiler should report them once against the generated program. The temporary
-store is then discarded so its environments and mutable type variables cannot
-leak back into the PPX.
-
-OCaml 5.5 does not expose every command-line option through the PPX context.
-Nondefault values for omitted options, such as `-nopervasives`,
-`-no-std-include`, applicative-functor selection, or strict sequence and format
-modes, are outside the automatic guarantee. Use an explicit `%hamlet.te` or
-`%hamlet.ts` boundary unless that configuration is specifically supported and
-tested.
+Generic helpers use the same round trip. A definition exports a small symbolic
+contract in a hidden generated module declaration that survives in its `.cmi`.
+At a direct call, the resolver checks whether the callee has that companion
+contract. If it does, the resolver applies the contract to the concrete source
+rows and the PPX appends exhaustive evidence records. If it does not, the call
+is an ordinary OCaml call and remains unchanged.
 
 ## Resolver process
 
-The resolver is a small executable installed with the PPX. Users never run it
-or mention it in a Dune file. The PPX starts it only when a marker needs typed
-evidence.
+OCaml compiler libraries contain mutable global state. Running an extra type
+check inside the PPX process could contaminate the compiler or Merlin session.
+The resolver therefore types the probe in a fresh process and exits after one
+request. Compiler environments, mutable type variables, and Typedtree nodes
+never return to the PPX.
 
-It is a separate process because OCaml's compiler libraries keep mutable global
-state. Typing the probe in the PPX process could change environments, warnings,
-or type variables that belong to the caller. Process isolation gives the probe
-a clean compiler session and destroys all of that state when the resolver
-exits.
+The request carries the probe AST, source locations, supported compiler flags,
+include paths, marker and contract expectations, and version fingerprints. The
+response carries exact proof values or a structured refusal. Each response
+must match the request ID and expected markers. Missing results, duplicates,
+timeouts, crashes, oversized payloads, and version mismatches are errors.
 
-### How the executable is found
+### How the PPX finds it
 
-There are two cases:
+An installed package records where its own resolver executable was installed.
+The PPX reads that package location and starts the resolver shipped with the
+same installation.
 
-- **Installed package:** Dune registers the directory where the package's
-  resolver was installed. The PPX reads that registered directory and starts
-  the executable found there.
-- **This source checkout:** the resolver has not been installed. The test PPX
-  runs below the same `_build` directory, so it derives the resolver path from
-  its own `.ppx` executable and looks in that build context's `subtractor`
-  directory. The test fixture declares an explicit build dependency so the
-  file exists before Merlin starts.
+This repository is different only because its test package is not installed.
+The test fixture declares the resolver as a build dependency, and the PPX finds
+it inside the same Dune build context as the running `.ppx` executable.
 
-Both cases select the resolver built or installed with that PPX. The code does
-not search `PATH`, because `PATH` could contain a resolver from another
-checkout, compiler switch, or package version.
+Neither path searches `PATH`. Searching `PATH` could select a resolver from a
+different checkout, opam switch, compiler version, or package release.
+Consumers need no `preprocessor_deps`; the source-tree fixture needs one only
+to make its uninstalled resolver exist before Merlin starts.
 
-Normal consuming projects use the installed case and need only the documented
-`staged_pps` stanza. The source-checkout dependency is part of this repository's
-test fixture, not public setup.
+## Dependency interfaces and editor freshness
 
-### Request and response
+Suppose the active file is `A.ml` and it imports `B`.
 
-The request contains:
+- Merlin sends the current unsaved contents of `A.ml` through the PPX.
+- Information about `B` comes from the last built `B.cmi`.
 
-- the serialized probe AST with source locations;
-- the source filename and supported compiler context;
-- marker IDs, kinds, locations, and owner links;
-- protocol and component versions;
-- fingerprints of dependency interfaces known to the caller.
+Editing or saving `B.ml` does not itself change `B.cmi`. Rebuild `B` before
+expecting its new exported API to affect automatic propagation in `A.ml`.
+Once Dune writes the new interface, the next analysis of `A.ml` sees it.
 
-The resolver types that AST directly. It does not read the saved source file,
-pretty-print and reparse the AST, or run the PPX recursively. This preserves
-unsaved editor text and exact locations.
+Do not enable Merlin's optional external PPX result cache. The source text of
+`A.ml` can remain unchanged while a rebuilt `B.cmi` adds an error or service.
+That must change the generated forwarding cases. The optional cache does not
+include dependency-interface contents in its key, so it may reuse an expansion
+created for the old `B.cmi`. Dune's normal Merlin setup leaves this cache off.
 
-The response contains one outcome for every marker:
+OCaml-LSP obtains types and hovers from Merlin, so it needs no Hamlet-specific
+extension. Saved builds, unsaved Merlin buffers, and LSP documents all receive
+the same final expansion.
 
-- an exact error and requirement certificate, or a structured refusal;
-- the residual leaves for the marker;
-- validated cross-module catalogues;
-- the same request identity and context digest.
+## Compiler context and limits
 
-Before changing the base AST, the PPX checks that the response matches the
-current request and contains every marker exactly once. It never combines a
-partial response with local guesses.
+The resolver reconstructs the compiler settings exposed through the standard
+PPX context: include paths, opened modules, package wrapping, and supported
+typing flags. It also checks the exact OCaml, AST, protocol, PPX, and resolver
+versions.
 
-The transport uses bounded frames, size limits, a timeout, stderr capture, exit
-status checks, and child cleanup. A missing executable, crash, timeout,
-malformed response, or version mismatch becomes a diagnostic at the original
-marker. POSIX systems are supported; the current automatic resolver does not
-support Windows.
+OCaml does not expose every command-line option to a PPX. If a target uses an
+unreported nondefault typing mode, automatic proof is refused; use an explicit
+`%hamlet.te` or `%hamlet.ts` boundary unless that mode is specifically tested.
+The current implementation supports POSIX systems and targets OCaml 5.5.0.
 
-No compiler object crosses back from the resolver. `Types.type_expr`,
-`Env.t`, `Typedtree.expression`, and compiler UIDs are converted to immutable
-proof values before the response is sent.
+## Diagnostics
 
-## Source locations and diagnostics
+Locations come from the live input AST. User-facing generated cases keep the
+marker location; internal nodes use ghost locations. Resolver typing failures
+are mapped back to the nearest source construct.
 
-Each marker keeps its location from the current input AST. Generated outer
-cases use that location, while internal nodes use ghost locations so errors do
-not point to text that the user never wrote.
+A refusal means one of three things:
 
-Probe typing errors are mapped back to the nearest original node. A refusal at
-the marker names both the reason and the explicit fallback, for example:
+- the Dune target used the wrong PPX phase;
+- the effect row, handler, generic contract, or dependency flow was not exact;
+- the resolver could not run or its response did not match the request.
 
-```text
-automatic error propagation requires a finite exact input row;
-add [%hamlet.te ...] and use [%hamlet.propagate_e]
-```
+The diagnostic names the failed condition and the available explicit boundary.
+A final compiler error after successful generation is a subtractor bug, because
+the final compiler remains authoritative.
 
-Stable diagnostic categories distinguish open rows, abstract aliases,
-unsupported arms, unresolved owners, opaque dependencies, missing catalogues,
-and resolver failures. Tests assert categories and useful text rather than
-depending on compiler-internal exception strings.
+## Other PPXs and packaging
 
-## Merlin and OCaml-LSP
+`hamlet-subtractor.ppx` owns the ordering between `ppx_hamlet`, evidence
+collection, and final replacement. A whole-file PPX that changes Hamlet
+computations or handlers must run before this evidence phase. Internal probe
+attributes are removed before later processing.
 
-Merlin obtains the PPX command from Dune. For an unsaved active file, it sends
-the current in-memory AST through the same bundle used by the build. Merlin
-then types only the final expansion returned by the PPX, so hover shows the
-residual row immediately.
+The package installs the public evidence type, PPX, proof and generation
+libraries, compiler-specific private code, and the matching resolver. Mixing a
+resolver, PPX, Hamlet package, or OCaml compiler from another supported pair is
+not valid.
 
-Suppose the active buffer is `A.ml` and it imports `B`. Merlin sends the PPX
-the current in-memory contents of `A.ml`, but information about `B` comes from
-`B.cmi`, the interface produced the last time Dune compiled `B`. A change to an
-exported type or value in `B.ml` is therefore not visible from `A.ml` merely
-because `B.ml` was edited or saved. Dune must rebuild `B`; that writes a new
-`B.cmi`. The next analysis of `A.ml` then sees the new API.
-
-Merlin's optional external PPX result cache is unsupported. For example, the
-source text of `A.ml` may stay unchanged while a rebuilt `B.cmi` adds a new
-error leaf. That interface changes the forwarding proof even though `A.ml` did
-not change. The external cache key does not include imported `.cmi` contents,
-so it could return the old expansion and omit the new leaf. Keep that optional
-cache disabled. Dune's normal Merlin configuration already does so.
-
-OCaml-LSP delegates OCaml typing and hovers to Merlin. It therefore needs no
-separate Hamlet extension. The acceptance harness tests both a saved document
-and an unsaved `textDocument/didChange` update.
-
-## Other PPXs
-
-`hamlet-subtractor.ppx` owns the ordering between ordinary Hamlet expansion and
-automatic elaboration. Another whole-file PPX that changes the input
-computation, handler, service declarations, or catalogue must run before the
-subtractor's evidence phase. Rewriting an already generated handler afterward
-is unsupported unless the transformation is known to preserve its meaning.
-
-The final AST contains no attributes used by the probe protocol, preventing a
-later PPX from depending on Hamlet's internal links.
-
-## Packaging and compatibility
-
-The package installs:
-
-- `hamlet-subtractor.ppx`;
-- the compiler-independent proof and generation libraries;
-- the private compiler compatibility and evidence code;
-- the matching resolver executable.
-
-The evidence layer uses internal compiler APIs, so a release targets one exact
-OCaml patch and matching Hamlet/`ppx_hamlet` packages. The current target is
-OCaml 5.5.0. Independently mixing versions is unsupported because their AST,
-Typedtree, UIDs, or generated metadata may differ.
-
-## Tests and debugging
-
-The main feature gate is:
-
-```sh
-dune runtest test/automatic_propagation
-```
-
-It covers final types, runtime behavior, raw Merlin output, saved and unsaved
-LSP hovers, dependency-interface invalidation, diagnostics, and cross-module
-catalogues. `make installed-consumer` additionally proves the installed path in
-a separate project. See the [test README](../test/automatic_propagation/README.md)
-for focused commands.
-
-When investigating a failure:
-
-1. A configuration error usually means the target used `pps` instead of
-   `staged_pps`.
-2. An evidence refusal means the input row, source origin, handler arm, or
-   catalogue could not be proved exact. First confirm the explicit fallback.
-3. A marker-dependency refusal means an earlier marker produced opaque evidence
-   or the value flow is outside the supported model.
-4. A transport failure concerns resolver discovery, process execution, framing,
-   or version correlation. It must never be hidden by a cached response.
-5. A final compiler error after successful resolution indicates a mismatch
-   between the proof and generated OCaml. Treat it as a subtractor bug.
-
-When extending the accepted language, add the proof rule and a refusing
-counterexample before adding the successful final-AST and editor tests.
+The full compiler/editor gate is documented in the
+[acceptance-test README](../test/automatic_propagation/README.md).

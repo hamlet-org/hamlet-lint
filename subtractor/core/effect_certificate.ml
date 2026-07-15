@@ -73,6 +73,8 @@ let union_evidence ~kind ~operation ~inputs evidence =
     in
     union_exact ~kind ~operation ~inputs proofs
 
+let union = union_evidence
+
 let chain ~inputs certificates =
   let errors =
     certificates

@@ -76,7 +76,12 @@
 (test
  (name automatic_propagation_runtime_test)
  (modules automatic_propagation_runtime_test)
- (libraries hamlet automatic_propagation_external alcotest)
+ (libraries
+  hamlet
+  automatic_propagation_external
+  hamlet_subtractor_generic_helper_producer
+  hamlet_subtractor_nested_outer_fixture
+  alcotest)
  (preprocess
   (staged_pps hamlet-subtractor.ppx)))
 
@@ -95,6 +100,36 @@
   (diff
    automatic_propagation_types.expected
    automatic_propagation_types.actual)))
+
+(rule
+ (targets generic_helper_types.actual)
+ (deps
+  ../../subtractor/integration/.hamlet_subtractor_generic_helper_consumer.objs/byte/hamlet_subtractor_generic_helper_consumer.cmt)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ./automatic_propagation_cmt_dump.exe %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff generic_helper_types.expected generic_helper_types.actual)))
+
+(rule
+ (targets nested_generic_helper_types.actual)
+ (deps
+  ../../subtractor/integration/.hamlet_subtractor_nested_outer_fixture.objs/byte/hamlet_subtractor_nested_outer_fixture.cmt)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ./automatic_propagation_cmt_dump.exe %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff
+   nested_generic_helper_types.expected
+   nested_generic_helper_types.actual)))
 
 (rule
  (alias automatic-propagation-lsp)

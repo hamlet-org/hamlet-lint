@@ -62,6 +62,12 @@ module Mixed_errors = struct
   type error = [ a | b ]
 end
 
+module Structural_errors = struct
+  type pair = [ `Pair of string * int ]
+  type residual = [ `Residual ]
+  type error = [ pair | residual ]
+end
+
 module Chain_errors = struct
   type old_a = [ `Chain_old_a ]
   type old_b = [ `Chain_old_b ]
@@ -110,6 +116,9 @@ let storage_subset_source : (string, storage_subset, Hamlet.never) Hamlet.t =
 let mixed_source :
     (string, Mixed_errors.error, [ Local_logger.Tag.r | Local_clock.Tag.r ]) t =
   Hamlet.Combinators.fail (`Mixed_a : Mixed_errors.error)
+
+let structural_payload_source : (string, Structural_errors.error, never) t =
+  Hamlet.Combinators.fail (`Residual : Structural_errors.error)
 
 let chain_source : (string, Chain_errors.old, Hamlet.never) Hamlet.t =
   Hamlet.Combinators.fail (`Chain_old_a : Chain_errors.old)
@@ -165,6 +174,13 @@ let case_error_exhausted =
       | #Exact_errors.b -> Hamlet.Combinators.return "b"
       | [%hamlet.propagate_e.auto] -> .)
       [@warning "-11"])
+
+let case_error_structural_payload =
+  Combinators.catch structural_payload_source ~handler:(fun error ->
+      match error with
+      | `Pair (message, code) ->
+          Combinators.return (message ^ string_of_int code)
+      | [%hamlet.propagate_e.auto] -> .)
 
 let case_error_function =
   Combinators.catch local_error_source ~handler:(function

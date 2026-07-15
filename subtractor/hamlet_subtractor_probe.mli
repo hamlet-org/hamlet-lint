@@ -1,5 +1,7 @@
 type propagation_kind = Error_propagation | Requirement_propagation
 
+val generic_output_link_attribute : string
+
 type marker = {
   id : string;
   original_id : string;

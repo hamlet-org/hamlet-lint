@@ -17,9 +17,63 @@
  (preprocess
   (staged_pps hamlet-subtractor.ppx)))
 
+(library
+ (name hamlet_subtractor_generic_definition_fixture)
+ (wrapped false)
+ (modules hamlet_subtractor_generic_definition_fixture)
+ (libraries hamlet)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(library
+ (name hamlet_subtractor_nested_inner_fixture)
+ (wrapped false)
+ (modules hamlet_subtractor_nested_inner_fixture)
+ (libraries hamlet)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(library
+ (name hamlet_subtractor_nested_outer_fixture)
+ (wrapped false)
+ (modules hamlet_subtractor_nested_outer_fixture)
+ (libraries hamlet hamlet_subtractor_nested_inner_fixture)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(library
+ (name hamlet_subtractor_generic_helper_producer)
+ (wrapped false)
+ (modules hamlet_subtractor_generic_helper_producer)
+ (libraries hamlet)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(library
+ (name hamlet_subtractor_generic_helper_consumer)
+ (wrapped false)
+ (modules hamlet_subtractor_generic_helper_consumer)
+ (libraries hamlet hamlet_subtractor_generic_helper_producer)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
 (alias
  (name runtest)
- (deps hamlet_subtractor_integration_fixture.cma))
+ (deps
+  hamlet_subtractor_generic_definition_fixture.cma
+  hamlet_subtractor_generic_helper_consumer.cma
+  hamlet_subtractor_nested_outer_fixture.cma
+  hamlet_subtractor_integration_fixture.cma))
 
 (rule
  (alias runtest)

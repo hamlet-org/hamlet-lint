@@ -1,31 +1,23 @@
 # hamlet-subtractor
 
-`hamlet-subtractor` implements exact automatic propagation for Hamlet errors
-and service requirements.
-
-A Hamlet computation has this type:
-
-```ocaml
-('value, 'errors, 'requirements) Hamlet.t
-```
-
-When a `catch` handles only some errors, the subtractor generates the cases
-that forward the remaining errors. When a `provide` supplies only some
-services, it generates the cases that request the remaining services.
+`hamlet-subtractor` generates exact forwarding cases for Hamlet errors and
+service requirements.
 
 ```ocaml
 Hamlet.Combinators.catch source ~handler:(fun error ->
   match error with
-  | #Storage.Errors.read_error -> recover ()
+  | #Storage.Errors.read_error -> recover error
   | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The generated code is ordinary OCaml. Dune, Merlin, and OCaml-LSP type-check
-that code, so editor hovers show the same precise type as the build.
+The PPX reads the input computation's inferred effect rows, subtracts the
+preceding handler arms, and replaces the marker with ordinary OCaml cases. It
+refuses the marker if the complete input row cannot be proved. The normal
+compiler, Merlin, and OCaml-LSP type-check the generated code.
 
-## Installation
+## Install
 
-Hamlet is not published in opam yet. Pin Hamlet, its PPX, and the subtractor:
+Hamlet is not published in opam yet. Pin Hamlet, its PPX, and this package:
 
 ```sh
 opam pin add --yes --no-action hamlet \
@@ -36,7 +28,8 @@ opam pin add --yes hamlet-subtractor \
   "git+https://github.com/hamlet-org/hamlet-subtractor.git#main"
 ```
 
-Use the staged PPX in every Dune target that contains an automatic marker:
+Use the staged PPX in each target that contains automatic propagation, defines
+a generic helper, or calls one:
 
 ```lisp
 (library
@@ -46,47 +39,30 @@ Use the staged PPX in every Dune target that contains an automatic marker:
   (staged_pps hamlet-subtractor.ppx)))
 ```
 
-The bundle already includes `ppx_hamlet`; do not list it again in the same
-target. Nothing else needs to be started or configured.
+The bundle already includes `ppx_hamlet`. Do not list it again in the same
+target. Targets that use no subtractor feature may keep ordinary
+`(pps ppx_hamlet)`.
 
-`staged_pps` matters because the subtractor must read the compiled interfaces
-of imported modules before it can prove which effects exist. Ordinary `pps`
-may run before those interfaces have been built. The
-[usage guide](docs/automatic-propagation.md) explains this boundary in detail.
+## Use
 
-## Markers and fallback
+- `[%hamlet.propagate_e.auto]` forwards errors not handled by a `catch`.
+- `[%hamlet.propagate_s.auto]` forwards services not supplied by a `provide`.
+- `let[@hamlet.generic]` makes a reusable helper specialize automatically when
+  called directly with a concrete effect.
+- The exact output of a direct generic call can feed the next automatic marker.
 
-- `[%hamlet.propagate_e.auto]` forwards unhandled errors from `catch`.
-- `[%hamlet.propagate_s.auto]` forwards unsupplied services from `provide`.
+One marker is enough. Multiple markers may form a supported linear sequence of
+Hamlet operations. When a row is open or hidden, declare an explicit universe
+with `%hamlet.te` or `%hamlet.ts` and use the corresponding non-automatic
+marker.
 
-One marker may be used alone. Multiple markers may form a linear sequence,
-including alternating `catch`, `provide`, and supported Hamlet composition.
+Start with [Automatic Propagation](docs/automatic-propagation.md). The
+[supported](docs/supported-patterns.md) and
+[refused](docs/refused-patterns.md) example guides show the exact boundary.
+The [documentation index](docs/README.md) links the architecture, proof, and
+compiler-integration references.
 
-If the subtractor cannot prove the complete input row, compilation stops at
-the marker. Add an explicit universe and use the non-automatic marker:
-
-```ocaml
-[%hamlet.te Storage]
-[%hamlet.ts Logger.Tag.r, Clock.Tag.r]
-```
-
-This refusal prevents the PPX from silently dropping a possible effect.
-
-## Documentation
-
-- [Automatic Propagation](docs/automatic-propagation.md): setup, supported
-  behavior, primitive composition, and fallbacks.
-- [Supported Patterns](docs/supported-patterns.md) and
-  [Refused Patterns](docs/refused-patterns.md): small examples with the reason
-  each form is accepted or rejected.
-- [Architecture](docs/architecture.md): the PPX, probe, resolver, and generated
-  AST.
-- [Proof Model](docs/proof-model.md): what counts as exact evidence and why
-  some programs are refused.
-- [Compiler and Editor Integration](docs/integration.md): Dune phases, Merlin,
-  resolver transport, and diagnostics.
-
-## Development
+## Develop
 
 ```sh
 make setup
@@ -95,13 +71,8 @@ make installed-consumer
 make all
 ```
 
-`make installed-consumer-keep` preserves the temporary consumer project for
-manual editor inspection. Dune-backed commands should run serially in this
-repository.
+`make installed-consumer-keep` preserves the generated consumer project for
+manual editor inspection. Run Dune-backed commands serially in this checkout.
 
-The current release targets OCaml 5.5.0 and Dune 3.18 or newer. The resolver
-uses version-specific OCaml compiler APIs, so each release is paired with an
-exact OCaml version and matching Hamlet packages.
-
-The project is licensed under MIT. Report issues at
-<https://github.com/hamlet-org/hamlet-subtractor/issues>.
+The current release targets OCaml 5.5.0 and Dune 3.18 or newer. The project is
+licensed under MIT.

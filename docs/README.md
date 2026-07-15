@@ -1,51 +1,20 @@
-# Hamlet Subtractor documentation
+# Documentation
 
-Start with the guide that matches your task:
+- [Automatic Propagation](./automatic-propagation.md) explains setup, ordinary
+  markers, generic helpers, composition, and explicit fallbacks.
+- [Supported Patterns](./supported-patterns.md) contains small accepted
+  examples and their resulting rows.
+- [Refused Patterns](./refused-patterns.md) shows unsafe or ambiguous forms and
+  how to make each boundary explicit.
+- [Architecture](./architecture.md) follows source code through the probe,
+  resolver, proof engine, and final generated AST.
+- [Proof Model](./proof-model.md) defines exact evidence, declaration identity,
+  and subtraction.
+- [Compiler and Editor Integration](./integration.md) explains `staged_pps`,
+  dependency interfaces, the resolver process, Merlin, and packaging.
 
-- [Automatic Propagation](./automatic-propagation.md) explains how to use the
-  feature in an application.
-- [Supported Patterns](./supported-patterns.md) gives small accepted examples
-  and explains the resulting rows.
-- [Refused Patterns](./refused-patterns.md) shows common refusals, the missing
-  proof, and the explicit fix.
-- [Architecture](./architecture.md) follows one marker through the
-  implementation.
-- [Proof Model](./proof-model.md) defines the evidence required before code can
-  be generated.
-- [Compiler and Editor Integration](./integration.md) explains Dune, the
-  resolver process, Merlin, and OCaml-LSP.
-
-## The implementation in one minute
-
-An automatic marker asks Hamlet to forward whatever the preceding handler arms
-did not handle. A syntax rewriter cannot safely determine that set from source
-text alone: an OCaml type may be open, abstract, or widened by its context.
-
-The PPX therefore creates two syntax trees:
-
-- the **base AST** is the user's program and will become the final output;
-- the **probe AST** is a temporary copy containing extra links that let the
-  OCaml type checker identify the marker, its handler, and its input value.
-
-A separate resolver process type-checks the probe and returns a small,
-compiler-independent proof. The PPX subtracts the handled effects, generates
-ordinary forwarding cases, and inserts them into the base AST. The normal OCaml
-compiler or Merlin then type-checks that final AST. The probe is never compiled
-as user code.
-
-## Source map
-
-| Path | Responsibility |
-| --- | --- |
-| `subtractor/core` | Defines exact rows, certificates, residuals, and their algorithms without depending on OCaml compiler data structures. |
-| `subtractor/hamlet_subtractor_probe.ml` | Finds markers and builds the linked base and probe ASTs. |
-| `subtractor/hamlet_subtractor_compiler_evidence.ml` | Reads the probe Typedtree, verifies real Hamlet definitions, and produces immutable proofs. |
-| `subtractor/hamlet_subtractor_engine.ml` | Subtracts handled leaves and resolves dependencies between markers. |
-| `subtractor/hamlet_subtractor_generator.ml` | Generates ordinary forwarding cases from a proven residual. |
-| `subtractor/hamlet_subtractor_replace.ml` | Inserts generated cases and type constraints into the base AST. |
-| `subtractor/hamlet_subtractor_ppx.ml` | Runs the complete PPX lifecycle and reports failures at the original marker. |
-| `subtractor/hamlet_subtractor_resolver.ml` | Entry point of the isolated helper process; it runs the server that returns probe evidence. |
-
-The [architecture guide](./architecture.md) shows how these pieces interact.
-Resolver discovery and process isolation are described once in the
-[integration guide](./integration.md#resolver-process).
+The short version: the PPX creates a temporary analysis copy of the module,
+asks an isolated OCaml type checker for exact effect evidence, and inserts
+ordinary forwarding cases into the original AST. The temporary copy is never
+compiled as the user's program. If the evidence is incomplete, the PPX stops
+instead of guessing.

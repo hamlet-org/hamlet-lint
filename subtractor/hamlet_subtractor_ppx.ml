@@ -1,6 +1,9 @@
 open Ppxlib
 open Hamlet_subtractor_core
 
+module Generic_contract = Hamlet_subtractor_generic_contract
+module Generic_definition = Hamlet_subtractor_generic_definition
+
 let activate_probe_phase () = Ppx_hamlet.subtractor_phase := Ppx_hamlet.Probe
 
 let reset_phase () = Ppx_hamlet.subtractor_phase := Ppx_hamlet.Normal
@@ -124,6 +127,8 @@ let compiler_refusal_marker prepared = function
         refusal.Hamlet_subtractor_compiler_evidence.marker |> Marker.id
       in
       first_some (marker_for_id prepared id) (first_marker prepared)
+  | Hamlet_subtractor_compiler_compat.Generic_evidence_failed _ ->
+      first_marker prepared
   | Hamlet_subtractor_compiler_compat.Dependency_scan
   | Hamlet_subtractor_compiler_compat.Unsupported_tool _
   | Hamlet_subtractor_compiler_compat.Typing_failed _
@@ -151,6 +156,8 @@ let compiler_refusal_reason = function
       "the typed probe did not preserve every required marker link"
   | Hamlet_subtractor_compiler_compat.Evidence_failed refusal ->
       Hamlet_subtractor_compiler_evidence.refusal_message refusal
+  | Hamlet_subtractor_compiler_compat.Generic_evidence_failed refusal ->
+      Hamlet_subtractor_compiler_evidence.generic_refusal_message refusal
   | Hamlet_subtractor_compiler_compat.Request_context_mismatch
       { field; expected; actual } ->
       Printf.sprintf
@@ -236,19 +243,72 @@ let resolver_error_loc prepared = function
       first_marker_loc prepared
 
 let resolve ~context structure =
+  let structure = Hamlet_subtractor_generic_definition.rewrite_exn structure in
+  let definition_expectations =
+    match
+      Hamlet_subtractor_generic_contract.definition_expectations structure
+    with
+    | Ok expectations -> expectations
+    | Error message ->
+        Location.raise_errorf
+          "generic automatic propagation contract preparation failed: %s"
+          message
+  in
   let tool_name = Expansion_context.Base.tool_name context in
   if tool_mode tool_name = Dependency_scan then
-    Hamlet_subtractor_replace.strip_probe_attributes structure
+    structure
+    |> Hamlet_subtractor_replace.strip_probe_attributes
+    |> Hamlet_subtractor_generic_definition.strip_linkage_attributes
   else
     let prepared = Hamlet_subtractor_probe.prepare structure in
-    match prepared.markers with
-    | [] -> prepared.base_structure
-    | marker :: _ when tool_mode tool_name = Fast_pipeline ->
+    let generic_calls =
+      Hamlet_subtractor_generic_call.prepare prepared.probe_structure
+    in
+    (match generic_calls.refusals with
+    | refusal :: _ ->
+        Location.raise_errorf ~loc:refusal.loc
+          "generic automatic propagation call is invalid: %s"
+          (Hamlet_subtractor_generic_call.refusal_message refusal.reason)
+    | [] -> ());
+    let call_expectations =
+      match Hamlet_subtractor_generic_call.expectations generic_calls with
+      | Ok expectations -> expectations
+      | Error message ->
+          Location.raise_errorf
+            "generic automatic propagation call preparation failed: %s" message
+    in
+    let generic_expectations = definition_expectations @ call_expectations in
+    let has_definitions = definition_expectations <> [] in
+    let has_candidates = call_expectations <> [] in
+    let prepared =
+      {
+        prepared with
+        probe_structure = generic_calls.probe_structure;
+        structure = generic_calls.probe_structure;
+      }
+    in
+    match (prepared.markers, has_definitions, has_candidates) with
+    | [], false, false -> prepared.base_structure
+    | marker :: _, _, _ when tool_mode tool_name = Fast_pipeline ->
         Location.raise_errorf ~loc:marker.loc "%s"
           (fast_pipeline_message marker)
-    | marker :: _ when tool_mode tool_name = Unknown ->
+    | [], true, _ when tool_mode tool_name = Fast_pipeline ->
+        Location.raise_errorf
+          "generic automatic propagation requires Dune's classic PPX pipeline; \
+           configure (staged_pps hamlet-subtractor.ppx), not (pps \
+           hamlet-subtractor.ppx)"
+    | [], false, true when tool_mode tool_name = Fast_pipeline ->
+        prepared.base_structure
+    | marker :: _, _, _ when tool_mode tool_name = Unknown ->
         Location.raise_errorf ~loc:marker.loc "%s"
           (unknown_tool_message marker tool_name)
+    | [], true, _ when tool_mode tool_name = Unknown ->
+        Location.raise_errorf
+          "generic automatic propagation cannot prove that PPX tool context %S \
+           performs a final compiler or Merlin type-check"
+          tool_name
+    | [], false, true when tool_mode tool_name = Unknown ->
+        prepared.base_structure
     | _ -> (
         match prepared.refusals with
         | refusal :: _ ->
@@ -259,15 +319,20 @@ let resolve ~context structure =
             let source_file = Expansion_context.Base.input_name context in
             if String.trim source_file = "" || String.equal source_file "_none_"
             then
-              let marker = Option.get (first_marker prepared) in
-              Location.raise_errorf ~loc:marker.loc "%s"
-                (with_marker_fallback (probe_marker_kind marker)
-                   "automatic propagation requires the active source filename \
-                    from the PPX context")
+              match first_marker prepared with
+              | Some marker ->
+                  Location.raise_errorf ~loc:marker.loc "%s"
+                    (with_marker_fallback (probe_marker_kind marker)
+                       "automatic propagation requires the active source \
+                        filename from the PPX context")
+              | None ->
+                  Location.raise_errorf
+                    "generic automatic propagation requires the active source \
+                     filename from the PPX context"
             else
               match
-                Hamlet_subtractor_resolver_client.resolve_prepared ~tool_name
-                  ~source_file prepared
+                Hamlet_subtractor_resolver_client.resolve_elaboration
+                  ~generic_expectations ~tool_name ~source_file prepared
               with
               | Error error ->
                   Location.raise_errorf
@@ -278,7 +343,8 @@ let resolve ~context structure =
                     |> Option.map marker_fallback
                     |> Option.value
                          ~default:"use an explicit propagation input universe")
-              | Ok engine -> (
+              | Ok resolution -> (
+                  let engine = resolution.engine in
                   match
                     Hamlet_subtractor_replace.structure
                       ~catalogues:(Hamlet_subtractor_engine.catalogues engine)
@@ -287,7 +353,50 @@ let resolve ~context structure =
                         (Hamlet_subtractor_engine.resolved_values engine)
                       prepared.base_structure
                   with
-                  | Ok structure -> structure
+                  | Ok structure -> (
+                      match
+                        Hamlet_subtractor_generic_contract.finalize_definitions
+                          ~attachments:resolution.generic_attachments structure
+                      with
+                      | Error message ->
+                          Location.raise_errorf
+                            "generic automatic propagation finalization \
+                             failed: %s"
+                            message
+                      | Ok structure -> (
+                          match
+                            Hamlet_subtractor_generic_definition
+                            .finalize_composition
+                              ~attachments:resolution.generic_attachments
+                              structure
+                          with
+                          | Error error ->
+                              Location.raise_errorf
+                                "generic automatic propagation composition \
+                                 finalization failed: %s"
+                                (Hamlet_subtractor_generic_definition
+                                 .composition_finalization_error_message error)
+                          | Ok structure ->
+                              let structure =
+                                Hamlet_subtractor_generic_definition
+                                .strip_linkage_attributes structure
+                              in
+                              begin match
+                                Hamlet_subtractor_generic_call.finalize
+                                  ~calls:generic_calls.calls
+                                  ~attachments:resolution.generic_attachments
+                                  ~catalogues:
+                                    (Hamlet_subtractor_engine.catalogues engine)
+                                  structure
+                              with
+                              | Ok structure -> structure
+                              | Error error ->
+                                  Location.raise_errorf
+                                    "generic automatic propagation call \
+                                     finalization failed: %s"
+                                    (Hamlet_subtractor_generic_call
+                                     .finalization_error_message error)
+                              end))
                   | Error error ->
                       Location.raise_errorf
                         ~loc:(replacement_loc prepared error)

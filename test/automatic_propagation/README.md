@@ -1,84 +1,85 @@
-# Automatic propagation acceptance tests
+# Automatic-propagation acceptance tests
 
-This directory tests the public feature through real Dune, Merlin, and
-OCaml-LSP entry points. The fixtures use separate compilation units so the PPX
-must read actual dependency interfaces rather than seeing every declaration in
-one file.
+This directory tests the complete path from source text to final compiler and
+Merlin output. Unit tests under `subtractor/test` cover the individual proof,
+protocol, resolver, and generation modules.
 
-## Run the tests
+## Run
 
 From the repository root:
 
 ```sh
-dune runtest test/automatic_propagation
+make test
 ```
 
-This is the complete feature gate. It checks:
+The focused acceptance alias is:
 
-- final inferred types and runtime behavior;
-- saved and unsaved OCaml-LSP hovers;
-- the final source and Typedtree seen by raw Merlin;
-- invalidation after a dependency interface changes;
-- expected refusals and explicit fallbacks;
-- arbitrarily long linear marker chains, including effects introduced between
-  markers, alternating `chain` and `catch`, the catch-filter family, and
-  refusal of a two-predecessor marker merge;
-- linear generation for cross-module `Errors.Cases` catalogues.
-
-The same gate is available as
-`@test/automatic_propagation/automatic-propagation-acceptance` or by running
-`test/automatic_propagation/run_acceptance.sh`. The focused LSP session is
-`@test/automatic_propagation/automatic-propagation-lsp`.
-
-The active opam switch must provide `ocamlmerlin` and `ocamllsp`.
-
-## Why this checkout has `preprocessor_deps`
-
-The positive fixture contains:
-
-```lisp
-(preprocessor_deps
- (package hamlet-subtractor))
+```sh
+opam exec -- dune build \
+  @test/automatic_propagation/automatic-propagation-acceptance
 ```
 
-The package is not installed while these tests run, so this dependency makes
-Dune build the resolver executable before Merlin starts the PPX. Installed
-projects do not need it: their resolver is installed with the package.
+Run Dune commands sequentially in this checkout.
+
+## What is checked
+
+The suite verifies:
+
+- exact error and requirement residual types from saved builds;
+- final PPX output with no automatic markers or private probe attributes;
+- runtime routing for handled, forwarded, guarded, recovery, chained, generic,
+  nested-generic, and requirement cases;
+- two or more dependent markers with `catch`, `provide`, `chain`, filters, and
+  intervening effects;
+- cross-module generated error catalogues;
+- generic-helper contracts and two different caller specializations;
+- unsaved Merlin buffers, Typedtree output, and hover types;
+- dependency `.cmi` changes invalidating the expected elaboration;
+- stable diagnostics for every refused fixture.
+
+Expected type and expansion files are committed. Update them only after
+reviewing why the observable output changed.
+
+## Source-tree resolver dependency
+
+The integration Dune stanzas contain `preprocessor_deps (package
+hamlet-subtractor)` because the package is being tested before installation.
+That dependency makes the resolver executable exist in the same build context
+as the test PPX.
+
+Normal consuming repositories do not add this stanza. An installed PPX finds
+the resolver installed with its own package through the Dune package site.
 
 ## Installed consumer
 
-`make installed-consumer` installs the package into a temporary prefix and
-tests a separate project whose only PPX configuration is:
+The shared installed-consumer harness creates a fresh prefix, installs Hamlet
+and Hamlet Subtractor, creates an unrelated consumer project, and checks both
+Dune and Merlin against the installed artifacts:
 
-```lisp
-(staged_pps hamlet-subtractor.ppx)
+```sh
+make installed-consumer
 ```
 
-This catches accidental dependencies on the source checkout. It verifies the
-runtime result, exact Merlin hovers, and the installed resolver path. Its
-generated `main.ml` includes:
+For manual editor inspection:
 
-- three automatic catches that handle old and newly introduced errors;
-- alternating automatic catches, direct `chain`, and an ordinary error-row
-  replacing `catch`;
-- a requirement chain that introduces `Metrics` after providing `Logger`, then
-  proves that providing `Clock` leaves only `Metrics`.
+```sh
+make installed-consumer-keep
+```
 
-Use `make installed-consumer-keep` to preserve those examples as a real fixture
-project. The command prints its location, editor launch commands, and a cleanup
-command. Close the editor before cleanup because an editor process may still be
-using the temporary opam paths.
+The second target runs the same checks and preserves the generated directory.
+It prints the project path, a launcher with the isolated package environment,
+and cleanup instructions.
 
 ## Adding coverage
 
-- Add successful `case_*` bindings to
-  `automatic_propagation_positive.ml`; their exposed rows enter the type
-  golden.
-- Add runtime behavior to `automatic_propagation_runtime_test.ml`.
-- Add refused programs under `negative/` and record stable diagnostic fragments
-  in `automatic_propagation_diagnostics.expected`.
-- Add cross-module service declarations to
-  `automatic_propagation_external.ml`.
+Add the narrowest layer that proves the behavior:
 
-The expansion golden must come from raw Merlin output produced by the automatic
-implementation, never from an explicit `%hamlet.te` or `%hamlet.ts` stand-in.
+- pure proof or serialization rule: `subtractor/test`;
+- syntax rewrite or diagnostic: PPX unit tests or `negative/`;
+- inferred public type: a `.cmt` golden fixture;
+- execution behavior: `automatic_propagation_runtime_test.ml`;
+- compiler/Merlin lifecycle: `run_acceptance.sh`;
+- packaging or resolver discovery: `installed_consumer.sh`.
+
+For a regression that crosses layers, keep a focused unit test and one
+end-to-end acceptance case.

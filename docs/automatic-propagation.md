@@ -1,266 +1,258 @@
 # Automatic propagation
 
-A Hamlet computation has this type:
+Hamlet Subtractor completes the final branch of an inline `catch` or `provide`
+handler. It forwards exactly the effects not claimed by the earlier branches.
 
 ```ocaml
-('value, 'errors, 'requirements) Hamlet.t
+Hamlet.Combinators.catch source ~handler:(function
+  | `Missing -> recover ()
+  | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The second type parameter lists possible typed errors. The third lists services
-that still need an implementation. Each named error type or service tag is an
-**effect leaf**.
-
-An automatic marker asks Hamlet Subtractor to forward every input leaf not
-handled by an earlier arm:
-
-```ocaml
-[%hamlet.propagate_e.auto]  (* errors in catch *)
-[%hamlet.propagate_s.auto]  (* services in provide *)
-```
-
-The PPX generates ordinary OCaml cases only after proving the complete finite
-input row. If it cannot prove that no hidden leaf exists, compilation stops and
-the diagnostic asks for an explicit `%hamlet.te` or `%hamlet.ts` boundary.
+If `source` can fail with `` `Missing | `Timeout ``, the marker becomes a
+`` `Timeout `` branch. The PPX stops with an error if it cannot prove that this
+is the complete remainder.
 
 ## Dune setup
 
-Install the packages as shown in the [root README](../README.md#installation).
-Every Dune target containing an automatic marker must use:
+Use the bundled staged PPX in every target that defines or calls automatic
+generic helpers, or contains an automatic propagation marker:
 
 ```lisp
-(library
- (name application)
- (libraries hamlet)
- (preprocess
-  (staged_pps hamlet-subtractor.ppx)))
+(preprocess
+ (staged_pps hamlet-subtractor.ppx))
 ```
 
-The bundle already runs `ppx_hamlet`; do not list `ppx_hamlet` again in the
-same target.
+Do not add `ppx_hamlet` to the same target; the bundle already runs it. The
+reason this must be `staged_pps`, rather than `pps`, is explained in
+[Compiler and Editor Integration](./integration.md).
 
-`pps` runs while Dune is still discovering module dependencies. On a clean
-build, imported `.cmi` files may not exist at that point. A `.cmi` is the
-compiled public interface of a module: it contains the exported types, values,
-and compiler identities needed to understand references such as
-`Storage.Errors.read_error`.
+## Errors
 
-`staged_pps` runs again after Dune has built those interfaces. Hamlet
-Subtractor can therefore type its temporary probe against the same imported
-APIs as the final compiler. Targets without automatic markers may continue to
-use ordinary `(pps ppx_hamlet)`.
-
-The [integration guide](./integration.md#why-dune-uses-two-ppx-phases) explains
-the build and Merlin lifecycle, including interface rebuilds and caching.
-
-## Forwarding errors
-
-Put the error marker in the final arm of an inline `catch` handler:
+`[%hamlet.propagate_e.auto]` is the last arm of an inline handler owned by
+`Hamlet.Combinators.catch`:
 
 ```ocaml
-let result =
-  Hamlet.Combinators.catch storage_program ~handler:(function
-    | #Storage.Errors.read_error -> recover_read_error ()
+let handled =
+  Hamlet.Combinators.catch source ~handler:(function
+    | `Missing -> Hamlet.Combinators.return "missing"
     | [%hamlet.propagate_e.auto] -> .)
 ```
 
-Suppose `storage_program` can fail with `read_error`, `write_error`, and
-`network_error`. The first arm handles `read_error`. The PPX generates cases
-that call `Hamlet.Combinators.fail` for `write_error` and `network_error`.
+Earlier arms may handle an error or explicitly forward it with
+`Hamlet.Combinators.fail`. A guarded arm does not prove that it always handles
+its pattern, so the generated forwarding code keeps that leaf.
 
-Only an unguarded, complete `#Path` arm removes a leaf. A guard can be false, so
-the leaf must still reach the generated fallback:
+Recovery code may introduce new effects. They become part of the output row;
+they are not mistaken for unhandled input errors.
 
-```ocaml
-| #Storage.Errors.read_error as error when can_retry error -> retry error
-```
+## Service requirements
 
-If a recovery arm introduces an error or requirement, that new effect remains
-in the result. The PPX does not rewrite the recovery expression.
-
-## Forwarding service requirements
-
-Put the service marker in the final arm of an inline `provide` handler:
+`[%hamlet.propagate_s.auto]` is the corresponding final arm of `provide`:
 
 ```ocaml
 let with_logger =
-  Hamlet.Combinators.provide program ~handler:(function
-    | #Logger.Tag.r as witness ->
-        Logger.Tag.give witness (module Logger_live)
+  Hamlet.Combinators.provide source ~handler:(function
+    | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
     | [%hamlet.propagate_s.auto] -> .)
 ```
 
-If `program` requires `Logger`, `Clock`, and `Database`, the `Tag.give` arm
-removes `Logger`. The PPX generates `Hamlet.Dispatch.need` cases for `Clock` and
-`Database`.
+If `source` requires `Logger` and `Clock`, this handler supplies `Logger` and
+forwards `Clock`. `Logger.Tag.need witness` or `Hamlet.Dispatch.need witness`
+explicitly forwards a matched requirement.
 
-A direct `Hamlet.Dispatch.need witness` arm explicitly forwards that service,
-so it remains in the output. Both `Tag.give` and `Dispatch.need` must receive
-the witness bound by the same pattern.
+## Several markers and intervening operations
 
-Providing a service does not erase errors. Errors already present in the
-computation remain present after `provide`.
+There is no minimum chain length. One marker works; two markers work; longer
+linear sequences work. `catch` and `provide` may alternate, and supported
+Hamlet combinators may appear between them.
 
-## Chaining automatic markers
-
-A single automatic marker works on its own. Two or more markers may also form
-a linear sequence: the exact output of one marker becomes the input of the
-next.
-
-```text
-source -> automatic catch -> let* -> automatic catch -> automatic provide
+```ocaml
+source
+|> Hamlet.Combinators.catch ~handler:(function
+     | `Missing -> Hamlet.Combinators.return ()
+     | [%hamlet.propagate_e.auto] -> .)
+|> Hamlet.Combinators.chain ~handler:(fun () -> next)
+|> Hamlet.Combinators.provide ~handler:(function
+     | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+     | [%hamlet.propagate_s.auto] -> .)
+|> Hamlet.Combinators.catch ~handler:(function
+     | `Timeout -> Hamlet.Combinators.return ()
+     | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The second marker is the first one that has a marker dependency. Every later
-marker follows the same rule, so there is no special two-marker or three-marker
-threshold.
+The resolver follows the actual data dependency, not just the textual order.
+For each marker it starts from the proven output of its predecessors and also
+accounts for effects introduced by intervening operations. Supported families
+include:
 
-At each step the resolver combines:
+- `chain`, `let*`, `and*`, `both`, `map`, and `suspend`;
+- `catch`, `catch_cause`, `catch_filter`, and `catch_cause_filter`;
+- `map_fail`, `catch_defect`, `tap`, `tap_fail`, `tap_defect`, and `tap_cause`;
+- `provide`, `scoped_with`, `scoped`, `or_die`, `thaw`, and `sandbox`;
+- `ensuring`, `add_finalizer`, `add_finalizer_exit`, `acquire_release`, and
+  `acquire_use_release` where their effect-producing callbacks are visible.
 
-1. the exact output of the previous marker;
-2. any exact effects introduced by supported composition around that output.
+This is a tracing boundary, not a claim that every possible higher-order use of
+those functions is accepted. In particular, `sandbox_cause` cannot carry a
+generic error row because it maps `'e` to `'e Cause.t`, and manual
+`Hamlet.Scope.use` flows require an explicit boundary. See the small examples in
+[Supported Patterns](./supported-patterns.md) and
+[Refused Patterns](./refused-patterns.md).
 
-A later marker may therefore handle an older leaf that survived previous
-steps, or a leaf introduced after an earlier marker. There is no fixed limit on
-the length of a linear chain.
+## Generic helpers
 
-The supported dependency shape is linear: each marker may depend on at most
-one earlier marker. Combining two independently marked values and asking a
-third marker to infer their union is refused. Add an explicit row at that merge
-point.
+A normal marker cannot inspect a row chosen later by a caller. An opted-in
+generic helper therefore receives caller-generated forwarding evidence.
 
-See [Supported patterns](./supported-patterns.md#linear-marker-chains) for
-complete error and requirement examples.
+Definition:
 
-### Composition between markers
+```ocaml
+let[@hamlet.generic] recover_missing source =
+  Hamlet.Combinators.catch source ~handler:(function
+    | `Missing -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+```
 
-The resolver models each Hamlet primitive according to its type-level effect
-on the two rows:
+Call:
 
-| Effect on rows | Supported primitives | What must be proven |
-| --- | --- | --- |
-| Preserve both rows | `chain`/`let*`, `both`/`and*`, `map`/`let+`, `catch_defect`, `tap`, `tap_fail`, `tap_defect`, `tap_cause`, `ensuring`, `acquire_use_release` | Every effectful argument or inline callback |
-| Replace typed errors | `catch`, `catch_cause`, `catch_filter`, `catch_cause_filter` | Every recovery path; filters themselves are pure |
-| Remove typed errors | `or_die`, `thaw`, `sandbox` | The wrapped source; later errors must come from a new exact computation |
-| Map typed errors | `map_fail` | The exact output error row, usually from a closed annotation |
-| Change requirements | `provide`, `scoped_with` | The exact output requirement row |
-| Remove the scope requirement | `scoped` | The wrapped source |
-| Delay construction | `suspend` | An inline callback whose returned computation is exact |
+```ocaml
+let recovered = recover_missing concrete_source
+```
 
-For row-preserving primitives, the source and effectful callbacks contribute
-to the same certificate. For `catch`-family primitives, source errors are
-discarded and replaced by the errors produced by the recovery branches;
-requirements from the source and recoveries are retained.
+No row annotation is needed when `concrete_source` already has an exact
+inferred type. A type annotation is needed only when ordinary OCaml inference
+cannot express the intended public row, for example when an API deliberately
+widens a computation that currently constructs one error. Only the definition
+is annotated:
 
-`catch_filter` has two effectful outcomes: `handler` and `on_no_match`. Both
-must be exact because either may run. `catch_cause_filter` follows the same
-rule. Hamlet currently has no `catch_clause` combinator; `catch_cause` is the
-primitive that handles a complete `Cause.t`.
+- `[@hamlet.generic]` changes the exported function type: compiled callers pass
+  one final generated evidence argument;
+- at a direct call, the caller's PPX recognizes the retained helper contract
+  and builds that argument from the concrete source row.
 
-An arbitrary named callback, indirect combinator alias, or output row selected
-by user code is not reconstructed from syntax. Add a closed type annotation or
-an explicit `%hamlet.te`/`%hamlet.ts` boundary at that point.
+The extra argument exists only in generated OCaml. It is not part of the
+source syntax users write.
 
-`sandbox_cause` produces a `Cause.t`, not a polymorphic-variant leaf universe,
-so an automatic error marker cannot subtract it. A requirement marker may
-still cross it because the requirement row is unchanged.
+The helper still has one final generated argument even when its body contains
+many markers. With one marker the argument is one evidence slot. With several
+markers it is one tuple containing one slot per marker. Each slot describes the
+input row at that particular point, what the handler claims, and the row after
+forwarding and recovery.
 
-## Where exact input rows come from
+Generic helpers may call earlier generic helpers directly:
 
-The resolver accepts an input only when it can establish all of its leaves. The
-main evidence sources are:
+```ocaml
+let[@hamlet.generic] recover_both source =
+  Hamlet.Combinators.catch
+    (recover_missing source)
+    ~handler:(function
+      | `Unavailable -> Hamlet.Combinators.return ()
+      | [%hamlet.propagate_e.auto] -> .)
+```
 
-- a closed row or an explicit `%hamlet.te` or `%hamlet.ts` occurrence;
-- an imported or independently generalized value whose open tail is local to
-  a fresh use of that value;
-- a verified concrete Hamlet construction, such as `return`, `fail`,
-  `Tag.summon`, or supported direct composition;
-- the certified output of an earlier automatic marker.
+The outer contract incorporates the inner contract. The caller supplies one
+flattened evidence bundle for both helpers; the implementation does not inline
+the inner function body.
 
-The PPX checks resolved compiler identities. A local function merely named
-`fail`, `catch`, or `give` is not treated as Hamlet code.
+A caller may continue automatic propagation after a direct generic call. The
+resolver retains the instantiated output certificate, so a later `catch` or
+`provide` marker starts from the generic helper's exact residual row. For
+example, a helper can remove `Missing`, the following marker can remove
+`Offline`, and only `Timeout` reaches the last handler:
 
-The exact rules and small accepted examples are in
-[Supported patterns](./supported-patterns.md). Matching counterexamples and
-their fixes are in [Refused patterns](./refused-patterns.md).
+```ocaml
+let after_helper =
+  Hamlet.Combinators.catch (recover_missing_to_unit source) ~handler:(function
+    | `Offline -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
+let done_ =
+  Hamlet.Combinators.catch after_helper ~handler:(function
+    | `Timeout -> Hamlet.Combinators.return ())
+```
+
+The direct call needs no special marker or row annotation. The helper
+definition remains the only annotated part.
+
+Version-one generic helpers are deliberately regular:
+
+- a named, non-recursive function;
+- the last user-written positional parameter is the generic `Hamlet.t`;
+- that parameter follows one supported linear effect flow;
+- direct, fully applied helper calls only.
+
+Aliases, partial application, first-class escape, handwritten interfaces that
+hide the generated companion, and opaque callbacks are refused.
+
+## Exact input rows
+
+Automatic propagation can proceed from:
+
+- a closed inferred row;
+- an explicit `%hamlet.te` or `%hamlet.ts` boundary;
+- a concrete Hamlet computation the resolver can trace;
+- an imported or independently generalized value with a row that can be
+  closed without changing types shared with its environment;
+- the proven output of an earlier automatic marker or a direct generic call.
+
+“Independently generalized” means the value owns fresh type variables rather
+than borrowing its effect row from an argument, callback, mutable cell, object,
+or unknown module. A common accepted example is:
+
+```ocaml
+let build () = Hamlet.Combinators.fail `Missing
+```
+
+The call `build ()` can be analyzed on its own. By contrast,
+`let build error = Hamlet.Combinators.fail error` receives its error universe
+from the caller and needs either a generic-helper contract or an explicit row
+boundary.
 
 ## Explicit fallback
 
-Use an explicit universe when the automatic proof boundary is intentionally
-too narrow for the program.
-
-For errors:
+When the row is intentionally abstract, state its universe and use the ordinary
+Hamlet marker:
 
 ```ocaml
-Hamlet.Combinators.catch source
-  ~handler:(fun
-    (error :
-      [%hamlet.te
-        Storage.Errors.read_error,
-        Storage.Errors.write_error]) ->
-    match error with
-    | #Storage.Errors.read_error -> recover_read_error ()
-    | [%hamlet.propagate_e] -> .)
+let source = ([%hamlet.te computation] : (unit, errors, requirements) Hamlet.t)
+
+Hamlet.Combinators.catch source ~handler:(function
+  | `Missing -> recover ()
+  | [%hamlet.propagate_e errors] -> .)
 ```
 
-For requirements:
-
-```ocaml
-Hamlet.Combinators.provide source
-  ~handler:(fun (requirement : [%hamlet.ts Logger, Clock]) ->
-    match requirement with
-    | #Logger.Tag.r as witness ->
-        Logger.Tag.give witness (module Logger_live)
-    | [%hamlet.propagate_s] -> .)
-```
-
-This is also the correct public API for a generic helper whose callers choose
-the error or requirement row.
+The equivalent requirement boundary uses `%hamlet.ts` and
+`[%hamlet.propagate_s ...]`.
 
 ## Cross-module generated errors
 
-Add `[@@rest_cross_cu]` to a `%%hamlet.service` declaration when all of these
-are true:
-
-1. the service declares generated error types;
-2. an automatic error marker consumes those types from another `.ml`
-   compilation unit;
-3. the consumer does not provide an explicit `%hamlet.te` universe.
-
-“Another compilation unit” means another `.ml` file, including a file in the
-same library. It is not limited to third-party packages.
+`[@@rest_cross_cu]` is required only on a generated service declaration whose
+named error types will be automatically propagated in another compilation
+unit:
 
 ```ocaml
 [%%hamlet.service
 module type Storage = sig
   type read_error = [ `Read_error of string ]
-  type write_error = [ `Write_error of string ]
 
   val read :
-    string -> (string, [> read_error | write_error ], 'requirements) Hamlet.t
+    string -> (string, [> read_error ], 'requirements) Hamlet.t
 end
 [@@rest_cross_cu]]
 ```
 
-The attribute exports a checked `Storage.Errors.Cases` catalogue. A downstream
-PPX uses that catalogue to map the imported row back to complete error leaves.
+It generates a checked `Errors.Cases` catalogue so a downstream PPX can turn
+the imported error union back into complete named leaves. It is not required
+for:
 
-| Situation | `[@@rest_cross_cu]` needed? |
-| --- | --- |
-| Declaration and automatic error handler are in the same `.ml` file | No |
-| Automatic error handler is in another `.ml` file | Yes |
-| Consumer uses an explicit `%hamlet.te` universe | No |
-| Only service requirement tags cross the boundary | No |
+- service requirement tags;
+- automatic propagation within the same compilation unit;
+- services whose errors are never automatically propagated downstream.
 
-A third-party consumer cannot add a missing catalogue to someone else's
-compiled service. It must use explicit `%hamlet.te` instead. Requirement tags
-already carry the needed identity, so `propagate_s.auto` does not use this
-attribute.
+The module that declares the service may use ordinary `(pps ppx_hamlet)` if it
+contains no subtractor features. Only targets containing automatic markers or
+generic helper definitions/calls need `staged_pps hamlet-subtractor.ppx`.
 
-## Continue reading
-
-- [Supported patterns](./supported-patterns.md) contains accepted examples.
-- [Refused patterns](./refused-patterns.md) explains every common refusal and
-  its explicit fix.
-- [Proof model](./proof-model.md) defines exact evidence and certificates.
-- [Architecture](./architecture.md) follows a marker through the PPX and
-  resolver.
+Continue with [Supported Patterns](./supported-patterns.md) for accepted forms,
+or [Architecture](./architecture.md) for the implementation flow.

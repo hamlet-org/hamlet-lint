@@ -53,6 +53,9 @@ let compiler_error_message error =
   | Probe_lookup_failed _ -> "typed probe marker correlation failed"
   | Evidence_failed refusal ->
       Hamlet_subtractor_compiler_evidence.refusal_message refusal
+  | Generic_evidence_failed refusal ->
+      "generic helper evidence failed: "
+      ^ Hamlet_subtractor_compiler_evidence.generic_refusal_message refusal
   | Request_context_mismatch { field; expected; actual } ->
       Printf.sprintf "resolver context %s mismatch: expected %s, got %s" field
         expected actual

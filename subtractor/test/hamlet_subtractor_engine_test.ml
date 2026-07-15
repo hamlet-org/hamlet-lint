@@ -1082,6 +1082,104 @@ let test_interleaved_channels_keep_certificates () =
         "provide keeps errors" 1
         (exact_leaf_count (Effect_certificate.errors certificate)))
 
+let count_identifier name expression =
+  let count = ref 0 in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expression =
+        (match expression.pexp_desc with
+        | Pexp_ident { txt = Lident actual; _ } when String.equal name actual ->
+            incr count
+        | _ -> ());
+        super#expression expression
+    end
+  in
+  iterator#expression expression;
+  !count
+
+let test_generic_slot_routes_complete_input () =
+  let missing =
+    error_leaf ~materialization:Leaf.Structural_variant "missing" "Missing"
+  in
+  let timeout =
+    error_leaf ~materialization:Leaf.Structural_variant "timeout" "Timeout"
+  in
+  let slot =
+    Hamlet_subtractor_generic_generator.slot ~loc:Location.none ~catalogues:[]
+      ~input:(proof Kind.Error [ missing; timeout ])
+      ~claimed:[ missing ]
+    |> get_ok "generic slot"
+  in
+  Alcotest.(check int)
+    "one handled callback" 1
+    (count_identifier "handled" slot);
+  Alcotest.(check int)
+    "one forwarding callback" 1
+    (count_identifier "forward" slot);
+  let matches = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expression =
+        (match expression.pexp_desc with
+        | Pexp_match (_, cases) -> matches := List.length cases :: !matches
+        | _ -> ());
+        super#expression expression
+    end
+  in
+  iterator#expression slot;
+  Alcotest.(check (list int)) "two leaves and an invariant guard" [ 3 ] !matches
+
+let test_generic_slot_uses_catalogue_dispatch () =
+  let catalogue, first, second, third = cases_fixture () in
+  let slot =
+    Hamlet_subtractor_generic_generator.slot ~loc:Location.none
+      ~catalogues:[ catalogue ]
+      ~input:(proof Kind.Error [ first; second; third ])
+      ~claimed:[ first; third ]
+    |> get_ok "catalogue generic slot"
+  in
+  let rendered =
+    let structure =
+      [ Ast_builder.Default.pstr_eval ~loc:Location.none slot [] ]
+    in
+    let structure =
+      Selected_ast.to_ocaml Selected_ast.Type.Structure structure
+    in
+    Format.asprintf "%a" Compiler_pprintast.structure structure
+  in
+  Alcotest.(check int)
+    "one catalogue dispatch" 1
+    (count_occurrences rendered "Cases.dispatch");
+  Alcotest.(check int)
+    "two handled catalogue fields" 2
+    (count_identifier "handled" slot);
+  Alcotest.(check int)
+    "one forwarded catalogue field" 1
+    (count_identifier "forward" slot)
+
+let test_generic_bundle_abi () =
+  let first = Ast_builder.Default.eint ~loc:Location.none 1 in
+  let second = Ast_builder.Default.eint ~loc:Location.none 2 in
+  let single =
+    Hamlet_subtractor_generic_generator.bundle ~loc:Location.none [ first ]
+  in
+  let multiple =
+    Hamlet_subtractor_generic_generator.bundle ~loc:Location.none
+      [ first; second ]
+  in
+  begin match single.pexp_desc with
+  | Pexp_constant _ -> ()
+  | _ -> Alcotest.fail "one generic slot must stay bare"
+  end;
+  begin match multiple.pexp_desc with
+  | Pexp_tuple [ _; _ ] -> ()
+  | _ -> Alcotest.fail "multiple generic slots must use one tuple argument"
+  end
+
 let () =
   Alcotest.run "hamlet elaboration engine"
     [
@@ -1116,6 +1214,11 @@ let () =
             test_empty_and_opaque_certificate_materialization;
           Alcotest.test_case "unavailable certificate is rejected" `Quick
             test_exact_unavailable_certificate_is_rejected;
+          Alcotest.test_case "generic slot routes complete input" `Quick
+            test_generic_slot_routes_complete_input;
+          Alcotest.test_case "generic slot uses Cases dispatch" `Quick
+            test_generic_slot_uses_catalogue_dispatch;
+          Alcotest.test_case "generic bundle ABI" `Quick test_generic_bundle_abi;
         ] );
       ( "fixpoint",
         [

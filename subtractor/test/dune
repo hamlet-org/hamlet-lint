@@ -4,6 +4,32 @@
  (modules test_core)
  (libraries alcotest hamlet_subtractor_core))
 
+(test
+ (name generic_contract_test)
+ (package hamlet-subtractor)
+ (modules generic_contract_test)
+ (libraries alcotest hamlet_subtractor_core yojson))
+
+(test
+ (name generic_protocol_test)
+ (package hamlet-subtractor)
+ (modules generic_protocol_test)
+ (libraries alcotest hamlet_subtractor_core yojson))
+
+(test
+ (name generic_resolution_test)
+ (package hamlet-subtractor)
+ (modules generic_resolution_test)
+ (libraries alcotest hamlet_subtractor_core yojson))
+
+(test
+ (name evidence_runtime_test)
+ (package hamlet-subtractor)
+ (modules evidence_runtime_test)
+ (libraries alcotest)
+ (preprocess
+  (pps hamlet_subtractor_ppx)))
+
 (library
  (name subtractor_dep_fixture)
  (package hamlet-subtractor)
@@ -25,6 +51,12 @@
   ppx_hamlet
   ppxlib
   unix))
+
+(test
+ (name hamlet_subtractor_generic_call_test)
+ (package hamlet-subtractor)
+ (modules hamlet_subtractor_generic_call_test)
+ (libraries alcotest hamlet_subtractor_core hamlet_subtractor_private ppxlib))
 
 (test
  (name hamlet_subtractor_engine_test)

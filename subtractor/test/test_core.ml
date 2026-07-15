@@ -274,7 +274,7 @@ let test_grouped_leaf_partial_refusal () =
       Alcotest.(check int) "one matched group member" 1 (List.length matched)
   | _ -> Alcotest.fail "expected grouped leaf refusal"
 
-let test_linter_observation_stays_incomplete () =
+let test_partial_observation_stays_incomplete () =
   let declared = Observation.of_tags ~kind:Kind.Error [ "A"; "B"; "B" ] in
   let upstream = Observation.of_tags ~kind:Kind.Error [ "A" ] in
   let candidate =
@@ -739,7 +739,7 @@ let test_protocol_version_mismatch () =
   match
     Protocol.decode {|{"protocol":"hamlet-subtractor-resolution","version":99}|}
   with
-  | Error (Protocol.Version_mismatch { expected = 4; actual = 99 }) -> ()
+  | Error (Protocol.Version_mismatch { expected = 5; actual = 99 }) -> ()
   | _ -> Alcotest.fail "expected protocol version mismatch"
 
 let test_protocol_malformed_payload () =
@@ -749,7 +749,7 @@ let test_protocol_malformed_payload () =
 
 let test_tag_only_payload_is_not_exact_proof () =
   let payload =
-    {|{"protocol":"hamlet-subtractor-resolution","version":4,"request_id":"r","context_fingerprint":"ctx","ast_digest":"ast","results":[{"marker":{"id":"m","kind":"error","span":{"file":"x.ml","start_offset":0,"end_offset":1,"start_line":1,"start_column":0,"end_line":1,"end_column":1}},"outcome":{"kind":"resolved","calculation":{"input":{"kind":"error","origin":{"kind":"closed_row"},"leaves":[{"kind":"error","members":["A"],"materialization":{"kind":"direct"}}]},"arms":[],"recovery":[]}},"certificate":null}],"catalogues":[]}|}
+    {|{"protocol":"hamlet-subtractor-resolution","version":5,"request_id":"r","context_fingerprint":"ctx","ast_digest":"ast","results":[{"marker":{"id":"m","kind":"error","span":{"file":"x.ml","start_offset":0,"end_offset":1,"start_line":1,"start_column":0,"end_line":1,"end_column":1}},"outcome":{"kind":"resolved","calculation":{"input":{"kind":"error","origin":{"kind":"closed_row"},"leaves":[{"kind":"error","members":["A"],"materialization":{"kind":"direct"}}]},"arms":[],"recovery":[]}},"certificate":null}],"catalogues":[]}|}
   in
   match Protocol.decode payload with
   | Error (Protocol.Malformed _) -> ()
@@ -835,7 +835,7 @@ let test_request_version_mismatch () =
     Protocol.decode_request
       {|{"protocol":"hamlet-subtractor-request","version":42}|}
   with
-  | Error (Protocol.Version_mismatch { expected = 4; actual = 42 }) -> ()
+  | Error (Protocol.Version_mismatch { expected = 5; actual = 42 }) -> ()
   | _ -> Alcotest.fail "expected request version mismatch"
 
 let test_request_malformed () =
@@ -933,8 +933,8 @@ let () =
             test_requirement_forwarding;
           Alcotest.test_case "grouped partial refusal" `Quick
             test_grouped_leaf_partial_refusal;
-          Alcotest.test_case "linter observation is incomplete" `Quick
-            test_linter_observation_stays_incomplete;
+          Alcotest.test_case "partial observation is incomplete" `Quick
+            test_partial_observation_stays_incomplete;
           Alcotest.test_case "catch recovery requirements" `Quick
             test_catch_certificate_unions_recovery_requirements;
           Alcotest.test_case "chain unions both channels" `Quick

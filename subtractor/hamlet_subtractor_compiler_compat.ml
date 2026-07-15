@@ -4,6 +4,8 @@ type refusal =
   | Typing_failed of typing_failure
   | Probe_lookup_failed of Hamlet_subtractor_probe.lookup_error list
   | Evidence_failed of Hamlet_subtractor_compiler_evidence.refusal
+  | Generic_evidence_failed of
+      Hamlet_subtractor_compiler_evidence.generic_refusal
   | Request_context_mismatch of {
       field : string;
       expected : string;
@@ -58,6 +60,208 @@ let restore_ppx_context ~tool_name structure =
   |> Ast_mapper.add_ppx_context_str ~tool_name
   |> Ast_mapper.drop_ppx_context_str ~restore:true
 
+let attribute_string name attributes =
+  attributes
+  |> List.filter_map (fun attribute ->
+      if String.equal attribute.Parsetree.attr_name.txt name then
+        match attribute.attr_payload with
+        | PStr
+            [
+              {
+                pstr_desc =
+                  Pstr_eval
+                    ( {
+                        pexp_desc =
+                          Pexp_constant
+                            { pconst_desc = Pconst_string (value, _, _); _ };
+                        _;
+                      },
+                      _ );
+                _;
+              };
+            ] ->
+            Some value
+        | _ -> None
+      else None)
+  |> function
+  | [ value ] -> Some value
+  | [] | _ :: _ :: _ -> None
+
+let string_attribute ~loc ~name value =
+  Ast_helper.Attr.mk ~loc { txt = name; loc }
+    (PStr
+       [
+         Ast_helper.Str.eval ~loc
+           (Ast_helper.Exp.constant ~loc (Ast_helper.Const.string ~loc value));
+       ])
+
+let add_expression_attribute ~name ~value (expression : Parsetree.expression) =
+  {
+    expression with
+    pexp_attributes =
+      string_attribute ~loc:expression.pexp_loc ~name value
+      :: expression.pexp_attributes;
+  }
+
+let provisional_source_parameters structure =
+  let parameters = Hashtbl.create 16 in
+  let default = Ast_iterator.default_iterator in
+  let iterator =
+    {
+      default with
+      module_binding =
+        (fun self binding ->
+          List.iter
+            (fun attribute ->
+              match
+                attribute_string
+                  Hamlet_subtractor_generic_contract.provisional_attribute_name
+                  [ attribute ]
+              with
+              | None -> ()
+              | Some payload -> (
+                  match
+                    Hamlet_subtractor_generic_contract.decode_provisional
+                      payload
+                  with
+                  | Ok contract ->
+                      Hashtbl.replace parameters contract.helper
+                        contract.source_parameter
+                  | Error _ -> ()))
+            binding.pmb_attributes;
+          default.module_binding self binding);
+    }
+  in
+  iterator.structure iterator structure;
+  parameters
+
+let retained_source_parameter env ~loc longident =
+  let module Contract = Hamlet_subtractor_generic_contract in
+  let module Core = Hamlet_subtractor_core in
+  try
+    let path, _ = Env.lookup_value ~use:false ~loc longident env in
+    let helper = Path.last path in
+    let companion = Contract.companion_name helper in
+    let declaration =
+      match path with
+      | Path.Pdot (parent, _) ->
+          Env.find_module (Path.Pdot (parent, companion)) env
+      | Path.Pident _ | Path.Papply _ | Path.Pextra_ty _ -> raise Not_found
+    in
+    match
+      attribute_string Contract.retained_attribute_name
+        declaration.md_attributes
+    with
+    | None -> None
+    | Some payload -> (
+        match Core.Generic_resolution.decode_definition payload with
+        | Ok contract -> Some (Core.Generic_contract.effect_parameter contract)
+        | Error _ -> None)
+  with _ -> None
+
+let bottom_expression loc =
+  Ast_helper.Exp.assert_ ~loc
+    (Ast_helper.Exp.construct ~loc { txt = Longident.Lident "false"; loc } None)
+
+let prepare_implicit_generic_calls env structure =
+  let local = provisional_source_parameters structure in
+  let source_parameter callee =
+    match callee.Parsetree.pexp_desc with
+    | Pexp_ident { txt = Longident.Lident helper; _ } ->
+        Hashtbl.find_opt local helper
+    | Pexp_ident ({ txt = Longident.Ldot _; loc } as identifier) ->
+        retained_source_parameter env ~loc identifier.txt
+    | _ -> None
+  in
+  let mapper =
+    let default = Ast_mapper.default_mapper in
+    {
+      default with
+      expr =
+        (fun self expression ->
+          let expression = default.expr self expression in
+          let call_link =
+            match
+              attribute_string Hamlet_subtractor_generic_call.call_attribute
+                expression.pexp_attributes
+            with
+            | Some id ->
+                Some
+                  ( id,
+                    Hamlet_subtractor_generic_call.source_attribute,
+                    Hamlet_subtractor_generic_call.specialized_attribute )
+            | None -> (
+                match
+                  attribute_string
+                    Hamlet_subtractor_generic_definition.nested_call_attribute
+                    expression.pexp_attributes
+                with
+                | Some id ->
+                    Some
+                      ( id,
+                        Hamlet_subtractor_generic_definition
+                        .nested_source_attribute,
+                        Hamlet_subtractor_generic_definition
+                        .nested_specialized_attribute )
+                | None -> None)
+          in
+          match (call_link, expression.pexp_desc) with
+          | ( Some (id, source_attribute, specialized_attribute),
+              Pexp_apply (callee, arguments) ) -> (
+              match source_parameter callee with
+              | None -> expression
+              | Some _source_parameter ->
+                  let positional_count =
+                    List.fold_left
+                      (fun count (label, _) ->
+                        if label = Asttypes.Nolabel then count + 1 else count)
+                      0 arguments
+                  in
+                  let position = ref 0 in
+                  let source_found = ref false in
+                  let arguments =
+                    List.map
+                      (fun (label, (argument : Parsetree.expression)) ->
+                        match label with
+                        | Asttypes.Nolabel ->
+                            let current = !position in
+                            incr position;
+                            if current = positional_count - 1 then (
+                              source_found := true;
+                              if
+                                Option.is_some
+                                  (attribute_string source_attribute
+                                     argument.pexp_attributes)
+                              then (label, argument)
+                              else
+                                ( label,
+                                  add_expression_attribute
+                                    ~name:source_attribute ~value:id argument ))
+                            else (label, argument)
+                        | Asttypes.Labelled _ | Asttypes.Optional _ ->
+                            (label, argument))
+                      arguments
+                  in
+                  if not !source_found then expression
+                  else
+                    {
+                      expression with
+                      pexp_desc =
+                        Pexp_apply
+                          ( callee,
+                            arguments
+                            @ [
+                                ( Asttypes.Nolabel,
+                                  bottom_expression expression.pexp_loc );
+                              ] );
+                    }
+                    |> add_expression_attribute ~name:specialized_attribute
+                         ~value:id)
+          | None, _ | Some _, _ -> expression);
+    }
+  in
+  mapper.structure mapper structure
+
 let compilation_unit ~unit_name ~source_file =
   Unit_info.make ~check_modname:false ~source_file Unit_info.Impl unit_name
 
@@ -103,6 +307,7 @@ let type_in_fresh_store
     (fun () ->
       Warnings.without_warnings @@ fun () ->
       let initial_env = Compmisc.initial_env () in
+      let structure = prepare_implicit_generic_calls initial_env structure in
       let typed, _, _, _, _ = Typemod.type_structure initial_env structure in
       Typecore.force_delayed_checks ();
       normalize typed)
@@ -218,7 +423,43 @@ let request_context ~source_file structure =
 let synthetic_unit context_digest =
   "Hamlet_subtractor_probe_" ^ String.sub context_digest 0 16
 
-let resolve_prepared ~tool_name ~source_file prepared =
+type elaboration = {
+  engine : Hamlet_subtractor_engine.t;
+  generic_definitions :
+    Hamlet_subtractor_compiler_evidence.generic_definition list;
+  generic_calls : Hamlet_subtractor_compiler_evidence.generic_call list;
+}
+
+let elaborate_typedtree ~context_digest typed =
+  match
+    Hamlet_subtractor_compiler_evidence.generic_definitions_typedtree
+      ~context_digest typed
+  with
+  | Error refusal -> Error (Generic_evidence_failed refusal)
+  | Ok generic_definitions -> (
+      match
+        Hamlet_subtractor_compiler_evidence.generic_calls_typedtree
+          ~context_digest ~definitions:generic_definitions typed
+      with
+      | Error refusal -> Error (Generic_evidence_failed refusal)
+      | Ok generic_calls -> (
+          let generic_outputs =
+            generic_calls
+            |> List.concat_map (function
+              | Hamlet_subtractor_compiler_evidence.Ignored_generic_call _ -> []
+              | Hamlet_subtractor_compiler_evidence.Resolved_generic_call call
+                ->
+                  call.attachment_id :: call.marker_links
+                  |> List.map (fun id -> (id, call.output, call.catalogues)))
+          in
+          match
+            Hamlet_subtractor_compiler_evidence.elaborate_typedtree
+              ~generic_outputs ~context_digest typed
+          with
+          | Error refusal -> Error (Evidence_failed refusal)
+          | Ok engine -> Ok { engine; generic_definitions; generic_calls }))
+
+let elaborate_prepared ~tool_name ~source_file prepared =
   if String.equal tool_name "ocamldep" then Error Dependency_scan
   else
     try
@@ -237,10 +478,12 @@ let resolve_prepared ~tool_name ~source_file prepared =
       let context_digest = context.context_fingerprint in
       type_in_fresh_store ~unit_name:(synthetic_unit context_digest)
         ~source_file ~restored_paths structure ~normalize:(fun typed ->
-          Hamlet_subtractor_compiler_evidence.elaborate_typedtree
-            ~context_digest typed
-          |> Result.map_error (fun refusal -> Evidence_failed refusal))
+          elaborate_typedtree ~context_digest typed)
     with exn -> Error (Typing_failed (typing_failure exn))
+
+let resolve_prepared ~tool_name ~source_file prepared =
+  elaborate_prepared ~tool_name ~source_file prepared
+  |> Result.map (fun elaboration -> elaboration.engine)
 let request_context_mismatch ~field ~expected ~actual =
   Error (Request_context_mismatch { field; expected; actual })
 
@@ -440,26 +683,118 @@ let marker_results engine =
   in
   loop [] (Hamlet_subtractor_engine.outcomes engine)
 
-let response_for_engine request engine =
+let generic_attachments definitions calls =
+  let rec definitions_loop accumulated = function
+    | [] -> Ok (List.rev accumulated)
+    | (definition : Hamlet_subtractor_compiler_evidence.generic_definition)
+      :: rest -> (
+        match
+          Hamlet_subtractor_core.Generic_resolution.encode_definition
+            definition.contract
+        with
+        | Error _ ->
+            Error
+              (Protocol_construction_failed
+                 (Protocol.Empty_generic_attachment_payload
+                    definition.attachment_id))
+        | Ok payload -> (
+            match
+              Protocol.generic_attachment ~id:definition.attachment_id
+                ~kind:Protocol.Definition ~payload
+            with
+            | Error error -> Error (Protocol_construction_failed error)
+            | Ok attachment -> definitions_loop (attachment :: accumulated) rest
+            ))
+  in
+  let rec calls_loop accumulated = function
+    | [] -> Ok (List.rev accumulated)
+    | Hamlet_subtractor_compiler_evidence.Ignored_generic_call { attachment_id }
+      :: rest -> (
+        match
+          Hamlet_subtractor_core.Generic_resolution.encode_ignored_call ()
+        with
+        | Error _ ->
+            Error
+              (Protocol_construction_failed
+                 (Protocol.Empty_generic_attachment_payload attachment_id))
+        | Ok payload -> (
+            match
+              Protocol.generic_attachment ~id:attachment_id ~kind:Protocol.Call
+                ~payload
+            with
+            | Error error -> Error (Protocol_construction_failed error)
+            | Ok attachment -> calls_loop (attachment :: accumulated) rest))
+    | Hamlet_subtractor_compiler_evidence.Resolved_generic_call call :: rest
+      -> (
+        match
+          Hamlet_subtractor_core.Generic_resolution.encode_call
+            ~contract:call.contract ~input:call.input
+        with
+        | Error _ ->
+            Error
+              (Protocol_construction_failed
+                 (Protocol.Empty_generic_attachment_payload call.attachment_id))
+        | Ok payload -> (
+            match
+              Protocol.generic_attachment ~id:call.attachment_id
+                ~kind:Protocol.Call ~payload
+            with
+            | Error error -> Error (Protocol_construction_failed error)
+            | Ok attachment -> calls_loop (attachment :: accumulated) rest))
+  in
+  match definitions_loop [] definitions with
+  | Error _ as error -> error
+  | Ok definition_attachments ->
+      calls_loop [] calls
+      |> Result.map (fun call_attachments ->
+          definition_attachments @ call_attachments)
+
+let response_for_elaboration request elaboration =
+  let engine = elaboration.engine in
   match marker_results engine with
   | Error _ as error -> error
   | Ok results -> (
+      let engine_catalogues = Hamlet_subtractor_engine.catalogues engine in
+      let definition_catalogues =
+        elaboration.generic_definitions
+        |> List.concat_map
+             (fun
+               (definition :
+                 Hamlet_subtractor_compiler_evidence.generic_definition)
+             -> definition.catalogues)
+      in
+      let call_catalogues =
+        elaboration.generic_calls
+        |> List.concat_map (function
+          | Hamlet_subtractor_compiler_evidence.Ignored_generic_call _ -> []
+          | Hamlet_subtractor_compiler_evidence.Resolved_generic_call call ->
+              call.catalogues)
+      in
       let catalogues =
-        Hamlet_subtractor_engine.catalogues engine
+        engine_catalogues @ definition_catalogues @ call_catalogues
+        |> List.sort_uniq Hamlet_subtractor_catalogue.compare
         |> List.map Hamlet_subtractor_catalogue.to_protocol
       in
-      let context_fingerprint = Protocol.request_context_fingerprint request in
-      let descriptor = Protocol.probe_ast request in
       match
-        Protocol.response ~catalogues
-          ~request_id:(Protocol.request_id request)
-          ~context_fingerprint ~ast_digest:descriptor.digest results
+        generic_attachments elaboration.generic_definitions
+          elaboration.generic_calls
       with
-      | Error error -> Error (Protocol_construction_failed error)
-      | Ok response -> (
-          match Protocol.validate_response ~request ~response with
-          | Ok () -> Ok response
-          | Error error -> Error (Protocol_correlation_failed error)))
+      | Error _ as error -> error
+      | Ok generic_attachments -> (
+          let context_fingerprint =
+            Protocol.request_context_fingerprint request
+          in
+          let descriptor = Protocol.probe_ast request in
+          match
+            Protocol.response ~catalogues ~generic_attachments
+              ~request_id:(Protocol.request_id request)
+              ~context_fingerprint ~ast_digest:descriptor.digest results
+          with
+          | Error error -> Error (Protocol_construction_failed error)
+          | Ok response -> (
+              match Protocol.validate_response ~request ~response with
+              | Ok () -> Ok response
+              | Error error -> Error (Protocol_correlation_failed error))))
 
 let resolve_request request =
   match validate_request_tool request with
@@ -489,13 +824,12 @@ let resolve_request request =
                     type_in_fresh_store ~unit_name
                       ~source_file:(Protocol.source_file request)
                       ~restored_paths:paths structure ~normalize:(fun typed ->
-                        Hamlet_subtractor_compiler_evidence.elaborate_typedtree
+                        elaborate_typedtree
                           ~context_digest:
                             (Protocol.request_context_fingerprint request)
-                          typed
-                        |> Result.map_error (fun refusal ->
-                            Evidence_failed refusal))
+                          typed)
                     |> function
                     | Error _ as error -> error
-                    | Ok engine -> response_for_engine request engine
+                    | Ok elaboration ->
+                        response_for_elaboration request elaboration
                   with exn -> Error (Typing_failed (typing_failure exn))))))
