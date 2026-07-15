@@ -5,6 +5,7 @@
  (modules
   hamlet_subtractor_catalogue
   hamlet_subtractor_engine
+  hamlet_subtractor_generic_generator
   hamlet_subtractor_generator
   hamlet_subtractor_replace
   hamlet_subtractor_resolver_protocol)
