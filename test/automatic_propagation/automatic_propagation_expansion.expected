@@ -75,6 +75,34 @@ match __input with
 | #Local_io.Errors.local_denied as error -> Hamlet.Combinators.fail error
 | _ -> .
 
+case_error_chain_composition match-1:
+match __input with
+| #Chain_errors.old_a -> ((Hamlet.Combinators.return "old-a")[@merlin.loc ])
+| `Chain_old_b as error -> Hamlet.Combinators.fail error
+| `Chain_old_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_chain_composition match-2:
+match __input with
+| #Chain_errors.old_b ->
+    (((Hamlet.Combinators.fail
+         (`Chain_introduced_two : Chain_errors.introduced_two) :> (string,
+                                                                    Chain_errors.after_second,
+                                                                    Hamlet.never)
+                                                                    Hamlet.t))
+    [@merlin.loc ])
+| `Chain_introduced_one as error -> Hamlet.Combinators.fail error
+| `Chain_old_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_chain_composition match-3:
+match __input with
+| #Chain_errors.introduced_one -> ((Hamlet.Combinators.return "introduced")
+    [@merlin.loc ])
+| `Chain_introduced_two as error -> Hamlet.Combinators.fail error
+| `Chain_old_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
 case_requirement_local_direct match-1:
 match __input with
 | #Local_logger.Tag.r as witness ->
@@ -127,6 +155,31 @@ case_requirement_dependent match-2:
 match __input with
 | #Local_clock.Tag.r as witness ->
     ((Local_clock.Tag.give witness (module Local_clock_live))[@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_chain_composition match-1:
+match __input with
+| #Local_logger.Tag.r as witness ->
+    ((Local_logger.Tag.give witness (module Local_logger_live))
+    [@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Local_clock.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_chain_composition match-2:
+match __input with
+| #Local_clock.Tag.r as witness ->
+    ((Local_clock.Tag.give witness (module Local_clock_live))[@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Local_metrics.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_requirement_chain_composition match-3:
+match __input with
+| #Local_metrics.Tag.r as witness ->
+    ((Local_metrics.Tag.give witness (module Local_metrics_live))
+    [@merlin.loc ])
 | #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
 | _ -> .
 
