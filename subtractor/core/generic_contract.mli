@@ -123,6 +123,11 @@ type slot_error =
 val slot_id : string -> (slot_id, slot_error) result
 val slot_id_to_string : slot_id -> string
 
+val namespace_slot_id :
+  namespace:string -> slot_id -> (slot_id, slot_error) result
+
+val slot_belongs_to_namespace : namespace:string -> slot_id -> bool
+
 val slot :
   id:slot_id ->
   ordinal:int ->

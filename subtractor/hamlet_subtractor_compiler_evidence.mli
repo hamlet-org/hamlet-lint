@@ -81,3 +81,19 @@ val generic_calls_typedtree :
   definitions:generic_definition list ->
   Typedtree.structure ->
   (generic_call list, generic_refusal) result
+
+(** Follow a typed generic source from its effect parameter through verified
+    Hamlet primitives. Earlier generic marker outputs are supplied by their
+    stable owner IDs. The result contains no compiler-owned values. *)
+val symbolic_source_certificate :
+  context_digest:string ->
+  marker_id:string ->
+  kind:Core.Kind.t ->
+  input_uid:Shape.Uid.t ->
+  dependencies:(string * Core.Generic_contract.symbolic_certificate) list ->
+  Typedtree.structure ->
+  Typedtree.expression ->
+  ( Core.Generic_contract.symbolic_certificate
+    * Hamlet_subtractor_catalogue.t list,
+    refusal_reason )
+  result

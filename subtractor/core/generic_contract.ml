@@ -376,6 +376,16 @@ let slot_id value =
 
 let slot_id_to_string id = id
 
+let namespace_slot_id ~namespace id =
+  match slot_id namespace with
+  | Error _ as error -> error
+  | Ok namespace -> slot_id (namespace ^ "/" ^ id)
+
+let slot_belongs_to_namespace ~namespace id =
+  let prefix = namespace ^ "/" in
+  let prefix_length = String.length prefix in
+  String.length id > prefix_length && String.sub id 0 prefix_length = prefix
+
 let claimed_contains claimed leaf =
   List.exists (fun candidate -> Leaf.equal candidate leaf) claimed
 

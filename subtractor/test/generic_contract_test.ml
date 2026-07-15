@@ -457,6 +457,27 @@ let test_nominal_partition_does_not_align_by_shape () =
         (Identity.to_string identity)
   | _ -> Alcotest.fail "nominal leaves aligned by structural shape"
 
+let test_nested_slot_namespaces () =
+  let inner = slot_id "errors-0" in
+  let first =
+    Generic_contract.namespace_slot_id ~namespace:"nested:abc:0" inner
+    |> get_ok "first namespace"
+  in
+  let second =
+    Generic_contract.namespace_slot_id ~namespace:"nested:def:1" first
+    |> get_ok "recursive namespace"
+  in
+  Alcotest.(check string)
+    "namespace uses a stable path separator"
+    "nested:def:1/nested:abc:0/errors-0"
+    (Generic_contract.slot_id_to_string second);
+  Alcotest.(check bool)
+    "direct namespace is recognized" true
+    (Generic_contract.slot_belongs_to_namespace ~namespace:"nested:def:1" second);
+  Alcotest.(check bool)
+    "unrelated namespace is rejected" false
+    (Generic_contract.slot_belongs_to_namespace ~namespace:"nested:abc:0" second)
+
 let () =
   Alcotest.run "hamlet-subtractor-generic-contract"
     [
@@ -476,5 +497,7 @@ let () =
             `Quick test_structural_partition_refines_grouped_caller_leaf;
           Alcotest.test_case "nominal partition keeps declaration identity"
             `Quick test_nominal_partition_does_not_align_by_shape;
+          Alcotest.test_case "nested slot namespaces are stable" `Quick
+            test_nested_slot_namespaces;
         ] );
     ]
