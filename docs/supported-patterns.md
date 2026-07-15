@@ -289,6 +289,12 @@ combines the source and finalizer effects. `scoped` removes the `Scope`
 requirement, while `scoped_with` subtracts whichever requirement arms its
 inline handler supplies.
 
+The `Scope` rule is explicit because these combinators return an open
+requirement row: “at least `Scope`, and possibly more.” An open row cannot be
+enumerated as a finite proof. The resolver therefore verifies the real
+generated `Hamlet.Scope.Tag.r`, adds that one exact leaf, and separately keeps
+the exact requirements of the cleanup, acquire, and release computations.
+
 `or_die` and `sandbox` clear the typed-error channel; `thaw` widens a proven
 empty error channel. `sandbox_cause` is deliberately more limited because it
 changes each arbitrary error type to `Cause.t`; see the refused guide.
