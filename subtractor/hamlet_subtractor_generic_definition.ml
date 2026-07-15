@@ -580,10 +580,17 @@ let row_preserving_combinator = function
   | "catch" | "provide" | "chain" | "map" | "map_fail" | "tap" | "tap_fail"
   | "tap_defect" | "tap_cause" | "catch_defect" | "catch_cause" | "catch_filter"
   | "catch_cause_filter" | "or_die" | "thaw" | "sandbox" | "scoped"
-  | "sandbox_cause" | "scoped_with" | "suspend" | "ensuring" | "add_finalizer"
+  | "scoped_with" | "suspend" | "ensuring" | "add_finalizer"
   | "add_finalizer_exit" | "acquire_release" | "acquire_use_release" | "both" ->
       true
   | _ -> false
+
+let callback_effects expression =
+  match expression.pexp_desc with
+  | Pexp_function (_, _, Pfunction_body body) -> [ body ]
+  | Pexp_function (_, _, Pfunction_cases (cases, _, _)) ->
+      List.map (fun case -> case.pc_rhs) cases
+  | _ -> []
 
 let effect_arguments name arguments =
   let positional =
@@ -593,6 +600,7 @@ let effect_arguments name arguments =
   in
   match (name, positional) with
   | "both", values -> values
+  | "add_finalizer_exit", callback :: _ -> callback_effects callback
   | _, first :: _ -> [ first ]
   | _, [] -> []
 

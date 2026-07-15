@@ -2363,6 +2363,46 @@ let chain_source_plans = function
   | [ plan ] -> plan
   | plans -> Chained_source plans
 
+let scope_requirement_source ~context_digest application =
+  let scope_name =
+    Longident.unflatten [ "Hamlet"; "Scope"; "Tag"; "r" ] |> Option.get
+  in
+  let _, declaration =
+    try
+      Env.lookup_type ~use:false ~loc:application.exp_loc scope_name
+        application.exp_env
+    with _ ->
+      refuse (Core_validation_failed "cannot resolve Hamlet.Scope.Tag.r")
+  in
+  let row =
+    match declaration.Types.type_manifest with
+    | Some manifest when declaration.type_private = Asttypes.Public ->
+        expand_exact_row application.exp_env manifest
+    | Some _ | None ->
+        refuse (Core_validation_failed "Hamlet.Scope.Tag.r is not transparent")
+  in
+  let scope =
+    match requirement_leaves_of_row ~context_digest application.exp_env row with
+    | [ scope ]
+      when List.exists
+             (fun member -> String.equal (Atom.label member) "Scope")
+             (Leaf.members scope) ->
+        scope
+    | [] | [ _ ] | _ :: _ :: _ ->
+        refuse
+          (Core_validation_failed
+             "scope combinator output does not expose exactly one Scope tag")
+  in
+  let requirements =
+    proof_of_leaves ~kind:Kind.Requirement
+      ~origin:(Proof.Composition { operation = Proof.Summon; inputs = [] })
+      [ scope ]
+  in
+  Known_source
+    (exact_certificate
+       ~errors:(empty_proof Kind.Error Proof.Return)
+       ~requirements)
+
 let rec source_plan_for_expression
     ~context_digest
     ~nodes
@@ -2685,12 +2725,12 @@ let rec source_plan_for_expression
                           source_plan_for_expression ~context_digest ~nodes
                             ~marker_id ~kind ~generic_input ~seen finalizer
                       in
-                      let output, output_catalogues =
-                        output_channel Kind.Requirement application
-                      in
-                      ( Requirements_from_output
-                          { source = finalizer_plan; output },
-                        finalizer_catalogues @ output_catalogues )
+                      ( chain_source_plans
+                          [
+                            finalizer_plan;
+                            scope_requirement_source ~context_digest application;
+                          ],
+                        finalizer_catalogues )
                   | [] -> refuse Higher_order_flow
                   end
               | Some "acquire_release" ->
@@ -2707,17 +2747,13 @@ let rec source_plan_for_expression
                         source_plan_for_function_result ~context_digest ~nodes
                           ~marker_id ~kind ~generic_input ~seen release
                       in
-                      let output, output_catalogues =
-                        output_channel Kind.Requirement application
-                      in
-                      ( Requirements_from_output
-                          {
-                            source =
-                              chain_source_plans [ acquire_plan; release_plan ];
-                            output;
-                          },
-                        acquire_catalogues @ release_catalogues
-                        @ output_catalogues )
+                      ( chain_source_plans
+                          [
+                            acquire_plan;
+                            release_plan;
+                            scope_requirement_source ~context_digest application;
+                          ],
+                        acquire_catalogues @ release_catalogues )
                   | _ -> refuse Higher_order_flow
                   end
               | Some "acquire_use_release" ->

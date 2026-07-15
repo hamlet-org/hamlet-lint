@@ -1097,6 +1097,45 @@ let helper source =
     |> symbolic_exact_leaves
     |> leaf_labels)
 
+let test_symbolic_scope_registration_families () =
+  let input = symbolic_identity Hamlet_subtractor_core.Kind.Error "Input" in
+  let logger =
+    symbolic_identity Hamlet_subtractor_core.Kind.Requirement "Logger"
+  in
+  let check name source errors =
+    let output =
+      resolve_symbolic_helper source |> fun symbolic ->
+      evaluate_symbolic symbolic errors [ logger ]
+    in
+    Alcotest.(check (list string))
+      (name ^ " preserves errors")
+      (leaf_labels errors)
+      (output
+      |> Hamlet_subtractor_core.Effect_certificate.errors
+      |> symbolic_exact_leaves
+      |> leaf_labels);
+    Alcotest.(check (list string))
+      (name ^ " preserves requirements and adds Scope")
+      [ "Logger"; "Scope" ]
+      (output
+      |> Hamlet_subtractor_core.Effect_certificate.requirements
+      |> symbolic_exact_leaves
+      |> leaf_labels)
+  in
+  check "add_finalizer"
+    "let helper source = Hamlet.Combinators.add_finalizer source" [];
+  check "add_finalizer_exit"
+    "let helper source =\n\
+     Hamlet.Combinators.add_finalizer_exit (fun _ -> source)"
+    [];
+  check "acquire_release"
+    {|
+let helper source =
+  Hamlet.Combinators.acquire_release source
+    ~release:(fun _ _ -> Hamlet.Combinators.success ())
+|}
+    [ input ]
+
 let test_symbolic_sandbox () =
   let input = symbolic_identity Hamlet_subtractor_core.Kind.Error "Input" in
   let logger =
@@ -2019,6 +2058,8 @@ let () =
             test_symbolic_cleanup_and_resource_families;
           Alcotest.test_case "symbolic scope families" `Quick
             test_symbolic_scope_families;
+          Alcotest.test_case "symbolic scope registration families" `Quick
+            test_symbolic_scope_registration_families;
           Alcotest.test_case "symbolic sandbox clears typed errors" `Quick
             test_symbolic_sandbox;
           Alcotest.test_case "symbolic prior owners compose" `Quick

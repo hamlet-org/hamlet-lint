@@ -510,6 +510,12 @@ let test_generic_supported_primitive_flows () =
          | #Hamlet.Scope.Tag.r as witness ->\n\
          Hamlet.Scope.Tag.give witness scope\n\
          | requirement -> Hamlet.Dispatch.need requirement)" );
+      ("add_finalizer", "Hamlet.Combinators.add_finalizer source");
+      ( "add_finalizer_exit",
+        "Hamlet.Combinators.add_finalizer_exit (fun _ -> source)" );
+      ( "acquire_release",
+        "Hamlet.Combinators.acquire_release source\n\
+         ~release:(fun _ _ -> Hamlet.Combinators.success ())" );
       ("sandbox", "Hamlet.Combinators.sandbox source");
     ]
   in
@@ -765,12 +771,6 @@ let test_generic_refusals () =
         | _ -> false))
     [
       ("sandbox_cause carrier", "Hamlet.Combinators.sandbox_cause source");
-      ("add_finalizer carrier", "Hamlet.Combinators.add_finalizer source");
-      ( "add_finalizer_exit carrier",
-        "Hamlet.Combinators.add_finalizer_exit (fun _ -> source)" );
-      ( "acquire_release carrier",
-        "Hamlet.Combinators.acquire_release source\n\
-         ~release:(fun _ _ -> Hamlet.Combinators.success ())" );
       ("Scope.use carrier", "Hamlet.Scope.use scope source");
       ( "Scope.use_with carrier",
         "Hamlet.Scope.use_with scope source\n\
