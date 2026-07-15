@@ -70,11 +70,11 @@ temporary probe against the same imports as the final compiler. The ordinary
 `pps` form is rejected for automatic markers instead of producing a weaker
 result.
 
-The active editor buffer is different from a dependency: Merlin passes the
-PPX the unsaved AST of the file currently being edited, so changes in that file
-are immediate. Another module is visible through its last built `.cmi`; save or
-rebuild that dependency before expecting its new API to affect the current
-file.
+Suppose you are editing `A.ml` and it imports `B`. Merlin sends the PPX the
+current in-memory contents of `A.ml`, including unsaved changes. The PPX does
+not receive the source of `B`; it receives `B.cmi`, the interface produced the
+last time Dune compiled `B`. If you change an exported type or value in `B`,
+Dune must rebuild `B.cmi` before analysis of `A.ml` can see that change.
 
 Do not enable Merlin's optional external PPX result cache. Consider a consumer
 whose source has not changed while `Storage.cmi` gains a new error. The cache

@@ -159,9 +159,11 @@ the current in-memory AST through the same bundle used by the build. Merlin
 then types only the final expansion returned by the PPX, so hover shows the
 residual row immediately.
 
-Imported modules are different: the current module sees them through their
-last built `.cmi` files. An unsaved change in another module becomes visible
-after Dune rebuilds that module's interface.
+Suppose the active buffer is `A.ml` and it imports `B`. Merlin sends the PPX
+the current in-memory contents of `A.ml`, but information about `B` comes from
+`B.cmi`, the interface produced the last time Dune compiled `B`. A change to an
+exported type or value in `B` becomes visible while analysing `A.ml` only after
+Dune rebuilds `B.cmi`.
 
 Merlin's optional external PPX result cache is unsupported. Its key does not
 include the dependency interfaces that influenced the proof, so it could reuse
