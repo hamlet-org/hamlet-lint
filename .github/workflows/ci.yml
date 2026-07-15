@@ -236,16 +236,25 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Isolate Hamlet source from Dune
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination=$(mktemp -d "$RUNNER_TEMP/hamlet-source.XXXXXX")
+          source_dir="$destination/source"
+          mv "$GITHUB_WORKSPACE/hamlet-source" "$source_dir"
+          echo "HAMLET_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+
       - run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE/hamlet-source"
+          git config --global --add safe.directory "$HAMLET_SOURCE_DIR"
 
       - name: Ensure exact Hamlet source dependencies
         shell: bash
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
-          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action hamlet "$HAMLET_SOURCE_DIR"
+          opam pin add -y --no-action ppx_hamlet "$HAMLET_SOURCE_DIR"
           opam install -y hamlet ppx_hamlet
           opam install -y --ignore-pin-depends . --deps-only --with-test --with-doc --with-dev-setup
 
@@ -271,6 +280,15 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Isolate Hamlet source from Dune
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination=$(mktemp -d "$RUNNER_TEMP/hamlet-source.XXXXXX")
+          source_dir="$destination/source"
+          mv "$GITHUB_WORKSPACE/hamlet-source" "$source_dir"
+          echo "HAMLET_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+
       - uses: ./.github/actions/setup-ocaml
         with:
           ocaml-compiler: ${{ env.OCAML_COMPILER }}
@@ -281,8 +299,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
-          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action hamlet "$HAMLET_SOURCE_DIR"
+          opam pin add -y --no-action ppx_hamlet "$HAMLET_SOURCE_DIR"
           opam install -y hamlet ppx_hamlet
           opam install -y --ignore-pin-depends . --deps-only
 
@@ -313,6 +331,15 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Isolate Hamlet source from Dune
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination=$(mktemp -d "$RUNNER_TEMP/hamlet-source.XXXXXX")
+          source_dir="$destination/source"
+          mv "$GITHUB_WORKSPACE/hamlet-source" "$source_dir"
+          echo "HAMLET_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+
       - uses: ./.github/actions/setup-ocaml
         with:
           ocaml-compiler: ${{ env.OCAML_COMPILER }}
@@ -321,8 +348,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
-          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action hamlet "$HAMLET_SOURCE_DIR"
+          opam pin add -y --no-action ppx_hamlet "$HAMLET_SOURCE_DIR"
           opam install -y hamlet ppx_hamlet
           opam install -y --ignore-pin-depends . --deps-only --with-test --with-doc --with-dev-setup
           opam exec -- make all
@@ -352,16 +379,25 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Isolate Hamlet source from Dune
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination=$(mktemp -d "$RUNNER_TEMP/hamlet-source.XXXXXX")
+          source_dir="$destination/source"
+          mv "$GITHUB_WORKSPACE/hamlet-source" "$source_dir"
+          echo "HAMLET_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+
       - run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE/hamlet-source"
+          git config --global --add safe.directory "$HAMLET_SOURCE_DIR"
 
       - name: Ensure exact Hamlet source dependencies
         shell: bash
         run: |
           set -euo pipefail
-          opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
-          opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
+          opam pin add -y --no-action hamlet "$HAMLET_SOURCE_DIR"
+          opam pin add -y --no-action ppx_hamlet "$HAMLET_SOURCE_DIR"
           opam install -y hamlet ppx_hamlet
           opam install -y --ignore-pin-depends . --deps-only --with-test --with-doc --with-dev-setup
 
