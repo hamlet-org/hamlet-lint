@@ -3216,28 +3216,36 @@ type generic_call = {
 type generic_refusal = { location : Location.t; reason : refusal_reason }
 
 let generic_refusal_message refusal =
-  let location = refusal.location in
-  let span =
-    Core.Source_span.make ~file:location.loc_start.pos_fname
-      ~start_offset:location.loc_start.pos_cnum
-      ~end_offset:location.loc_end.pos_cnum
-      ~start_line:location.loc_start.pos_lnum
-      ~start_column:(location.loc_start.pos_cnum - location.loc_start.pos_bol)
-      ~end_line:location.loc_end.pos_lnum
-      ~end_column:(location.loc_end.pos_cnum - location.loc_end.pos_bol)
-    |> function
-    | Ok span -> span
-    | Error _ ->
-        Core.Source_span.make ~file:"generic" ~start_offset:0 ~end_offset:0
-          ~start_line:1 ~start_column:0 ~end_line:1 ~end_column:0
-        |> Result.get_ok
-  in
-  let marker =
-    Core.Marker.make
-      ~id:(Core.Marker.id_of_string "e:generic" |> Result.get_ok)
-      ~kind:Kind.Error ~span
-  in
-  refusal_message { marker; reason = refusal.reason }
+  match refusal.reason with
+  | Core_validation_failed message
+    when String.starts_with ~prefix:"missing retained contract for " message ->
+      message
+      ^ "; [%hamlet.forward.auto] must be the final argument of a direct call \
+         to a [@hamlet.generic] helper whose generated companion is visible"
+  | _ ->
+      let location = refusal.location in
+      let span =
+        Core.Source_span.make ~file:location.loc_start.pos_fname
+          ~start_offset:location.loc_start.pos_cnum
+          ~end_offset:location.loc_end.pos_cnum
+          ~start_line:location.loc_start.pos_lnum
+          ~start_column:
+            (location.loc_start.pos_cnum - location.loc_start.pos_bol)
+          ~end_line:location.loc_end.pos_lnum
+          ~end_column:(location.loc_end.pos_cnum - location.loc_end.pos_bol)
+        |> function
+        | Ok span -> span
+        | Error _ ->
+            Core.Source_span.make ~file:"generic" ~start_offset:0 ~end_offset:0
+              ~start_line:1 ~start_column:0 ~end_line:1 ~end_column:0
+            |> Result.get_ok
+      in
+      let marker =
+        Core.Marker.make
+          ~id:(Core.Marker.id_of_string "e:generic" |> Result.get_ok)
+          ~kind:Kind.Error ~span
+      in
+      refusal_message { marker; reason = refusal.reason }
 
 type generic_nodes = {
   owners : (string, expression list) Hashtbl.t;
@@ -3723,12 +3731,16 @@ let generic_definitions_typedtree ~context_digest structure =
 let retained_contract_payload helper path env =
   let companion = Hamlet_subtractor_generic_contract.companion_name helper in
   let declaration =
-    match path with
-    | Path.Pdot (parent, _) ->
-        Env.find_module (Path.Pdot (parent, companion)) env
-    | Path.Pident _ ->
-        Env.find_module_by_name (Longident.Lident companion) env |> snd
-    | Path.Papply _ | Path.Pextra_ty _ -> refuse Higher_order_flow
+    try
+      match path with
+      | Path.Pdot (parent, _) ->
+          Env.find_module (Path.Pdot (parent, companion)) env
+      | Path.Pident _ ->
+          Env.find_module_by_name (Longident.Lident companion) env |> snd
+      | Path.Papply _ | Path.Pextra_ty _ -> refuse Higher_order_flow
+    with Not_found ->
+      refuse
+        (Core_validation_failed ("missing retained contract for " ^ helper))
   in
   attribute_values Hamlet_subtractor_generic_contract.retained_attribute_name
     declaration.Types.md_attributes

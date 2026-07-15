@@ -24,12 +24,15 @@
   grouped_requirement
   external_no_cases
   multiple_marker_sources
-  exhausted_warning)
+  exhausted_warning
+  generic_non_helper
+  generic_alias)
  (libraries
   hamlet
   automatic_propagation_external
   automatic_propagation_abstract
-  automatic_propagation_no_cases)
+  automatic_propagation_no_cases
+  hamlet_subtractor_generic_helper_producer)
  (enabled_if
   (= %{profile} automatic-propagation-negative))
  (preprocess
