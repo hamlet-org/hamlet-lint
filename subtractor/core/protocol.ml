@@ -1,4 +1,5 @@
-let version = 4
+let version = 5
+let max_generic_attachment_payload_bytes = 1_048_576
 
 type package_mode = Standalone | For_pack of string
 
@@ -28,6 +29,15 @@ type ast_descriptor = {
 
 type probe_unit = Synthetic_unit of string
 
+type generic_attachment_kind = Definition | Call
+type generic_expectation = { id : string; kind : generic_attachment_kind }
+
+type generic_attachment = {
+  id : string;
+  kind : generic_attachment_kind;
+  payload : string;
+}
+
 type request = {
   request_id : string;
   source_file : string;
@@ -44,6 +54,7 @@ type request = {
   package_mode : package_mode;
   compiler_flags : compiler_flags;
   expected_markers : Marker.t list;
+  generic_expectations : generic_expectation list;
 }
 
 type outcome = Resolved of Residual.t | Refused of Diagnostic.t
@@ -65,6 +76,7 @@ type response = {
   ast_digest : string;
   results : marker_result list;
   catalogues : catalogue list;
+  generic_attachments : generic_attachment list;
 }
 
 type construction_error =
@@ -93,6 +105,15 @@ type construction_error =
   | Duplicate_catalogue_field_name of { catalogue : Identity.t; name : string }
   | Duplicate_catalogue_leaf of { catalogue : Identity.t; leaf : Identity.t }
   | Conflicting_catalogue of Identity.t
+  | Empty_generic_attachment_id
+  | Empty_generic_attachment_payload of string
+  | Generic_attachment_payload_too_large of {
+      id : string;
+      limit : int;
+      actual : int;
+    }
+  | Duplicate_generic_expectation of string
+  | Duplicate_generic_attachment of string
 
 type decode_error =
   | Version_mismatch of { expected : int; actual : int }
@@ -105,6 +126,13 @@ type correlation_error =
   | Missing_marker_result of Marker.id
   | Unexpected_marker_result of Marker.id
   | Marker_mismatch of { expected : Marker.t; actual : Marker.t }
+  | Missing_generic_attachment of string
+  | Unexpected_generic_attachment of string
+  | Generic_attachment_kind_mismatch of {
+      id : string;
+      expected : generic_attachment_kind;
+      actual : generic_attachment_kind;
+    }
 
 let marker_order first second =
   Marker.compare_id (Marker.id first) (Marker.id second)
@@ -121,6 +149,71 @@ let duplicate_marker markers =
   in
   loop markers
 
+let generic_expectation ~id ~kind =
+  if String.trim id = "" then Error Empty_generic_attachment_id
+  else Ok { id; kind }
+
+let generic_expectation_id (expectation : generic_expectation) = expectation.id
+
+let generic_expectation_kind (expectation : generic_expectation) =
+  expectation.kind
+
+let generic_attachment ~id ~kind ~payload =
+  let actual = String.length payload in
+  if String.trim id = "" then Error Empty_generic_attachment_id
+  else if String.equal payload "" then
+    Error (Empty_generic_attachment_payload id)
+  else if actual > max_generic_attachment_payload_bytes then
+    Error
+      (Generic_attachment_payload_too_large
+         { id; limit = max_generic_attachment_payload_bytes; actual })
+  else Ok { id; kind; payload }
+
+let generic_attachment_id (attachment : generic_attachment) = attachment.id
+let generic_attachment_kind (attachment : generic_attachment) = attachment.kind
+let generic_attachment_payload (attachment : generic_attachment) =
+  attachment.payload
+
+let generic_expectation_order
+    (first : generic_expectation)
+    (second : generic_expectation) =
+  String.compare first.id second.id
+
+let generic_attachment_order
+    (first : generic_attachment)
+    (second : generic_attachment) =
+  String.compare first.id second.id
+
+let duplicate_generic_expectation_id (items : generic_expectation list) =
+  let rec loop (values : generic_expectation list) =
+    match values with
+    | first :: second :: _ when String.equal first.id second.id -> Some first.id
+    | _ :: rest -> loop rest
+    | [] -> None
+  in
+  loop items
+
+let normalize_generic_expectations expectations =
+  let expectations = List.sort generic_expectation_order expectations in
+  match duplicate_generic_expectation_id expectations with
+  | Some id -> Error (Duplicate_generic_expectation id)
+  | None -> Ok expectations
+
+let duplicate_generic_attachment_id (items : generic_attachment list) =
+  let rec loop (values : generic_attachment list) =
+    match values with
+    | first :: second :: _ when String.equal first.id second.id -> Some first.id
+    | _ :: rest -> loop rest
+    | [] -> None
+  in
+  loop items
+
+let normalize_generic_attachments attachments =
+  let attachments = List.sort generic_attachment_order attachments in
+  match duplicate_generic_attachment_id attachments with
+  | Some id -> Error (Duplicate_generic_attachment id)
+  | None -> Ok attachments
+
 let validate_tool_context context =
   if String.trim context.ocaml_version = "" then
     Error (Empty_tool_version "ocaml_version")
@@ -132,7 +225,8 @@ let validate_tool_context context =
     Error (Invalid_catalogue_schema_version context.catalogue_schema_version)
   else Ok ()
 
-let request
+let request_with_generic_expectations
+    ~generic_expectations
     ~request_id
     ~source_file
     ~tool_name
@@ -174,25 +268,52 @@ let request
                 let expected_markers = normalize_markers expected_markers in
                 match duplicate_marker expected_markers with
                 | Some marker -> Error (Duplicate_marker marker)
-                | None ->
-                    Ok
-                      {
-                        request_id;
-                        source_file;
-                        tool_name;
-                        probe_ast;
-                        probe_unit;
-                        tool_context;
-                        context_fingerprint;
-                        include_dirs;
-                        hidden_include_dirs;
-                        visible_paths;
-                        hidden_paths;
-                        opens;
-                        package_mode;
-                        compiler_flags;
-                        expected_markers;
-                      })))
+                | None -> (
+                    match
+                      normalize_generic_expectations generic_expectations
+                    with
+                    | Error _ as error -> error
+                    | Ok generic_expectations ->
+                        Ok
+                          {
+                            request_id;
+                            source_file;
+                            tool_name;
+                            probe_ast;
+                            probe_unit;
+                            tool_context;
+                            context_fingerprint;
+                            include_dirs;
+                            hidden_include_dirs;
+                            visible_paths;
+                            hidden_paths;
+                            opens;
+                            package_mode;
+                            compiler_flags;
+                            expected_markers;
+                            generic_expectations;
+                          }))))
+
+let request
+    ~request_id
+    ~source_file
+    ~tool_name
+    ~probe_ast
+    ~probe_unit
+    ~tool_context
+    ~context_fingerprint
+    ~include_dirs
+    ~hidden_include_dirs
+    ~visible_paths
+    ~hidden_paths
+    ~opens
+    ~package_mode
+    ~compiler_flags
+    ~expected_markers =
+  request_with_generic_expectations ~generic_expectations:[] ~request_id
+    ~source_file ~tool_name ~probe_ast ~probe_unit ~tool_context
+    ~context_fingerprint ~include_dirs ~hidden_include_dirs ~visible_paths
+    ~hidden_paths ~opens ~package_mode ~compiler_flags ~expected_markers
 
 let request_id (request : request) = request.request_id
 let source_file (request : request) = request.source_file
@@ -212,6 +333,7 @@ let opens (request : request) = request.opens
 let package_mode (request : request) = request.package_mode
 let compiler_flags (request : request) = request.compiler_flags
 let expected_markers (request : request) = request.expected_markers
+let generic_expectations (request : request) = request.generic_expectations
 let compare_request = Stdlib.compare
 let equal_request first second = compare_request first second = 0
 
@@ -310,6 +432,7 @@ let normalize_catalogues catalogues =
 
 let response
     ?(catalogues = [])
+    ?(generic_attachments = [])
     ~request_id
     ~context_fingerprint
     ~ast_digest
@@ -325,21 +448,53 @@ let response
     | None -> (
         match normalize_catalogues catalogues with
         | Error _ as error -> error
-        | Ok catalogues ->
-            Ok
-              {
-                request_id;
-                context_fingerprint;
-                ast_digest;
-                results;
-                catalogues;
-              })
+        | Ok catalogues -> (
+            match normalize_generic_attachments generic_attachments with
+            | Error _ as error -> error
+            | Ok generic_attachments ->
+                Ok
+                  {
+                    request_id;
+                    context_fingerprint;
+                    ast_digest;
+                    results;
+                    catalogues;
+                    generic_attachments;
+                  }))
 
 let response_request_id (response : response) = response.request_id
 let context_fingerprint (response : response) = response.context_fingerprint
 let response_ast_digest (response : response) = response.ast_digest
 let results (response : response) = response.results
 let catalogues (response : response) = response.catalogues
+let generic_attachments (response : response) = response.generic_attachments
+
+let validate_generic_attachments
+    (expected : generic_expectation list)
+    (actual : generic_attachment list) =
+  let rec loop
+      (expected : generic_expectation list)
+      (actual : generic_attachment list) =
+    match (expected, actual) with
+    | [], [] -> Ok ()
+    | expectation :: _, [] -> Error (Missing_generic_attachment expectation.id)
+    | [], attachment :: _ -> Error (Unexpected_generic_attachment attachment.id)
+    | expectation :: expected_rest, attachment :: actual_rest ->
+        let order = String.compare expectation.id attachment.id in
+        if order < 0 then Error (Missing_generic_attachment expectation.id)
+        else if order > 0 then
+          Error (Unexpected_generic_attachment attachment.id)
+        else if expectation.kind <> attachment.kind then
+          Error
+            (Generic_attachment_kind_mismatch
+               {
+                 id = expectation.id;
+                 expected = expectation.kind;
+                 actual = attachment.kind;
+               })
+        else loop expected_rest actual_rest
+  in
+  loop expected actual
 
 let validate_response ~(request : request) ~(response : response) =
   if request.request_id <> response.request_id then
@@ -404,7 +559,9 @@ let validate_response ~(request : request) ~(response : response) =
             with
             | Some (expected, actual) ->
                 Error (Marker_mismatch { expected; actual })
-            | None -> Ok ()))
+            | None ->
+                validate_generic_attachments request.generic_expectations
+                  response.generic_attachments))
 
 let compare = Stdlib.compare
 let equal first second = compare first second = 0
@@ -433,6 +590,9 @@ let field path name fields =
   match List.assoc_opt name fields with
   | Some value -> Ok value
   | None -> malformed (path @ [ name ]) "missing required field"
+
+let optional_field name ~default fields =
+  match List.assoc_opt name fields with Some value -> value | None -> default
 
 let as_string path = function
   | `String value -> Ok value
@@ -1011,6 +1171,65 @@ let probe_unit_of_json path json =
       malformed (path @ [ "kind" ])
         (Printf.sprintf "unknown probe unit kind %S" value)
 
+let generic_attachment_kind_to_json = function
+  | Definition -> `String "definition"
+  | Call -> `String "call"
+
+let generic_attachment_kind_of_json path = function
+  | `String "definition" -> Ok Definition
+  | `String "call" -> Ok Call
+  | `String value ->
+      malformed path (Printf.sprintf "unknown generic attachment kind %S" value)
+  | _ -> malformed path "expected a generic attachment kind"
+
+let generic_expectation_to_json (expectation : generic_expectation) =
+  `Assoc
+    [
+      ("id", `String expectation.id);
+      ("kind", generic_attachment_kind_to_json expectation.kind);
+    ]
+
+let generic_expectation_of_json path json =
+  let* fields = as_object path json in
+  let* id_json = field path "id" fields in
+  let* id = as_string (path @ [ "id" ]) id_json in
+  let* kind_json = field path "kind" fields in
+  let* kind = generic_attachment_kind_of_json (path @ [ "kind" ]) kind_json in
+  match generic_expectation ~id ~kind with
+  | Ok expectation -> Ok expectation
+  | Error Empty_generic_attachment_id ->
+      malformed (path @ [ "id" ]) "generic attachment identity is empty"
+  | Error _ -> malformed path "invalid generic attachment expectation"
+
+let generic_attachment_to_json (attachment : generic_attachment) =
+  `Assoc
+    [
+      ("id", `String attachment.id);
+      ("kind", generic_attachment_kind_to_json attachment.kind);
+      ("payload", `String attachment.payload);
+    ]
+
+let generic_attachment_of_json path json =
+  let* fields = as_object path json in
+  let* id_json = field path "id" fields in
+  let* id = as_string (path @ [ "id" ]) id_json in
+  let* kind_json = field path "kind" fields in
+  let* kind = generic_attachment_kind_of_json (path @ [ "kind" ]) kind_json in
+  let* payload_json = field path "payload" fields in
+  let* payload = as_string (path @ [ "payload" ]) payload_json in
+  match generic_attachment ~id ~kind ~payload with
+  | Ok attachment -> Ok attachment
+  | Error Empty_generic_attachment_id ->
+      malformed (path @ [ "id" ]) "generic attachment identity is empty"
+  | Error (Empty_generic_attachment_payload _) ->
+      malformed (path @ [ "payload" ]) "generic attachment payload is empty"
+  | Error (Generic_attachment_payload_too_large { limit; actual; _ }) ->
+      malformed (path @ [ "payload" ])
+        (Printf.sprintf
+           "generic attachment payload is too large: %d bytes exceeds %d" actual
+           limit)
+  | Error _ -> malformed path "invalid generic attachment"
+
 let request_to_json (request : request) =
   `Assoc
     [
@@ -1032,6 +1251,9 @@ let request_to_json (request : request) =
       ("compiler_flags", compiler_flags_to_json request.compiler_flags);
       ( "expected_markers",
         `List (List.map marker_to_json request.expected_markers) );
+      ( "generic_expectations",
+        `List
+          (List.map generic_expectation_to_json request.generic_expectations) );
     ]
 
 let encode_request request = Yojson.Basic.to_string (request_to_json request)
@@ -1084,11 +1306,18 @@ let request_of_json json =
   let* expected_markers =
     decode_list marker_of_json [ "expected_markers" ] markers_json
   in
+  let generic_expectations_json =
+    optional_field "generic_expectations" ~default:(`List []) fields
+  in
+  let* generic_expectations =
+    decode_list generic_expectation_of_json [ "generic_expectations" ]
+      generic_expectations_json
+  in
   match
-    request ~request_id ~source_file ~tool_name ~probe_ast ~probe_unit
-      ~tool_context ~context_fingerprint ~include_dirs ~hidden_include_dirs
-      ~visible_paths ~hidden_paths ~opens ~package_mode ~compiler_flags
-      ~expected_markers
+    request_with_generic_expectations ~generic_expectations ~request_id
+      ~source_file ~tool_name ~probe_ast ~probe_unit ~tool_context
+      ~context_fingerprint ~include_dirs ~hidden_include_dirs ~visible_paths
+      ~hidden_paths ~opens ~package_mode ~compiler_flags ~expected_markers
   with
   | Ok request -> Ok request
   | Error Empty_request_id ->
@@ -1116,6 +1345,9 @@ let request_of_json json =
   | Error (Duplicate_marker marker) ->
       malformed [ "expected_markers" ]
         (Printf.sprintf "duplicate marker %S" (Marker.id_to_string marker))
+  | Error (Duplicate_generic_expectation id) ->
+      malformed [ "generic_expectations" ]
+        (Printf.sprintf "duplicate generic attachment expectation %S" id)
   | Error Empty_for_pack ->
       malformed [ "package_mode" ] "pack name must not be empty"
   | Error (Empty_tool_version field) ->
@@ -1605,6 +1837,9 @@ let response_to_json (response : response) =
       ("ast_digest", `String response.ast_digest);
       ("results", `List (List.map marker_result_to_json response.results));
       ("catalogues", `List (List.map catalogue_to_json response.catalogues));
+      ( "generic_attachments",
+        `List (List.map generic_attachment_to_json response.generic_attachments)
+      );
     ]
 
 let encode response = Yojson.Basic.to_string (response_to_json response)
@@ -1636,8 +1871,16 @@ let response_of_json json =
   let* catalogues =
     decode_list catalogue_of_json [ "catalogues" ] catalogues_json
   in
+  let generic_attachments_json =
+    optional_field "generic_attachments" ~default:(`List []) fields
+  in
+  let* generic_attachments =
+    decode_list generic_attachment_of_json [ "generic_attachments" ]
+      generic_attachments_json
+  in
   match
-    response ~catalogues ~request_id ~context_fingerprint ~ast_digest results
+    response ~catalogues ~generic_attachments ~request_id ~context_fingerprint
+      ~ast_digest results
   with
   | Ok response -> Ok response
   | Error Empty_request_id ->
@@ -1654,6 +1897,9 @@ let response_of_json json =
       malformed [ "catalogues" ]
         (Printf.sprintf "conflicting catalogue %S"
            (Identity.to_string identity))
+  | Error (Duplicate_generic_attachment id) ->
+      malformed [ "generic_attachments" ]
+        (Printf.sprintf "duplicate generic attachment %S" id)
   | Error _ -> malformed [ "results" ] "invalid marker results"
 
 let decode input =

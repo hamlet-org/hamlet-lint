@@ -1,4 +1,4 @@
-let schema_version = 1
+let schema_version = 2
 let max_encoded_bytes = 1_048_576
 let max_slots = 256
 let max_expression_depth = 64
@@ -52,6 +52,7 @@ type expression_error =
   | Wrong_leaf_kind of { leaf : Identity.t; expected : Kind.t; actual : Kind.t }
   | Duplicate_leaf of Identity.t
   | Conflicting_partition_leaf of Identity.t
+  | Partition_leaf_not_claimed of Identity.t
 
 let expression_kind = function
   | Input_expression kind
@@ -354,6 +355,7 @@ type slot = {
   ordinal : int;
   kind : Kind.t;
   input : channel_expression;
+  claimed : Leaf.t list;
   handled : Leaf.t list;
   explicitly_forwarded : Leaf.t list;
   recovery : channel_expression;
@@ -374,7 +376,32 @@ let slot_id value =
 
 let slot_id_to_string id = id
 
-let slot ~id ~ordinal ~kind ~input ~handled ~explicitly_forwarded ~recovery =
+let claimed_contains claimed leaf =
+  List.exists (fun candidate -> Leaf.equal candidate leaf) claimed
+
+let validate_partition_subset ~claimed leaves =
+  match
+    List.find_opt (fun leaf -> not (claimed_contains claimed leaf)) leaves
+  with
+  | None -> Ok ()
+  | Some leaf -> Error (Partition_leaf_not_claimed (Leaf.identity leaf))
+
+let normalize_claimed kind claimed =
+  match validate_leaf_kinds kind claimed with
+  | Error _ as error -> error
+  | Ok () ->
+      let claimed = normalize_leaves claimed in
+      Result.map (fun () -> claimed) (validate_unique_leaves claimed)
+
+let slot
+    ~id
+    ~ordinal
+    ~kind
+    ~input
+    ~claimed
+    ~handled
+    ~explicitly_forwarded
+    ~recovery =
   if ordinal < 0 then Error (Negative_slot_ordinal ordinal)
   else
     match validate_expression_kind kind input with
@@ -383,24 +410,38 @@ let slot ~id ~ordinal ~kind ~input ~handled ~explicitly_forwarded ~recovery =
         match validate_expression_kind kind recovery with
         | Error error -> Error (Slot_expression_error error)
         | Ok () -> (
-            match normalize_partition kind handled explicitly_forwarded with
+            match normalize_claimed kind claimed with
             | Error error -> Error (Slot_expression_error error)
-            | Ok (handled, explicitly_forwarded) ->
-                Ok
-                  {
-                    id;
-                    ordinal;
-                    kind;
-                    input;
-                    handled;
-                    explicitly_forwarded;
-                    recovery;
-                  }))
+            | Ok claimed -> (
+                match normalize_partition kind handled explicitly_forwarded with
+                | Error error -> Error (Slot_expression_error error)
+                | Ok (handled, explicitly_forwarded) -> (
+                    match validate_partition_subset ~claimed handled with
+                    | Error error -> Error (Slot_expression_error error)
+                    | Ok () -> (
+                        match
+                          validate_partition_subset ~claimed
+                            explicitly_forwarded
+                        with
+                        | Error error -> Error (Slot_expression_error error)
+                        | Ok () ->
+                            Ok
+                              {
+                                id;
+                                ordinal;
+                                kind;
+                                input;
+                                claimed;
+                                handled;
+                                explicitly_forwarded;
+                                recovery;
+                              })))))
 
 let slot_id_value slot = slot.id
 let slot_ordinal slot = slot.ordinal
 let slot_kind slot = slot.kind
 let slot_input slot = slot.input
+let slot_claimed slot = slot.claimed
 let slot_handled slot = slot.handled
 let slot_explicitly_forwarded slot = slot.explicitly_forwarded
 let slot_recovery slot = slot.recovery
@@ -492,14 +533,25 @@ let validate_contract_limits slots output =
     :: output.requirements
     :: List.concat_map (fun slot -> [ slot.input; slot.recovery ]) slots
   in
+  let slot_leaf_count =
+    List.fold_left
+      (fun total slot ->
+        total
+        + List.length slot.claimed
+        + List.length slot.handled
+        + List.length slot.explicitly_forwarded)
+      0 slots
+  in
   let rec loop total = function
     | [] ->
         if total.nodes > max_expression_nodes then
           Error
             (Too_many_expression_nodes
                { limit = max_expression_nodes; actual = total.nodes })
-        else if total.leaves > max_leaves then
-          Error (Too_many_leaves { limit = max_leaves; actual = total.leaves })
+        else if total.leaves + slot_leaf_count > max_leaves then
+          Error
+            (Too_many_leaves
+               { limit = max_leaves; actual = total.leaves + slot_leaf_count })
         else Ok ()
     | expression :: rest -> (
         match validate_expression_limits expression with
@@ -645,6 +697,21 @@ type instantiated_slot = { slot : slot; residual : Residual.t }
 let instantiate_slot ~input slot =
   let* source = evaluate_expression ~input slot.input in
   let* source = require_exact slot.kind source in
+  let* () =
+    match
+      List.find_opt
+        (fun leaf ->
+          match Proof.find_leaf source (Leaf.identity leaf) with
+          | Some source_leaf -> not (Leaf.equal source_leaf leaf)
+          | None -> true)
+        slot.claimed
+    with
+    | None -> Ok ()
+    | Some leaf ->
+        Error
+          (Residual_error
+             (Diagnostic.Leaf_outside_universe (Leaf.identity leaf)))
+  in
   let* recovery = evaluate_expression ~input slot.recovery in
   let* recovery = require_exact slot.kind recovery in
   let* residual =
@@ -764,6 +831,7 @@ let slot_to_json slot =
       ("ordinal", `Int slot.ordinal);
       ("kind", kind_to_json slot.kind);
       ("input", expression_to_json slot.input);
+      ("claimed", `List (List.map Protocol.leaf_to_json slot.claimed));
       ("handled", `List (List.map Protocol.leaf_to_json slot.handled));
       ( "explicitly_forwarded",
         `List (List.map Protocol.leaf_to_json slot.explicitly_forwarded) );
@@ -938,6 +1006,8 @@ let slot_of_json path json =
   let* kind = kind_of_json (path @ [ "kind" ]) kind_json in
   let* input_json = field path "input" fields in
   let* input = expression_of_json 1 (path @ [ "input" ]) input_json in
+  let* claimed_json = field path "claimed" fields in
+  let* claimed = leaves_of_json (path @ [ "claimed" ]) claimed_json in
   let* handled_json = field path "handled" fields in
   let* handled = leaves_of_json (path @ [ "handled" ]) handled_json in
   let* forwarded_json = field path "explicitly_forwarded" fields in
@@ -946,7 +1016,8 @@ let slot_of_json path json =
   in
   let* recovery_json = field path "recovery" fields in
   let* recovery = expression_of_json 1 (path @ [ "recovery" ]) recovery_json in
-  slot ~id ~ordinal ~kind ~input ~handled ~explicitly_forwarded ~recovery
+  slot ~id ~ordinal ~kind ~input ~claimed ~handled ~explicitly_forwarded
+    ~recovery
   |> Result.map_error (fun _ ->
       Malformed_contract { path; message = "invalid forwarding slot" })
 

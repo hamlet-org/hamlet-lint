@@ -475,3 +475,9 @@ let message = function
   | Correlation (Protocol.Marker_mismatch { expected; _ }) ->
       "resolver changed marker metadata for "
       ^ Marker.id_to_string (Marker.id expected)
+  | Correlation (Protocol.Missing_generic_attachment id) ->
+      "resolver omitted generic attachment " ^ id
+  | Correlation (Protocol.Unexpected_generic_attachment id) ->
+      "resolver returned unknown generic attachment " ^ id
+  | Correlation (Protocol.Generic_attachment_kind_mismatch { id; _ }) ->
+      "resolver changed generic attachment kind for " ^ id

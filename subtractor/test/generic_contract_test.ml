@@ -97,7 +97,7 @@ let test_two_channel_substitution_and_slots () =
   let error_slot =
     Generic_contract.slot ~id:(slot_id "errors-0") ~ordinal:0 ~kind:Kind.Error
       ~input:(Generic_contract.input Kind.Error)
-      ~handled:[ missing ] ~explicitly_forwarded:[]
+      ~claimed:[ missing ] ~handled:[ missing ] ~explicitly_forwarded:[]
       ~recovery:(Generic_contract.exact (proof Kind.Error [ recovery ]))
     |> get_ok "error slot"
   in
@@ -105,7 +105,7 @@ let test_two_channel_substitution_and_slots () =
     Generic_contract.slot ~id:(slot_id "requirements-1") ~ordinal:1
       ~kind:Kind.Requirement
       ~input:(Generic_contract.requirements after_catch)
-      ~handled:[ logger ] ~explicitly_forwarded:[]
+      ~claimed:[ logger ] ~handled:[ logger ] ~explicitly_forwarded:[]
       ~recovery:(Generic_contract.clear Kind.Requirement)
     |> get_ok "requirement slot"
   in
@@ -171,7 +171,7 @@ let test_deterministic_round_trip_and_digest () =
   let make_slot id ordinal =
     Generic_contract.slot ~id:(slot_id id) ~ordinal ~kind:Kind.Error
       ~input:(Generic_contract.input Kind.Error)
-      ~handled:[ missing ] ~explicitly_forwarded:[]
+      ~claimed:[ missing ] ~handled:[ missing ] ~explicitly_forwarded:[]
       ~recovery:(Generic_contract.clear Kind.Error)
     |> get_ok "slot"
   in
@@ -210,7 +210,7 @@ let test_malformed_and_oversized_contracts () =
   in
   begin match Generic_contract.decode wrong_version with
   | Error
-      (Generic_contract.Schema_version_mismatch { expected = 1; actual = 999 })
+      (Generic_contract.Schema_version_mismatch { expected = 2; actual = 999 })
     ->
       ()
   | _ -> Alcotest.fail "schema mismatch was accepted"
@@ -221,7 +221,7 @@ let test_malformed_and_oversized_contracts () =
       Generic_contract.slot ~id:(slot_id "duplicate") ~ordinal:0
         ~kind:Kind.Error
         ~input:(Generic_contract.input Kind.Error)
-        ~handled:[ missing ] ~explicitly_forwarded:[]
+        ~claimed:[ missing ] ~handled:[ missing ] ~explicitly_forwarded:[]
         ~recovery:(Generic_contract.clear Kind.Error)
       |> get_ok "duplicate fixture slot"
     in
@@ -268,7 +268,7 @@ let test_duplicate_slots_and_expression_limits () =
   let make_slot id ordinal =
     Generic_contract.slot ~id:(slot_id id) ~ordinal ~kind:Kind.Error
       ~input:(Generic_contract.input Kind.Error)
-      ~handled:[ missing ] ~explicitly_forwarded:[]
+      ~claimed:[ missing ] ~handled:[ missing ] ~explicitly_forwarded:[]
       ~recovery:(Generic_contract.clear Kind.Error)
     |> get_ok "slot"
   in
@@ -306,6 +306,45 @@ let test_duplicate_slots_and_expression_limits () =
   | _ -> Alcotest.fail "overly deep expression was accepted"
   end
 
+let test_guarded_claim_remains_residual () =
+  let guarded = error_leaf "guarded" "Guarded" in
+  let other = error_leaf "other" "Other" in
+  let slot =
+    Generic_contract.slot ~id:(slot_id "guarded-claim") ~ordinal:0
+      ~kind:Kind.Error
+      ~input:(Generic_contract.input Kind.Error)
+      ~claimed:[ guarded ] ~handled:[] ~explicitly_forwarded:[]
+      ~recovery:(Generic_contract.clear Kind.Error)
+    |> get_ok "guarded slot"
+  in
+  let caller = certificate [ guarded; other ] [] in
+  let instantiated =
+    Generic_contract.instantiate_slot ~input:caller slot
+    |> get_ok "guarded slot instantiation"
+  in
+  Alcotest.(check (list string))
+    "guarded claim is routed" [ "Errors.guarded" ]
+    (Generic_contract.slot_claimed slot |> names);
+  Alcotest.(check (list string))
+    "guarded claim remains in residual"
+    [ "Errors.guarded"; "Errors.other" ]
+    (Generic_contract.instantiated_residual instantiated
+    |> Residual.residual
+    |> names);
+  begin match
+    Generic_contract.slot ~id:(slot_id "invalid-claim") ~ordinal:1
+      ~kind:Kind.Error
+      ~input:(Generic_contract.input Kind.Error)
+      ~claimed:[] ~handled:[ guarded ] ~explicitly_forwarded:[]
+      ~recovery:(Generic_contract.clear Kind.Error)
+  with
+  | Error
+      (Generic_contract.Slot_expression_error
+         (Generic_contract.Partition_leaf_not_claimed _)) ->
+      ()
+  | _ -> Alcotest.fail "unclaimed handled leaf was accepted"
+  end
+
 let () =
   Alcotest.run "hamlet-subtractor-generic-contract"
     [
@@ -319,5 +358,7 @@ let () =
             test_malformed_and_oversized_contracts;
           Alcotest.test_case "duplicate slots and expression limits" `Quick
             test_duplicate_slots_and_expression_limits;
+          Alcotest.test_case "guarded claim remains residual" `Quick
+            test_guarded_claim_remains_residual;
         ] );
     ]

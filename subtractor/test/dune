@@ -11,6 +11,12 @@
  (libraries alcotest hamlet_subtractor_core yojson))
 
 (test
+ (name generic_protocol_test)
+ (package hamlet-subtractor)
+ (modules generic_protocol_test)
+ (libraries alcotest hamlet_subtractor_core yojson))
+
+(test
  (name evidence_runtime_test)
  (package hamlet-subtractor)
  (modules evidence_runtime_test)

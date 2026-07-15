@@ -3,6 +3,8 @@
     marker. *)
 val version : int
 
+val max_generic_attachment_payload_bytes : int
+
 type package_mode = Standalone | For_pack of string
 
 type tool_context = {
@@ -30,6 +32,10 @@ type ast_descriptor = {
 }
 
 type probe_unit = Synthetic_unit of string
+
+type generic_attachment_kind = Definition | Call
+type generic_expectation
+type generic_attachment
 
 type request
 type outcome = Resolved of Residual.t | Refused of Diagnostic.t
@@ -63,6 +69,15 @@ type construction_error =
   | Duplicate_catalogue_field_name of { catalogue : Identity.t; name : string }
   | Duplicate_catalogue_leaf of { catalogue : Identity.t; leaf : Identity.t }
   | Conflicting_catalogue of Identity.t
+  | Empty_generic_attachment_id
+  | Empty_generic_attachment_payload of string
+  | Generic_attachment_payload_too_large of {
+      id : string;
+      limit : int;
+      actual : int;
+    }
+  | Duplicate_generic_expectation of string
+  | Duplicate_generic_attachment of string
 
 type decode_error =
   | Version_mismatch of { expected : int; actual : int }
@@ -75,6 +90,13 @@ type correlation_error =
   | Missing_marker_result of Marker.id
   | Unexpected_marker_result of Marker.id
   | Marker_mismatch of { expected : Marker.t; actual : Marker.t }
+  | Missing_generic_attachment of string
+  | Unexpected_generic_attachment of string
+  | Generic_attachment_kind_mismatch of {
+      id : string;
+      expected : generic_attachment_kind;
+      actual : generic_attachment_kind;
+    }
 
 (** Normalized codecs shared by bounded metadata protocols. Decoders receive a
     JSON path so callers can preserve precise error locations. *)
@@ -93,7 +115,49 @@ val evidence_of_json :
   Yojson.Safe.t ->
   (Effect_certificate.evidence, decode_error) result
 
+val generic_expectation :
+  id:string ->
+  kind:generic_attachment_kind ->
+  (generic_expectation, construction_error) result
+
+val generic_expectation_id : generic_expectation -> string
+
+val generic_expectation_kind : generic_expectation -> generic_attachment_kind
+
+val generic_attachment :
+  id:string ->
+  kind:generic_attachment_kind ->
+  payload:string ->
+  (generic_attachment, construction_error) result
+
+val generic_attachment_id : generic_attachment -> string
+val generic_attachment_kind : generic_attachment -> generic_attachment_kind
+val generic_attachment_payload : generic_attachment -> string
+
 val request :
+  request_id:string ->
+  source_file:string ->
+  tool_name:string ->
+  probe_ast:ast_descriptor ->
+  probe_unit:probe_unit ->
+  tool_context:tool_context ->
+  context_fingerprint:string ->
+  include_dirs:string list ->
+  hidden_include_dirs:string list ->
+  visible_paths:string list ->
+  hidden_paths:string list ->
+  opens:string list ->
+  package_mode:package_mode ->
+  compiler_flags:compiler_flags ->
+  expected_markers:Marker.t list ->
+  (request, construction_error) result
+
+(** Construct a request that also expects generic resolver attachments. The
+    separate entry point keeps the original all-labelled [request] constructor
+    source-compatible; OCaml cannot erase an optional argument from a function
+    with no final positional argument. *)
+val request_with_generic_expectations :
+  generic_expectations:generic_expectation list ->
   request_id:string ->
   source_file:string ->
   tool_name:string ->
@@ -126,6 +190,7 @@ val opens : request -> string list
 val package_mode : request -> package_mode
 val compiler_flags : request -> compiler_flags
 val expected_markers : request -> Marker.t list
+val generic_expectations : request -> generic_expectation list
 val encode_request : request -> string
 val decode_request : string -> (request, decode_error) result
 val compare_request : request -> request -> int
@@ -153,6 +218,7 @@ val catalogue_fields : catalogue -> (string * Identity.t) list
 
 val response :
   ?catalogues:catalogue list ->
+  ?generic_attachments:generic_attachment list ->
   request_id:string ->
   context_fingerprint:string ->
   ast_digest:string ->
@@ -164,6 +230,7 @@ val context_fingerprint : response -> string
 val response_ast_digest : response -> string
 val results : response -> marker_result list
 val catalogues : response -> catalogue list
+val generic_attachments : response -> generic_attachment list
 val validate_response :
   request:request -> response:response -> (unit, correlation_error) result
 val encode : response -> string

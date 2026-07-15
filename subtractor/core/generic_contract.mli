@@ -34,6 +34,7 @@ type expression_error =
   | Wrong_leaf_kind of { leaf : Identity.t; expected : Kind.t; actual : Kind.t }
   | Duplicate_leaf of Identity.t
   | Conflicting_partition_leaf of Identity.t
+  | Partition_leaf_not_claimed of Identity.t
 
 val input : Kind.t -> channel_expression
 val exact : Proof.t -> channel_expression
@@ -127,6 +128,7 @@ val slot :
   ordinal:int ->
   kind:Kind.t ->
   input:channel_expression ->
+  claimed:Leaf.t list ->
   handled:Leaf.t list ->
   explicitly_forwarded:Leaf.t list ->
   recovery:channel_expression ->
@@ -136,6 +138,7 @@ val slot_id_value : slot -> slot_id
 val slot_ordinal : slot -> int
 val slot_kind : slot -> Kind.t
 val slot_input : slot -> channel_expression
+val slot_claimed : slot -> Leaf.t list
 val slot_handled : slot -> Leaf.t list
 val slot_explicitly_forwarded : slot -> Leaf.t list
 val slot_recovery : slot -> channel_expression

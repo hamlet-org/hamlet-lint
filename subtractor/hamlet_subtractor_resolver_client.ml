@@ -166,6 +166,14 @@ let construction_error_message error =
   | Conflicting_catalogue identity ->
       "conflicting catalogue "
       ^ Hamlet_subtractor_core.Identity.to_string identity
+  | Empty_generic_attachment_id -> "empty generic attachment identity"
+  | Empty_generic_attachment_payload id ->
+      "empty generic attachment payload " ^ id
+  | Generic_attachment_payload_too_large { id; _ } ->
+      "oversized generic attachment payload " ^ id
+  | Duplicate_generic_expectation id ->
+      "duplicate generic attachment expectation " ^ id
+  | Duplicate_generic_attachment id -> "duplicate generic attachment " ^ id
 
 let message = function
   | Ast_serialization_failed detail ->
