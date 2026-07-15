@@ -230,6 +230,11 @@ module type Clock = sig
   val now : unit -> (int, 'e, 'r) t
 end]
 
+[%%hamlet.service
+module type Metrics = sig
+  val increment : string -> (unit, 'e, 'r) t
+end]
+
 module Logger_live = Logger.Make (struct
   let log _ = Combinators.return ()
 end)
@@ -237,6 +242,21 @@ end)
 module Clock_live = Clock.Make (struct
   let now () = Combinators.return 42
 end)
+
+module Metrics_live = Metrics.Make (struct
+  let increment _ = Combinators.return ()
+end)
+
+module Chain_errors = struct
+  type old_a = [ `Old_a ]
+  type old_b = [ `Old_b ]
+  type old_c = [ `Old_c ]
+  type old = [ old_a | old_b | old_c ]
+  type introduced_one = [ `Introduced_one ]
+  type introduced_two = [ `Introduced_two ]
+  type after_first = [ old_b | old_c | introduced_one ]
+  type after_second = [ old_c | introduced_one | introduced_two ]
+end
 
 let error_source =
   Combinators.fail (`Missing "gone" : Storage.Errors.error)
@@ -246,6 +266,41 @@ let error_effect =
       match error with
       | #Storage.Errors.missing -> Combinators.return "recovered"
       | [%hamlet.propagate_e.auto] -> .)
+
+let chained_error_source : (string, Chain_errors.old, never) t =
+  Combinators.fail (`Old_a : Chain_errors.old)
+
+let chained_error_effect =
+  let after_first_handler =
+    Combinators.catch chained_error_source ~handler:(function
+      | #Chain_errors.old_a -> Combinators.return "handled old A"
+      | [%hamlet.propagate_e.auto] -> .)
+  in
+  let with_new_error =
+    let after_first_handler =
+      (after_first_handler :> (string, Chain_errors.after_first, never) t)
+    in
+    let open Combinators in
+    let* _ = after_first_handler in
+    (fail (`Introduced_one : Chain_errors.introduced_one)
+      :> (string, Chain_errors.after_first, never) t)
+  in
+  with_new_error
+  |> Combinators.catch ~handler:(function
+       | #Chain_errors.old_b ->
+           (Combinators.fail
+              (`Introduced_two : Chain_errors.introduced_two)
+             :> (string, Chain_errors.after_second, never) t)
+       | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.catch ~handler:(function
+       | #Chain_errors.introduced_one ->
+           Combinators.return "handled introduced error"
+       | [%hamlet.propagate_e.auto] -> .)
+
+let chained_error_done : (string, never, never) t =
+  Combinators.catch chained_error_effect ~handler:(function
+    | `Old_c -> Combinators.return "handled old C"
+    | `Introduced_two -> Combinators.return "handled introduced error 2")
 
 let requirement_source () =
   let open Combinators in
@@ -262,12 +317,30 @@ let requirement_effect =
           Logger.Tag.give witness (module Logger_live)
       | [%hamlet.propagate_s.auto] -> .)
 
+type after_logger = [ Clock.Tag.r | Metrics.Tag.r ]
+
+let requirement_with_metrics =
+  let requirement_effect =
+    (requirement_effect :> (string, never, after_logger) t)
+  in
+  let open Combinators in
+  let* value = requirement_effect in
+  let* (module Metrics) = Metrics.Tag.summon in
+  return value
+
+let requirement_after_clock =
+  Combinators.provide requirement_with_metrics ~handler:(function
+    | #Clock.Tag.r as witness -> Clock.Tag.give witness (module Clock_live)
+    | [%hamlet.propagate_s.auto] -> .)
+
 let requirement_done : (string, never, never) t =
-  Combinators.provide requirement_effect ~handler:(function
-    | #Clock.Tag.r as witness -> Clock.Tag.give witness (module Clock_live))
+  Combinators.provide requirement_after_clock ~handler:(function
+    | #Metrics.Tag.r as witness -> Metrics.Tag.give witness (module Metrics_live))
 
 let error_hover = error_effect
 let requirement_hover = requirement_effect
+let chained_error_hover = chained_error_effect
+let chained_requirement_hover = requirement_after_clock
 
 let check expected = function
   | Ok actual when String.equal actual expected -> Printf.printf "%s\n" actual
@@ -276,6 +349,7 @@ let check expected = function
 
 let () =
   check "recovered" (Interpreter.run error_effect);
+  check "handled introduced error" (Interpreter.run chained_error_done);
   check "ready at 42" (Interpreter.run requirement_done)
 EOF
 
@@ -302,9 +376,18 @@ error_position=$(awk '/^let error_hover = error_effect$/ {
 requirement_position=$(awk '/^let requirement_hover = requirement_effect$/ {
   print NR ":" (index($0, "requirement_effect") - 1)
 }' "$consumer/main.ml")
+chained_error_position=$(awk '/^let chained_error_hover = chained_error_effect$/ {
+  print NR ":" (index($0, "chained_error_effect") - 1)
+}' "$consumer/main.ml")
+chained_requirement_position=$(awk '/^let chained_requirement_hover = requirement_after_clock$/ {
+  print NR ":" (index($0, "requirement_after_clock") - 1)
+}' "$consumer/main.ml")
 
 test -n "$error_position" || fail "error hover position was not found"
 test -n "$requirement_position" || fail "requirement hover position was not found"
+test -n "$chained_error_position" || fail "chained error hover position was not found"
+test -n "$chained_requirement_position" ||
+  fail "chained requirement hover position was not found"
 
 error_hover=$(
   cd "$consumer"
@@ -317,16 +400,38 @@ requirement_hover=$(
     -position "$requirement_position" -index 0 -verbosity 0 \
     -filename main.ml < main.ml
 )
+chained_error_hover=$(
+  cd "$consumer"
+  "$launcher" ocamlmerlin single type-enclosing \
+    -position "$chained_error_position" -index 0 -verbosity 0 \
+    -filename main.ml < main.ml
+)
+chained_requirement_hover=$(
+  cd "$consumer"
+  "$launcher" ocamlmerlin single type-enclosing \
+    -position "$chained_requirement_position" -index 0 -verbosity 0 \
+    -filename main.ml < main.ml
+)
 
 error_hover_compact=$(printf '%s' "$error_hover" | tr -d '[:space:]')
 requirement_hover_compact=$(printf '%s' "$requirement_hover" | tr -d '[:space:]')
+chained_error_hover_compact=$(printf '%s' "$chained_error_hover" | tr -d '[:space:]')
+chained_requirement_hover_compact=$(printf '%s' "$chained_requirement_hover" | tr -d '[:space:]')
 require_text "$error_hover_compact" '"class":"return"'
 require_text "$requirement_hover_compact" '"class":"return"'
+require_text "$chained_error_hover_compact" '"class":"return"'
+require_text "$chained_requirement_hover_compact" '"class":"return"'
 require_one_of "$error_hover" "Timeout" "Storage.Errors.timeout"
 reject_text "$error_hover" "Missing"
 reject_text "$error_hover" "Storage.Errors.missing"
 require_text "$requirement_hover" "Clock"
 reject_text "$requirement_hover" "Logger"
+require_text "$chained_error_hover" "Old_c"
+require_text "$chained_error_hover" "Introduced_two"
+reject_text "$chained_error_hover" "Introduced_one"
+require_text "$chained_requirement_hover" "Metrics"
+reject_text "$chained_requirement_hover" "Clock"
+reject_text "$chained_requirement_hover" "Logger"
 
 test -s "$trace" || fail "installed resolver was not executed by Merlin"
 while IFS= read -r executed; do
@@ -339,6 +444,8 @@ done < "$trace"
 printf '%s\n' "installed resolver: ok"
 printf '%s\n' "raw Merlin error hover: narrow"
 printf '%s\n' "raw Merlin requirement hover: narrow"
+printf '%s\n' "raw Merlin chained error hover: narrow"
+printf '%s\n' "raw Merlin chained requirement hover: narrow"
 
 if [ "$keep_work" = 1 ]; then
   quoted_launcher=$(shell_quote "$launcher")
