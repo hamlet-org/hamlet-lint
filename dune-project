@@ -1,6 +1,8 @@
-(lang dune 3.14)
+(lang dune 3.18)
 
-(name hamlet-lint)
+(using dune_site 0.1)
+
+(name hamlet-subtractor)
 
 (generate_opam_files true)
 
@@ -13,51 +15,43 @@
 (authors "Andrea Simone Costa <andreasimonecosta@gmail.com>")
 
 (source
- (github hamlet-org/hamlet-lint))
+ (github hamlet-org/hamlet-subtractor))
 
-(homepage "https://github.com/hamlet-org/hamlet-lint")
+(homepage "https://github.com/hamlet-org/hamlet-subtractor")
 
-(bug_reports "https://github.com/hamlet-org/hamlet-lint/issues")
+(bug_reports "https://github.com/hamlet-org/hamlet-subtractor/issues")
 
-; Dev-time hamlet-lint package metadata.
-;
-; The generated hamlet-lint.opam file in this repo is what `opam install
-; .` and CI use locally. It pins to a SINGLE OCaml patch — the one the
-; maintainer is currently developing against — and to a SINGLE hamlet
-; version. It is NOT the file that ships to opam-repository.
-;
-; Release-time opam files are produced from hamlet-lint.opam.tmpl by
-; the `release` workflow, which substitutes both a patch-exact OCaml
-; constraint and the exact hamlet version for the package being
-; published. Every published package corresponds to one
-; (hamlet, ocaml-patch) pair, named hamlet-lint.<hamlet>~<ocaml> on
-; opam-repository. See README.md for the versioning model.
+; Development metadata targets the current compiler API. The release template
+; publishes one package for each supported (Hamlet, OCaml patch) pair, where
+; both the Hamlet packages and compiler version are exact constraints.
 (package
- (name hamlet-lint)
- (synopsis "Semantic linter for Hamlet")
+ (name hamlet-subtractor)
+ (sites
+  (libexec resolver))
+ (synopsis "Exact automatic propagation for Hamlet")
  (description
-  "hamlet-lint is a semantic linter for projects using hamlet. It reads .cmt files produced by the OCaml typechecker and flags retroactive widening in `Hamlet.Combinators.catch` and `.provide`: cases where a handler's declared `[%hamlet.te ...]` / `[%hamlet.ts ...]` universe contains tags that upstream's row never carries, a bug OCaml's row subtyping cannot reject at compile time.")
+  "Compiler-assisted automatic propagation for Hamlet. The package installs hamlet-subtractor.ppx together with its matching compiler-libs resolver.")
  (depends
   (ocaml
-   (and
-    (>= 5.4.1)
-    (< 5.4.2)))
+   (= 5.5.0))
+  (dune
+   (>= 3.18))
   hamlet
-  (cppo
-   (and
-    (>= 1.6.9)
-    :build))
+  ppx_hamlet
+  (ppxlib
+   (>= 0.38.0))
+  dune-site
   (yojson
    (>= 2.0.0))
-  (cmdliner
-   (>= 1.1.0))
-  (parsexp
-   (>= 0.17.0))
-  (sexplib0
-   (>= 0.17.0))
   (alcotest
    (and
     (>= 1.7.0)
+    :with-test))
+  (merlin :with-test)
+  (ocaml-lsp-server :with-test)
+  (fmt
+   (and
+    (>= 0.11.0)
     :with-test))
   (odoc :with-doc)
   (ocamlformat

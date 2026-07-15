@@ -1,0 +1,20 @@
+{0 Hamlet automatic propagation subtraction}
+
+Write [\[%hamlet.propagate_e.auto\]] in a [Combinators.catch] handler or
+[\[%hamlet.propagate_s.auto\]] in a [Combinators.provide] handler. The configured
+[hamlet-subtractor.ppx] path types a temporary probe from the current source
+and already-built interfaces, proves a finite exact input row, and returns
+final ordinary OCaml propagation cases before normal type checking. Merlin
+therefore types the same final expansion as Dune and shows the precise effect
+type. When the proof is unavailable, the marker receives an actionable
+diagnostic asking for an explicit [\[%hamlet.te ...\]] or [\[%hamlet.ts ...\]]
+boundary.
+
+{1 Components}
+
+- {!Hamlet_subtractor_core} contains compiler-independent identities, proofs,
+  residual calculations, diagnostics, and effect certificates.
+- {!Hamlet_subtractor_engine} schedules dependent markers deterministically
+  while preserving exact evidence for both Hamlet channels.
+- {!Hamlet_subtractor_generator} creates type-safe final forwarding cases,
+  including linear [Errors.Cases] dispatch for verified complete catalogues.

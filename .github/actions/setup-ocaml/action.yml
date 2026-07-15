@@ -1,0 +1,18 @@
+# Composite action centralising the direct runner bootstrap shared by the
+# minimum-Dune and optional macOS jobs.
+name: "Setup OCaml toolchain"
+description: "Setup ocaml/setup-ocaml with dune-cache enabled."
+
+inputs:
+  ocaml-compiler:
+    description: "OCaml compiler version to install."
+    required: false
+    default: "5.5.0"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: ocaml/setup-ocaml@v3
+      with:
+        ocaml-compiler: ${{ inputs.ocaml-compiler }}
+        dune-cache: true

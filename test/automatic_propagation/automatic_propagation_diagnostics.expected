@@ -1,0 +1,16 @@
+fast_pipeline|requires Dune's classic PPX pipeline|%hamlet.te
+parameter_row|row rooted in a function parameter|%hamlet.te
+named_handler|inline handler|%hamlet.te
+user_or_pattern|not support this preceding pattern|%hamlet.te
+partial_payload|not support this preceding pattern|%hamlet.te
+non_refutation|refutation|write [%hamlet.propagate_e.auto] -> .
+non_last|must be the last arm|explicit arms above
+wildcard_before|a preceding arm uses|rest arms unreachable
+fake_owner|marker is not owned by|%hamlet.te
+wrong_kind|kind mismatch|propagate_e.auto
+propagate_r_alias|propagate_s.auto|requirement propagation
+outside_universe|outside the proven error universe|%hamlet.te
+hidden_alias|abstract or hidden error row|%hamlet.te
+grouped_requirement|groups multiple requirement tags|%hamlet.ts
+external_no_cases|external error union has no|%hamlet.te
+exhausted_warning|warning 11|unused

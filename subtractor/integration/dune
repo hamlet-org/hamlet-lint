@@ -1,0 +1,42 @@
+(library
+ (name hamlet_subtractor_cross_cu_fixture)
+ (package hamlet-subtractor)
+ (wrapped false)
+ (modules hamlet_subtractor_cross_cu_fixture)
+ (libraries hamlet)
+ (preprocess
+  (pps ppx_hamlet)))
+
+(library
+ (name hamlet_subtractor_integration_fixture)
+ (wrapped false)
+ (modules hamlet_subtractor_integration_fixture)
+ (libraries hamlet hamlet_subtractor_cross_cu_fixture)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(alias
+ (name runtest)
+ (deps hamlet_subtractor_integration_fixture.cma))
+
+(rule
+ (alias runtest)
+ (deps
+  (sandbox none)
+  installed_consumer.sh)
+ (action
+  (setenv
+   HAMLET_SUBTRACTOR_DUNE_ACTION
+   1
+   (run %{dep:installed_consumer.sh}))))
+
+(executable
+ (name hamlet_subtractor_fast_driver)
+ (modules hamlet_subtractor_fast_driver)
+ (libraries hamlet_subtractor_ppx ppxlib))
+
+(cram
+ (package hamlet-subtractor)
+ (deps ./hamlet_subtractor_fast_driver.exe))

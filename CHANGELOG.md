@@ -1,14 +1,9 @@
-# hamlet-lint changelog
+# Historical hamlet-lint changelog
 
-Chronological walker / analyzer / compat changes on `main`. Each entry
-is dated and titled by *what changed in the code*, not by a release
-event. There is only one codebase (see `README.md` §2), so version
-numbers like `0.1.0~5.4.1` are packaging labels, not lines of development.
-
-Release events (the opam package for a given `(hamlet, ocaml)` pair)
-live on GitHub Releases and point at the `main` commit they shipped
-from. This file is where you look to understand how the walker
-evolved between two commits.
+This archive records the former lint project that supplied the Typedtree
+analysis now used privately by `hamlet-subtractor`. It does not describe
+commands shipped by this project. Current behavior, releases, and supported
+compiler pairs are documented in the README and `docs/`.
 
 Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
