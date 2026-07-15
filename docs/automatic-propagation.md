@@ -155,12 +155,25 @@ The outer contract incorporates the inner contract. The caller supplies one
 flattened evidence bundle for both helpers; the implementation does not inline
 the inner function body.
 
-A caller may pass the result to ordinary Hamlet code afterwards. For example,
-the nested helper can leave `Offline` and `Denied`, and an ordinary `catch` can
-handle those two cases. The result of a generic call is not yet an exact input
-for a *new* automatic marker: use ordinary complete handling there, or add an
-explicit `%hamlet.te`/`%hamlet.ts` boundary. This is a current tracing limit,
-not extra call-site syntax.
+A caller may continue automatic propagation after a direct generic call. The
+resolver retains the instantiated output certificate, so a later `catch` or
+`provide` marker starts from the generic helper's exact residual row. For
+example, a helper can remove `Missing`, the following marker can remove
+`Offline`, and only `Timeout` reaches the last handler:
+
+```ocaml
+let after_helper =
+  Hamlet.Combinators.catch (recover_missing_to_unit source) ~handler:(function
+    | `Offline -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
+let done_ =
+  Hamlet.Combinators.catch after_helper ~handler:(function
+    | `Timeout -> Hamlet.Combinators.return ())
+```
+
+The direct call needs no special marker or row annotation. The helper
+definition remains the only annotated part.
 
 Version-one generic helpers are deliberately regular:
 
@@ -181,7 +194,7 @@ Automatic propagation can proceed from:
 - a concrete Hamlet computation the resolver can trace;
 - an imported or independently generalized value with a row that can be
   closed without changing types shared with its environment;
-- the proven output of an earlier automatic marker.
+- the proven output of an earlier automatic marker or a direct generic call.
 
 “Independently generalized” means the value owns fresh type variables rather
 than borrowing its effect row from an argument, callback, mutable cell, object,

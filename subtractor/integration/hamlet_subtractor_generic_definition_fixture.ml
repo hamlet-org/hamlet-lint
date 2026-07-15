@@ -60,6 +60,10 @@ type third_errors = [ `Missing | `Offline | `Timeout ]
 
 let first_source : (unit, first_errors, Hamlet.never) Hamlet.t = assert false
 
+let inferred_first_source =
+  if Sys.opaque_identity true then Hamlet.Combinators.fail `Missing
+  else Hamlet.Combinators.fail `Timeout
+
 let second_source : (unit, second_errors, Hamlet.never) Hamlet.t = assert false
 
 let labelled_source : (string, second_errors, Hamlet.never) Hamlet.t =
@@ -100,6 +104,20 @@ let labelled_specialization : (string, [ `Offline ], Hamlet.never) Hamlet.t =
 let nested_and_local_specialization :
     (unit, [ `Offline ], Hamlet.never) Hamlet.t =
   nested_and_local (module Logger_live) nested_requirement_source
+
+let generic_output_to_literal_error_marker :
+    (unit, [ `Timeout ], Hamlet.never) Hamlet.t =
+  Hamlet.Combinators.catch (recover_missing inferred_first_source)
+    ~handler:(function
+    | `Recovery -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
+let nested_generic_output_to_literal_error_marker :
+    (unit, [ `After_timeout | `Offline ], Hamlet.never) Hamlet.t =
+  Hamlet.Combinators.catch (recover_twice_nested third_source)
+    ~handler:(function
+    | `Recovery -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
 
 let ordinary_identity value = value
 

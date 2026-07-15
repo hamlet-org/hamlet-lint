@@ -49,6 +49,7 @@ target. Targets that use no subtractor feature may keep ordinary
 - `[%hamlet.propagate_s.auto]` forwards services not supplied by a `provide`.
 - `let[@hamlet.generic]` makes a reusable helper specialize automatically when
   called directly with a concrete effect.
+- The exact output of a direct generic call can feed the next automatic marker.
 
 One marker is enough. Multiple markers may form a supported linear sequence of
 Hamlet operations. When a row is open or hidden, declare an explicit universe

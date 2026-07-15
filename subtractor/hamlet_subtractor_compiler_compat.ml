@@ -432,24 +432,32 @@ type elaboration = {
 
 let elaborate_typedtree ~context_digest typed =
   match
-    Hamlet_subtractor_compiler_evidence.elaborate_typedtree ~context_digest
-      typed
+    Hamlet_subtractor_compiler_evidence.generic_definitions_typedtree
+      ~context_digest typed
   with
-  | Error refusal -> Error (Evidence_failed refusal)
-  | Ok engine -> (
+  | Error refusal -> Error (Generic_evidence_failed refusal)
+  | Ok generic_definitions -> (
       match
-        Hamlet_subtractor_compiler_evidence.generic_definitions_typedtree
-          ~context_digest typed
+        Hamlet_subtractor_compiler_evidence.generic_calls_typedtree
+          ~context_digest ~definitions:generic_definitions typed
       with
       | Error refusal -> Error (Generic_evidence_failed refusal)
-      | Ok generic_definitions -> (
+      | Ok generic_calls -> (
+          let generic_outputs =
+            generic_calls
+            |> List.concat_map (function
+              | Hamlet_subtractor_compiler_evidence.Ignored_generic_call _ -> []
+              | Hamlet_subtractor_compiler_evidence.Resolved_generic_call call
+                ->
+                  call.attachment_id :: call.marker_links
+                  |> List.map (fun id -> (id, call.output, call.catalogues)))
+          in
           match
-            Hamlet_subtractor_compiler_evidence.generic_calls_typedtree
-              ~context_digest ~definitions:generic_definitions typed
+            Hamlet_subtractor_compiler_evidence.elaborate_typedtree
+              ~generic_outputs ~context_digest typed
           with
-          | Error refusal -> Error (Generic_evidence_failed refusal)
-          | Ok generic_calls ->
-              Ok { engine; generic_definitions; generic_calls }))
+          | Error refusal -> Error (Evidence_failed refusal)
+          | Ok engine -> Ok { engine; generic_definitions; generic_calls }))
 
 let elaborate_prepared ~tool_name ~source_file prepared =
   if String.equal tool_name "ocamldep" then Error Dependency_scan

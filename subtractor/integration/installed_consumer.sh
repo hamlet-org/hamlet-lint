@@ -286,6 +286,11 @@ cat > "$consumer/main.ml" <<'EOF'
 open Hamlet
 open Services
 
+module Errors = struct
+  type offline = [ `Offline ]
+  type denied = [ `Denied ]
+end
+
 let error_source =
   if Sys.opaque_identity true then Combinators.fail `Missing
   else if Sys.opaque_identity true then Combinators.fail `Timeout
@@ -295,12 +300,16 @@ let error_source =
 let generic_error_effect =
   Error_helpers.recover_missing_and_timeout error_source
 
-let error_done =
+let error_after_offline =
   Combinators.catch
     (Error_helpers.recover_missing_and_timeout error_source)
     ~handler:(function
-    | `Offline -> Combinators.return "handled offline"
-    | `Denied -> Combinators.return "handled denied")
+    | #Errors.offline -> Combinators.return "handled offline"
+    | [%hamlet.propagate_e.auto] -> .)
+
+let error_done =
+  Combinators.catch error_after_offline ~handler:(function
+    | #Errors.denied -> Combinators.return "handled denied")
 
 let requirement_source =
   let open Combinators in
@@ -317,15 +326,22 @@ let requirement_source =
 let generic_requirement_effect =
   Requirement_helpers.provide_logger_and_clock requirement_source
 
-let requirement_done =
+let requirement_after_metrics =
   Combinators.provide
     (Requirement_helpers.provide_logger_and_clock requirement_source)
     ~handler:(function
-    | #Metrics.Tag.r as witness -> Metrics.Tag.give witness (module Metrics_live)
+    | #Metrics.Tag.r as witness ->
+        Metrics.Tag.give witness (module Metrics_live)
+    | [%hamlet.propagate_s.auto] -> .)
+
+let requirement_done =
+  Combinators.provide requirement_after_metrics ~handler:(function
     | #Audit.Tag.r as witness -> Audit.Tag.give witness (module Audit_live))
 
 let generic_error_hover = generic_error_effect
+let error_after_offline_hover = error_after_offline
 let generic_requirement_hover = generic_requirement_effect
+let requirement_after_metrics_hover = requirement_after_metrics
 
 let check expected = function
   | Ok actual when String.equal actual expected -> Printf.printf "%s\n" actual
@@ -359,16 +375,29 @@ test -s "$trace" || fail "installed resolver was not executed by Dune"
 generic_error_position=$(awk '/^let generic_error_hover = generic_error_effect$/ {
   print NR ":" (index($0, "generic_error_effect") - 1)
 }' "$consumer/main.ml")
+error_after_offline_position=$(awk '/^let error_after_offline_hover = error_after_offline$/ {
+  print NR ":" (index($0, "error_after_offline") - 1)
+}' "$consumer/main.ml")
 generic_requirement_position=$(awk '/^let generic_requirement_hover = generic_requirement_effect$/ {
   print NR ":" (index($0, "generic_requirement_effect") - 1)
 }' "$consumer/main.ml")
+requirement_after_metrics_position=$(awk '/^let requirement_after_metrics_hover = requirement_after_metrics$/ {
+  print NR ":" (index($0, "requirement_after_metrics") - 1)
+}' "$consumer/main.ml")
 
 test -n "$generic_error_position" || fail "generic error hover position was not found"
+test -n "$error_after_offline_position" || fail "offline error hover position was not found"
 test -n "$generic_requirement_position" || fail "generic requirement hover position was not found"
+test -n "$requirement_after_metrics_position" || fail "metrics requirement hover position was not found"
 
 generic_error_hover=$(
   cd "$consumer"
   "$launcher" ocamlmerlin single type-enclosing -position "$generic_error_position" \
+    -index 0 -verbosity 0 -filename main.ml < main.ml
+)
+error_after_offline_hover=$(
+  cd "$consumer"
+  "$launcher" ocamlmerlin single type-enclosing -position "$error_after_offline_position" \
     -index 0 -verbosity 0 -filename main.ml < main.ml
 )
 generic_requirement_hover=$(
@@ -377,19 +406,33 @@ generic_requirement_hover=$(
     -position "$generic_requirement_position" -index 0 -verbosity 0 \
     -filename main.ml < main.ml
 )
+requirement_after_metrics_hover=$(
+  cd "$consumer"
+  "$launcher" ocamlmerlin single type-enclosing \
+    -position "$requirement_after_metrics_position" -index 0 -verbosity 0 \
+    -filename main.ml < main.ml
+)
 
 generic_error_hover_compact=$(printf '%s' "$generic_error_hover" | tr -d '[:space:]')
+error_after_offline_hover_compact=$(printf '%s' "$error_after_offline_hover" | tr -d '[:space:]')
 generic_requirement_hover_compact=$(printf '%s' "$generic_requirement_hover" | tr -d '[:space:]')
+requirement_after_metrics_hover_compact=$(printf '%s' "$requirement_after_metrics_hover" | tr -d '[:space:]')
 require_text "$generic_error_hover_compact" '"class":"return"'
+require_text "$error_after_offline_hover_compact" '"class":"return"'
 require_text "$generic_requirement_hover_compact" '"class":"return"'
+require_text "$requirement_after_metrics_hover_compact" '"class":"return"'
 require_text "$generic_error_hover" "Offline"
 require_text "$generic_error_hover" "Denied"
 reject_text "$generic_error_hover" "Missing"
 reject_text "$generic_error_hover" "Timeout"
+require_text "$error_after_offline_hover" "Denied"
+reject_text "$error_after_offline_hover" "Offline"
 require_text "$generic_requirement_hover" "Metrics"
 require_text "$generic_requirement_hover" "Audit"
 reject_text "$generic_requirement_hover" "Logger"
 reject_text "$generic_requirement_hover" "Clock"
+require_text "$requirement_after_metrics_hover" "Audit"
+reject_text "$requirement_after_metrics_hover" "Metrics"
 
 test -s "$trace" || fail "installed resolver was not executed by Merlin"
 while IFS= read -r executed; do
@@ -401,7 +444,9 @@ done < "$trace"
 
 printf '%s\n' "installed resolver: ok"
 printf '%s\n' "raw Merlin generic error hover: narrow"
+printf '%s\n' "raw Merlin residual error hover: narrow"
 printf '%s\n' "raw Merlin generic requirement hover: narrow"
+printf '%s\n' "raw Merlin residual requirement hover: narrow"
 
 if [ "$keep_work" = 1 ]; then
   quoted_launcher=$(shell_quote "$launcher")

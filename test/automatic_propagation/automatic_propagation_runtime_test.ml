@@ -332,6 +332,59 @@ let generic_call_inside_chain () =
     | `Timeout -> Hamlet.Combinators.return "timeout")
   |> expect_ok "generic call inside chain" "ready!"
 
+let generic_output_to_error_marker () =
+  let module Errors = struct
+    type missing = [ `Missing ]
+    type timeout = [ `Timeout ]
+    type recovery = [ `Recovery ]
+    type source = [ missing | timeout ]
+  end in
+  let run error =
+    let source : (string, Errors.source, Hamlet.never) Hamlet.t =
+      Hamlet.Combinators.fail error
+    in
+    Hamlet.Combinators.catch
+      (Hamlet_subtractor_generic_helper_producer.recover_missing source)
+      ~handler:(function
+      | #Errors.recovery -> Hamlet.Combinators.return "recovered"
+      | [%hamlet.propagate_e.auto] -> .)
+    |> Hamlet.Combinators.catch ~handler:(function #Errors.timeout ->
+        Hamlet.Combinators.return "timeout")
+  in
+  run `Missing
+  |> expect_ok "generic output marker handles helper error" "recovered";
+  run `Timeout
+  |> expect_ok "generic output marker forwards source error" "timeout"
+
+let generic_output_feeds_following_marker () =
+  let module Errors = struct
+    type missing = [ `Missing ]
+    type offline = [ `Offline ]
+    type timeout = [ `Timeout ]
+    type source = [ missing | offline | timeout ]
+  end in
+  let run error =
+    let source : (unit, Errors.source, Hamlet.never) Hamlet.t =
+      Hamlet.Combinators.fail error
+    in
+    let after =
+      Hamlet.Combinators.catch
+        (Hamlet_subtractor_generic_helper_producer.recover_missing_to_unit
+           source) ~handler:(function
+        | #Errors.offline -> Hamlet.Combinators.return ()
+        | [%hamlet.propagate_e.auto] -> .)
+    in
+    Hamlet.Combinators.catch after ~handler:(function #Errors.timeout ->
+        Hamlet.Combinators.return ())
+    |> Hamlet.Interpreter.run
+  in
+  Alcotest.(check (result unit reject))
+    "the helper handles Missing" (Ok ()) (run `Missing);
+  Alcotest.(check (result unit reject))
+    "the following marker handles Offline" (Ok ()) (run `Offline);
+  Alcotest.(check (result unit reject))
+    "the marker forwards Timeout" (Ok ()) (run `Timeout)
+
 let ordinary_qualified_calls_are_unchanged () =
   Alcotest.(check int)
     "ordinary qualified application" 42
@@ -446,6 +499,28 @@ let generic_helper_forwards_residual_requirement () =
   |> Alcotest.(check (result unit reject))
        "generic helper forwards Clock" (Ok ())
 
+let generic_output_to_requirement_marker () =
+  let source =
+    let open Hamlet.Combinators in
+    let* _logger =
+      Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon
+    in
+    let* _clock = Hamlet_subtractor_generic_helper_producer.Clock.Tag.summon in
+    return ()
+  in
+  Hamlet.Combinators.provide
+    (Hamlet_subtractor_generic_helper_producer.provide_logger
+       (module Generic_logger_live)
+       source)
+    ~handler:((function
+      | #Hamlet_subtractor_generic_helper_producer.Clock.Tag.r as witness ->
+          Hamlet_subtractor_generic_helper_producer.Clock.Tag.give witness
+            (module Generic_clock_live)
+      | [%hamlet.propagate_s.auto] -> .) [@warning "-11"])
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "generic output marker provides residual Clock" (Ok ())
+
 let () =
   Alcotest.run "automatic propagation"
     [
@@ -478,6 +553,10 @@ let () =
             generic_call_inside_catch;
           Alcotest.test_case "generic call inside chain" `Quick
             generic_call_inside_chain;
+          Alcotest.test_case "generic output feeds an error marker" `Quick
+            generic_output_to_error_marker;
+          Alcotest.test_case "generic output feeds a following marker" `Quick
+            generic_output_feeds_following_marker;
           Alcotest.test_case "ordinary qualified calls remain ordinary" `Quick
             ordinary_qualified_calls_are_unchanged;
           Alcotest.test_case "generic helper infers concrete source" `Quick
@@ -502,5 +581,7 @@ let () =
             generic_helper_provides_requirement;
           Alcotest.test_case "generic helper forwards residual requirement"
             `Quick generic_helper_forwards_residual_requirement;
+          Alcotest.test_case "generic output feeds a requirement marker" `Quick
+            generic_output_to_requirement_marker;
         ] );
     ]

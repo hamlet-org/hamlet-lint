@@ -46,6 +46,9 @@ val resolve_typedtree :
 (** Run the deterministic compiler-free engine while Typedtree evidence is live,
     retaining exact certificates for dependent markers. *)
 val elaborate_typedtree :
+  ?generic_outputs:
+    (string * Core.Effect_certificate.t * Hamlet_subtractor_catalogue.t list)
+    list ->
   context_digest:string ->
   Typedtree.structure ->
   (Hamlet_subtractor_engine.t, refusal) result
@@ -61,8 +64,10 @@ type generic_call =
   | Ignored_generic_call of { attachment_id : string }
   | Resolved_generic_call of {
       attachment_id : string;
+      marker_links : string list;
       contract : Core.Generic_contract.t;
       input : Core.Effect_certificate.t;
+      output : Core.Effect_certificate.t;
       catalogues : Hamlet_subtractor_catalogue.t list;
       location : Location.t;
     }

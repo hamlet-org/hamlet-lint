@@ -52,6 +52,13 @@ match __input with
 | _ -> .
 | _ -> assert false
 
+case_error_structural_payload match-1:
+match __input with
+| `Pair (message, code) ->
+    ((Combinators.return (message ^ (string_of_int code)))[@merlin.loc ])
+| `Residual as error -> Hamlet.Combinators.fail error
+| _ -> .
+
 case_error_function match-1:
 match __input with
 | #Local_io.Errors.local_denied -> ((Hamlet.Combinators.return "denied")
