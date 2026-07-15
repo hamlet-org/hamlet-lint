@@ -6,6 +6,11 @@ type error =
       Hamlet_subtractor_core.Protocol.construction_error
   | Transport_failed of Hamlet_subtractor_resolver_transport.error
 
+type resolution = {
+  engine : Hamlet_subtractor_engine.t;
+  generic_attachments : Hamlet_subtractor_core.Protocol.generic_attachment list;
+}
+
 (** Serialize a probe with the compiler binary AST format for the dynamic extent
     of [f]. The file is always removed, including after child failure. *)
 val with_serialized_probe :
@@ -21,5 +26,14 @@ val resolve_prepared :
   source_file:string ->
   Hamlet_subtractor_probe.prepared ->
   (Hamlet_subtractor_engine.t, error) result
+
+val resolve_elaboration :
+  ?program:string ->
+  ?limits:Hamlet_subtractor_resolver_transport.limits ->
+  ?generic_expectations:Hamlet_subtractor_core.Protocol.generic_expectation list ->
+  tool_name:string ->
+  source_file:string ->
+  Hamlet_subtractor_probe.prepared ->
+  (resolution, error) result
 
 val message : error -> string

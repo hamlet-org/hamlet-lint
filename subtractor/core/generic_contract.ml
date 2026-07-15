@@ -637,7 +637,103 @@ let residual_arms ~handled ~explicitly_forwarded =
   List.map (make Residual.Handle) handled
   @ List.map (make Residual.Forward) explicitly_forwarded
 
+let structural_member_set_equal left right =
+  List.length left = List.length right
+  && List.for_all
+       (fun member -> List.exists (Atom.equal_structural member) right)
+       left
+
+let is_structural_leaf leaf =
+  match Leaf.materialization leaf with
+  | Leaf.Structural_variant -> true
+  | Leaf.Direct | Leaf.Error_cases _ | Leaf.Requirement_tag | Leaf.Unavailable _
+    ->
+      false
+
+let structural_leaf_for_member source_leaf member =
+  let source_identity = Leaf.identity source_leaf in
+  let identity =
+    Identity.make
+      ~module_path:(Identity.module_path source_identity)
+      ~declaration_name:
+        (Identity.declaration_name source_identity
+        ^ "__hamlet_structural_"
+        ^ Atom.label member)
+      ~interface_digest:(Identity.interface_digest source_identity)
+  in
+  match identity with
+  | Error _ -> source_leaf
+  | Ok identity -> (
+      match
+        Leaf.error ~identity ~members:[ member ]
+          ~materialization:Leaf.Structural_variant
+      with
+      | Ok leaf -> leaf
+      | Error _ -> source_leaf)
+
+let find_structural_partition_leaf partition member =
+  partition
+  |> List.filter (fun leaf ->
+      is_structural_leaf leaf
+      && List.exists (Atom.equal_structural member) (Leaf.members leaf))
+  |> function
+  | [ leaf ] -> Some leaf
+  | [] | _ :: _ :: _ -> None
+
+let refine_source source partition =
+  let partition = List.sort_uniq Leaf.compare partition in
+  let leaves =
+    Proof.leaves source
+    |> List.concat_map (fun source_leaf ->
+        let matched =
+          Leaf.members source_leaf
+          |> List.filter_map (fun member ->
+              Option.map
+                (fun leaf -> (member, leaf))
+                (find_structural_partition_leaf partition member))
+        in
+        match matched with
+        | [] -> [ source_leaf ]
+        | _ ->
+            Leaf.members source_leaf
+            |> List.map (fun member ->
+                match
+                  List.find_map
+                    (fun (candidate, leaf) ->
+                      if Atom.equal_structural candidate member then Some leaf
+                      else None)
+                    matched
+                with
+                | Some leaf -> leaf
+                | None -> structural_leaf_for_member source_leaf member))
+  in
+  match
+    Proof.create ~kind:(Proof.kind source) ~origin:(Proof.origin source) ~leaves
+  with
+  | Ok proof -> proof
+  | Error _ -> source
+
+let align_partition_leaf source leaf =
+  match Proof.find_leaf source (Leaf.identity leaf) with
+  | Some leaf -> leaf
+  | None when is_structural_leaf leaf -> (
+      Proof.leaves source
+      |> List.filter (fun candidate ->
+          is_structural_leaf candidate
+          && Kind.equal (Leaf.kind candidate) (Leaf.kind leaf)
+          && structural_member_set_equal (Leaf.members candidate)
+               (Leaf.members leaf))
+      |> function
+      | [ candidate ] -> candidate
+      | [] | _ :: _ :: _ -> leaf)
+  | None -> leaf
+
+let align_partition source = List.map (align_partition_leaf source)
+
 let calculate_residual ~source ~handled ~explicitly_forwarded ~recovery =
+  let source = refine_source source (handled @ explicitly_forwarded) in
+  let handled = align_partition source handled in
+  let explicitly_forwarded = align_partition source explicitly_forwarded in
   Residual.calculate ~input:source
     ~arms:(residual_arms ~handled ~explicitly_forwarded)
     ~recovery:(Proof.leaves recovery)
@@ -697,6 +793,11 @@ type instantiated_slot = { slot : slot; residual : Residual.t }
 let instantiate_slot ~input slot =
   let* source = evaluate_expression ~input slot.input in
   let* source = require_exact slot.kind source in
+  let source =
+    refine_source source
+      (slot.claimed @ slot.handled @ slot.explicitly_forwarded)
+  in
+  let claimed = align_partition source slot.claimed in
   let* () =
     match
       List.find_opt
@@ -704,7 +805,7 @@ let instantiate_slot ~input slot =
           match Proof.find_leaf source (Leaf.identity leaf) with
           | Some source_leaf -> not (Leaf.equal source_leaf leaf)
           | None -> true)
-        slot.claimed
+        claimed
     with
     | None -> Ok ()
     | Some leaf ->

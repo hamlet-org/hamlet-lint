@@ -21,6 +21,8 @@
   hamlet_subtractor_compiler_compat
   hamlet_subtractor_compiler_evidence
   hamlet_subtractor_generic_call
+  hamlet_subtractor_generic_contract
+  hamlet_subtractor_generic_definition
   hamlet_subtractor_probe
   hamlet_subtractor_resolver_server
   hamlet_subtractor_version)
@@ -30,7 +32,8 @@
   hamlet_subtractor_engine
   hamlet_subtractor_evidence_support
   ppxlib
-  unix))
+  unix
+  yojson))
 
 (executable
  (name hamlet_subtractor_resolver)
@@ -90,10 +93,7 @@
  (name hamlet_subtractor_ppx)
  (public_name hamlet-subtractor.ppx)
  (kind ppx_rewriter)
- (modules
-  hamlet_subtractor_generic_contract
-  hamlet_subtractor_generic_definition
-  hamlet_subtractor_ppx)
+ (modules hamlet_subtractor_ppx)
  (ppx_runtime_libraries hamlet_subtractor)
  (libraries
   hamlet_subtractor

@@ -4,6 +4,8 @@ type refusal =
   | Typing_failed of typing_failure
   | Probe_lookup_failed of Hamlet_subtractor_probe.lookup_error list
   | Evidence_failed of Hamlet_subtractor_compiler_evidence.refusal
+  | Generic_evidence_failed of
+      Hamlet_subtractor_compiler_evidence.generic_refusal
   | Request_context_mismatch of {
       field : string;
       expected : string;
@@ -20,6 +22,13 @@ and typing_failure = { message : string; location : Location.t option }
 type observation = {
   structure_items : int;
   links : Hamlet_subtractor_probe.typed_observation list;
+}
+
+type elaboration = {
+  engine : Hamlet_subtractor_engine.t;
+  generic_definitions :
+    Hamlet_subtractor_compiler_evidence.generic_definition list;
+  generic_calls : Hamlet_subtractor_compiler_evidence.generic_call list;
 }
 
 type request_context = {
@@ -56,6 +65,12 @@ val resolve_prepared :
   source_file:string ->
   Hamlet_subtractor_probe.prepared ->
   (Hamlet_subtractor_engine.t, refusal) result
+
+val elaborate_prepared :
+  tool_name:string ->
+  source_file:string ->
+  Hamlet_subtractor_probe.prepared ->
+  (elaboration, refusal) result
 
 (** Resolve an already prepared binary Parsetree in the compiler context carried
     by the versioned request. This never reparses source or reruns a PPX. *)

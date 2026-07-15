@@ -27,3 +27,14 @@ let[@hamlet.generic] guarded enabled source =
   Hamlet.Combinators.catch source ~handler:(function
     | `Missing when enabled -> Hamlet.Combinators.success ()
     | [%hamlet.propagate_e.auto] -> .)
+
+type first_errors = [ `Missing | `Timeout ]
+type second_errors = [ `Missing | `Offline ]
+
+let first_source : (unit, first_errors, Hamlet.never) Hamlet.t = assert false
+
+let second_source : (unit, second_errors, Hamlet.never) Hamlet.t = assert false
+
+let first_specialization = recover_missing first_source [%hamlet.forward.auto]
+
+let second_specialization = recover_missing second_source [%hamlet.forward.auto]

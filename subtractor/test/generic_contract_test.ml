@@ -26,6 +26,28 @@ let error_leaf declaration label =
   Leaf.error ~identity ~members:[ atom ] ~materialization:Leaf.Direct
   |> get_ok "error leaf"
 
+let structural_error_leaf declaration label =
+  let identity = identity [ "Structural" ] declaration in
+  let atom =
+    Atom.error ~declaration:identity ~label ~payload:Atom.No_payload
+    |> get_ok "structural error atom"
+  in
+  Leaf.error ~identity ~members:[ atom ]
+    ~materialization:Leaf.Structural_variant
+  |> get_ok "structural error leaf"
+
+let grouped_error_leaf declaration labels =
+  let identity = identity [ "Grouped" ] declaration in
+  let members =
+    List.map
+      (fun label ->
+        Atom.error ~declaration:identity ~label ~payload:Atom.No_payload
+        |> get_ok "grouped error atom")
+      labels
+  in
+  Leaf.error ~identity ~members ~materialization:Leaf.Direct
+  |> get_ok "grouped error leaf"
+
 let requirement_leaf module_name label =
   let identity = identity [ module_name; "Tag" ] "r" in
   let atom =
@@ -58,10 +80,39 @@ let names leaves =
   |> List.map (fun leaf -> Identity.to_string (Leaf.identity leaf))
   |> List.sort String.compare
 
+let labels leaves =
+  leaves
+  |> List.concat_map Leaf.members
+  |> List.map Atom.label
+  |> List.sort String.compare
+
 let check_names label expected evidence =
   Alcotest.(check (list string)) label expected (names (exact_leaves evidence))
 
 let slot_id value = Generic_contract.slot_id value |> get_ok "slot id"
+
+let diagnostic_name = function
+  | Core.Diagnostic.Open_row -> "open row"
+  | Abstract_alias _ -> "abstract alias"
+  | Unresolved_row -> "unresolved row"
+  | Polymorphic_parameter -> "polymorphic parameter"
+  | Opaque_origin -> "opaque origin"
+  | Higher_order_flow -> "higher-order flow"
+  | Invalid_owner -> "invalid owner"
+  | Invalid_error_catalogue _ -> "invalid error catalogue"
+  | Unsupported_pattern -> "unsupported pattern"
+  | Unsupported_handler_rhs -> "unsupported handler body"
+  | Ambiguous_handler -> "ambiguous handler"
+  | Recursive_dependency _ -> "recursive dependency"
+  | Unsupported_payload _ -> "unsupported payload"
+  | Leaf_outside_universe _ -> "leaf outside universe"
+  | Atoms_outside_universe _ -> "atoms outside universe"
+  | Partially_handled_group _ -> "partially handled group"
+  | Unmaterializable_leaf _ -> "unmaterializable leaf"
+  | Grouped_requirement _ -> "grouped requirement"
+  | Duplicate_unguarded_arm _ -> "duplicate arm"
+  | Conflicting_recovery_leaf _ -> "conflicting recovery leaf"
+  | Wrong_channel _ -> "wrong channel"
 
 let test_two_channel_substitution_and_slots () =
   let missing = error_leaf "missing" "Missing" in
@@ -345,6 +396,67 @@ let test_guarded_claim_remains_residual () =
   | _ -> Alcotest.fail "unclaimed handled leaf was accepted"
   end
 
+let test_structural_partition_refines_grouped_caller_leaf () =
+  let missing = structural_error_leaf "missing" "Missing" in
+  let grouped = grouped_error_leaf "caller" [ "Missing"; "Timeout" ] in
+  let slot =
+    Generic_contract.slot
+      ~id:(slot_id "structural-group")
+      ~ordinal:0 ~kind:Kind.Error
+      ~input:(Generic_contract.input Kind.Error)
+      ~claimed:[ missing ] ~handled:[ missing ] ~explicitly_forwarded:[]
+      ~recovery:(Generic_contract.clear Kind.Error)
+    |> get_ok "structural group slot"
+  in
+  let caller = certificate [ grouped ] [] in
+  let instantiated =
+    match Generic_contract.instantiate_slot ~input:caller slot with
+    | Ok instantiated -> instantiated
+    | Error (Generic_contract.Residual_error diagnostic) ->
+        Alcotest.failf "structural group residual: %s"
+          (diagnostic_name diagnostic)
+    | Error (Generic_contract.Opaque_expression _) ->
+        Alcotest.fail "structural group became opaque"
+    | Error (Generic_contract.Certificate_error _) ->
+        Alcotest.fail "structural group certificate failed"
+    | Error (Generic_contract.Evaluated_wrong_kind _) ->
+        Alcotest.fail "structural group changed kind"
+  in
+  Alcotest.(check (list string))
+    "refined input" [ "Missing"; "Timeout" ]
+    (Generic_contract.instantiated_residual instantiated
+    |> Residual.input
+    |> Proof.leaves
+    |> labels);
+  Alcotest.(check (list string))
+    "precise residual" [ "Timeout" ]
+    (Generic_contract.instantiated_residual instantiated
+    |> Residual.residual
+    |> labels)
+
+let test_nominal_partition_does_not_align_by_shape () =
+  let contract_leaf = error_leaf "contract_missing" "Missing" in
+  let caller_leaf = error_leaf "caller_missing" "Missing" in
+  let slot =
+    Generic_contract.slot ~id:(slot_id "nominal-shape") ~ordinal:0
+      ~kind:Kind.Error
+      ~input:(Generic_contract.input Kind.Error)
+      ~claimed:[ contract_leaf ] ~handled:[ contract_leaf ]
+      ~explicitly_forwarded:[]
+      ~recovery:(Generic_contract.clear Kind.Error)
+    |> get_ok "nominal slot"
+  in
+  let caller = certificate [ caller_leaf ] [] in
+  match Generic_contract.instantiate_slot ~input:caller slot with
+  | Error
+      (Generic_contract.Residual_error
+         (Core.Diagnostic.Leaf_outside_universe identity)) ->
+      Alcotest.(check string)
+        "contract identity is reported"
+        (Identity.to_string (Leaf.identity contract_leaf))
+        (Identity.to_string identity)
+  | _ -> Alcotest.fail "nominal leaves aligned by structural shape"
+
 let () =
   Alcotest.run "hamlet-subtractor-generic-contract"
     [
@@ -360,5 +472,9 @@ let () =
             test_duplicate_slots_and_expression_limits;
           Alcotest.test_case "guarded claim remains residual" `Quick
             test_guarded_claim_remains_residual;
+          Alcotest.test_case "structural partition refines grouped caller leaf"
+            `Quick test_structural_partition_refines_grouped_caller_leaf;
+          Alcotest.test_case "nominal partition keeps declaration identity"
+            `Quick test_nominal_partition_does_not_align_by_shape;
         ] );
     ]

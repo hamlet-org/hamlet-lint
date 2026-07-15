@@ -41,7 +41,18 @@ let structural_pattern ~loc atom name =
 let is_claimed claimed leaf =
   List.exists
     (fun candidate ->
-      Identity.equal (Leaf.identity candidate) (Leaf.identity leaf))
+      Identity.equal (Leaf.identity candidate) (Leaf.identity leaf)
+      ||
+      match (Leaf.materialization candidate, Leaf.materialization leaf) with
+      | Leaf.Structural_variant, Leaf.Structural_variant ->
+          let candidate_members = Leaf.members candidate in
+          let leaf_members = Leaf.members leaf in
+          List.length candidate_members = List.length leaf_members
+          && List.for_all
+               (fun member ->
+                 List.exists (Atom.equal_structural member) leaf_members)
+               candidate_members
+      | _ -> false)
     claimed
 
 let callback ~loc ~claimed name =

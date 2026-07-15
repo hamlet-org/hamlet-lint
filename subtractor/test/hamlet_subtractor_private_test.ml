@@ -28,6 +28,8 @@ let fail_refusal = function
       "probe marker lookup failed"
   | Hamlet_subtractor_compiler_compat.Evidence_failed refusal ->
       Hamlet_subtractor_compiler_evidence.refusal_message refusal
+  | Hamlet_subtractor_compiler_compat.Generic_evidence_failed refusal ->
+      Hamlet_subtractor_compiler_evidence.generic_refusal_message refusal
   | Hamlet_subtractor_compiler_compat.Request_context_mismatch
       { field; expected; actual } ->
       Printf.sprintf "context %s mismatch: %s <> %s" field expected actual

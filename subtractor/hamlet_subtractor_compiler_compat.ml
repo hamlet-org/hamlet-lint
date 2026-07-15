@@ -4,6 +4,8 @@ type refusal =
   | Typing_failed of typing_failure
   | Probe_lookup_failed of Hamlet_subtractor_probe.lookup_error list
   | Evidence_failed of Hamlet_subtractor_compiler_evidence.refusal
+  | Generic_evidence_failed of
+      Hamlet_subtractor_compiler_evidence.generic_refusal
   | Request_context_mismatch of {
       field : string;
       expected : string;
@@ -218,7 +220,35 @@ let request_context ~source_file structure =
 let synthetic_unit context_digest =
   "Hamlet_subtractor_probe_" ^ String.sub context_digest 0 16
 
-let resolve_prepared ~tool_name ~source_file prepared =
+type elaboration = {
+  engine : Hamlet_subtractor_engine.t;
+  generic_definitions :
+    Hamlet_subtractor_compiler_evidence.generic_definition list;
+  generic_calls : Hamlet_subtractor_compiler_evidence.generic_call list;
+}
+
+let elaborate_typedtree ~context_digest typed =
+  match
+    Hamlet_subtractor_compiler_evidence.elaborate_typedtree ~context_digest
+      typed
+  with
+  | Error refusal -> Error (Evidence_failed refusal)
+  | Ok engine -> (
+      match
+        Hamlet_subtractor_compiler_evidence.generic_definitions_typedtree
+          ~context_digest typed
+      with
+      | Error refusal -> Error (Generic_evidence_failed refusal)
+      | Ok generic_definitions -> (
+          match
+            Hamlet_subtractor_compiler_evidence.generic_calls_typedtree
+              ~context_digest ~definitions:generic_definitions typed
+          with
+          | Error refusal -> Error (Generic_evidence_failed refusal)
+          | Ok generic_calls ->
+              Ok { engine; generic_definitions; generic_calls }))
+
+let elaborate_prepared ~tool_name ~source_file prepared =
   if String.equal tool_name "ocamldep" then Error Dependency_scan
   else
     try
@@ -237,10 +267,12 @@ let resolve_prepared ~tool_name ~source_file prepared =
       let context_digest = context.context_fingerprint in
       type_in_fresh_store ~unit_name:(synthetic_unit context_digest)
         ~source_file ~restored_paths structure ~normalize:(fun typed ->
-          Hamlet_subtractor_compiler_evidence.elaborate_typedtree
-            ~context_digest typed
-          |> Result.map_error (fun refusal -> Evidence_failed refusal))
+          elaborate_typedtree ~context_digest typed)
     with exn -> Error (Typing_failed (typing_failure exn))
+
+let resolve_prepared ~tool_name ~source_file prepared =
+  elaborate_prepared ~tool_name ~source_file prepared
+  |> Result.map (fun elaboration -> elaboration.engine)
 let request_context_mismatch ~field ~expected ~actual =
   Error (Request_context_mismatch { field; expected; actual })
 
@@ -440,26 +472,100 @@ let marker_results engine =
   in
   loop [] (Hamlet_subtractor_engine.outcomes engine)
 
-let response_for_engine request engine =
+let generic_attachments definitions calls =
+  let rec definitions_loop accumulated = function
+    | [] -> Ok (List.rev accumulated)
+    | (definition : Hamlet_subtractor_compiler_evidence.generic_definition)
+      :: rest -> (
+        match
+          Hamlet_subtractor_core.Generic_resolution.encode_definition
+            definition.contract
+        with
+        | Error _ ->
+            Error
+              (Protocol_construction_failed
+                 (Protocol.Empty_generic_attachment_payload
+                    definition.attachment_id))
+        | Ok payload -> (
+            match
+              Protocol.generic_attachment ~id:definition.attachment_id
+                ~kind:Protocol.Definition ~payload
+            with
+            | Error error -> Error (Protocol_construction_failed error)
+            | Ok attachment -> definitions_loop (attachment :: accumulated) rest
+            ))
+  in
+  let rec calls_loop accumulated = function
+    | [] -> Ok (List.rev accumulated)
+    | (call : Hamlet_subtractor_compiler_evidence.generic_call) :: rest -> (
+        match
+          Hamlet_subtractor_core.Generic_resolution.encode_call
+            ~contract:call.contract ~input:call.input
+        with
+        | Error _ ->
+            Error
+              (Protocol_construction_failed
+                 (Protocol.Empty_generic_attachment_payload call.attachment_id))
+        | Ok payload -> (
+            match
+              Protocol.generic_attachment ~id:call.attachment_id
+                ~kind:Protocol.Call ~payload
+            with
+            | Error error -> Error (Protocol_construction_failed error)
+            | Ok attachment -> calls_loop (attachment :: accumulated) rest))
+  in
+  match definitions_loop [] definitions with
+  | Error _ as error -> error
+  | Ok definition_attachments ->
+      calls_loop [] calls
+      |> Result.map (fun call_attachments ->
+          definition_attachments @ call_attachments)
+
+let response_for_elaboration request elaboration =
+  let engine = elaboration.engine in
   match marker_results engine with
   | Error _ as error -> error
   | Ok results -> (
+      let engine_catalogues = Hamlet_subtractor_engine.catalogues engine in
+      let definition_catalogues =
+        elaboration.generic_definitions
+        |> List.concat_map
+             (fun
+               (definition :
+                 Hamlet_subtractor_compiler_evidence.generic_definition)
+             -> definition.catalogues)
+      in
+      let call_catalogues =
+        elaboration.generic_calls
+        |> List.concat_map
+             (fun (call : Hamlet_subtractor_compiler_evidence.generic_call) ->
+               call.catalogues)
+      in
       let catalogues =
-        Hamlet_subtractor_engine.catalogues engine
+        engine_catalogues @ definition_catalogues @ call_catalogues
+        |> List.sort_uniq Hamlet_subtractor_catalogue.compare
         |> List.map Hamlet_subtractor_catalogue.to_protocol
       in
-      let context_fingerprint = Protocol.request_context_fingerprint request in
-      let descriptor = Protocol.probe_ast request in
       match
-        Protocol.response ~catalogues
-          ~request_id:(Protocol.request_id request)
-          ~context_fingerprint ~ast_digest:descriptor.digest results
+        generic_attachments elaboration.generic_definitions
+          elaboration.generic_calls
       with
-      | Error error -> Error (Protocol_construction_failed error)
-      | Ok response -> (
-          match Protocol.validate_response ~request ~response with
-          | Ok () -> Ok response
-          | Error error -> Error (Protocol_correlation_failed error)))
+      | Error _ as error -> error
+      | Ok generic_attachments -> (
+          let context_fingerprint =
+            Protocol.request_context_fingerprint request
+          in
+          let descriptor = Protocol.probe_ast request in
+          match
+            Protocol.response ~catalogues ~generic_attachments
+              ~request_id:(Protocol.request_id request)
+              ~context_fingerprint ~ast_digest:descriptor.digest results
+          with
+          | Error error -> Error (Protocol_construction_failed error)
+          | Ok response -> (
+              match Protocol.validate_response ~request ~response with
+              | Ok () -> Ok response
+              | Error error -> Error (Protocol_correlation_failed error))))
 
 let resolve_request request =
   match validate_request_tool request with
@@ -489,13 +595,12 @@ let resolve_request request =
                     type_in_fresh_store ~unit_name
                       ~source_file:(Protocol.source_file request)
                       ~restored_paths:paths structure ~normalize:(fun typed ->
-                        Hamlet_subtractor_compiler_evidence.elaborate_typedtree
+                        elaborate_typedtree
                           ~context_digest:
                             (Protocol.request_context_fingerprint request)
-                          typed
-                        |> Result.map_error (fun refusal ->
-                            Evidence_failed refusal))
+                          typed)
                     |> function
                     | Error _ as error -> error
-                    | Ok engine -> response_for_engine request engine
+                    | Ok elaboration ->
+                        response_for_elaboration request elaboration
                   with exn -> Error (Typing_failed (typing_failure exn))))))

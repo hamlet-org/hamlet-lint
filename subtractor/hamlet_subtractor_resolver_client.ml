@@ -13,6 +13,11 @@ type error =
   | Protocol_construction_failed of Protocol.construction_error
   | Transport_failed of Hamlet_subtractor_resolver_transport.error
 
+type resolution = {
+  engine : Hamlet_subtractor_engine.t;
+  generic_attachments : Protocol.generic_attachment list;
+}
+
 let remove_noerr path = try Sys.remove path with Sys_error _ -> ()
 
 let with_serialized_probe ~source_file structure f =
@@ -90,13 +95,22 @@ let request_id ~context_fingerprint descriptor =
 let synthetic_unit context_fingerprint =
   "Hamlet_subtractor_probe_" ^ String.sub context_fingerprint 0 16
 
-let make_request ~tool_name ~source_file prepared descriptor =
+let make_request
+    ~generic_expectations
+    ~tool_name
+    ~source_file
+    prepared
+    descriptor =
   let context =
     Hamlet_subtractor_compiler_compat.request_context ~source_file
       prepared.Hamlet_subtractor_probe.probe_structure
   in
   let context_fingerprint = context.context_fingerprint in
-  Protocol.request
+  let request =
+    if generic_expectations = [] then Protocol.request
+    else Protocol.request_with_generic_expectations ~generic_expectations
+  in
+  request
     ~request_id:(request_id ~context_fingerprint descriptor)
     ~source_file ~tool_name ~probe_ast:descriptor
     ~probe_unit:(Protocol.Synthetic_unit (synthetic_unit context_fingerprint))
@@ -109,11 +123,20 @@ let make_request ~tool_name ~source_file prepared descriptor =
     ~expected_markers:
       (List.map core_marker prepared.Hamlet_subtractor_probe.markers)
 
-let resolve_prepared ?program ?limits ~tool_name ~source_file prepared =
+let resolve_elaboration
+    ?program
+    ?limits
+    ?(generic_expectations = [])
+    ~tool_name
+    ~source_file
+    prepared =
   match
     with_serialized_probe ~source_file
       prepared.Hamlet_subtractor_probe.probe_structure (fun descriptor ->
-        match make_request ~tool_name ~source_file prepared descriptor with
+        match
+          make_request ~generic_expectations ~tool_name ~source_file prepared
+            descriptor
+        with
         | Error error -> Error (Protocol_construction_failed error)
         | Ok request ->
             let response =
@@ -124,11 +147,19 @@ let resolve_prepared ?program ?limits ~tool_name ~source_file prepared =
                     ~program ~arguments:[||] request
             in
             response
-            |> Result.map Hamlet_subtractor_engine.of_response
+            |> Result.map (fun response ->
+                {
+                  engine = Hamlet_subtractor_engine.of_response response;
+                  generic_attachments = Protocol.generic_attachments response;
+                })
             |> Result.map_error (fun error -> Transport_failed error))
   with
   | Error _ as error -> error
   | Ok result -> result
+
+let resolve_prepared ?program ?limits ~tool_name ~source_file prepared =
+  resolve_elaboration ?program ?limits ~tool_name ~source_file prepared
+  |> Result.map (fun resolution -> resolution.engine)
 
 let construction_error_message error =
   let open Protocol in

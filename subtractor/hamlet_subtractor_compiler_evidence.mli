@@ -49,3 +49,35 @@ val elaborate_typedtree :
   context_digest:string ->
   Typedtree.structure ->
   (Hamlet_subtractor_engine.t, refusal) result
+
+type generic_definition = {
+  attachment_id : string;
+  helper : string;
+  contract : Core.Generic_contract.t;
+  catalogues : Hamlet_subtractor_catalogue.t list;
+}
+
+type generic_call = {
+  attachment_id : string;
+  contract : Core.Generic_contract.t;
+  input : Core.Effect_certificate.t;
+  catalogues : Hamlet_subtractor_catalogue.t list;
+  location : Location.t;
+}
+
+type generic_refusal = { location : Location.t; reason : refusal_reason }
+
+val generic_refusal_message : generic_refusal -> string
+
+(** Convert rewritten generic-helper definitions into immutable symbolic
+    contracts while their Typedtree identities are available. *)
+val generic_definitions_typedtree :
+  context_digest:string ->
+  Typedtree.structure ->
+  (generic_definition list, generic_refusal) result
+
+val generic_calls_typedtree :
+  context_digest:string ->
+  definitions:generic_definition list ->
+  Typedtree.structure ->
+  (generic_call list, generic_refusal) result
