@@ -11,6 +11,7 @@ type refusal_reason =
   | Labelled_argument
   | Missing_effect_argument
   | Multiple_placeholders
+  | Pipeline_application
 
 type refusal = { loc : Ppxlib.Location.t; reason : refusal_reason }
 

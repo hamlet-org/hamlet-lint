@@ -101,6 +101,10 @@ let check_multiple () =
     "let value = helper source [%hamlet.forward.auto] [%hamlet.forward.auto]"
     Hamlet_subtractor_generic_call.Multiple_placeholders
 
+let check_pipeline () =
+  check_refusal "let value = source |> helper config [%hamlet.forward.auto]"
+    Hamlet_subtractor_generic_call.Pipeline_application
+
 let () =
   Alcotest.run "generic helper call probe"
     [
@@ -117,5 +121,6 @@ let () =
           Alcotest.test_case "missing effect argument" `Quick
             check_missing_effect;
           Alcotest.test_case "multiple placeholders" `Quick check_multiple;
+          Alcotest.test_case "pipeline application" `Quick check_pipeline;
         ] );
     ]

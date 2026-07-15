@@ -20,6 +20,7 @@ type refusal_reason =
   | Labelled_argument
   | Missing_effect_argument
   | Multiple_placeholders
+  | Pipeline_application
 
 type refusal = { loc : Location.t; reason : refusal_reason }
 
@@ -83,6 +84,10 @@ let claim_extensions claimed expression =
   in
   iterator#expression expression
 
+let is_pipe = function
+  | { pexp_desc = Pexp_ident { txt = Lident "|>"; _ }; _ } -> true
+  | _ -> false
+
 let call_id ~structure_digest ~loc ~ordinal =
   let digest =
     String.concat "\000"
@@ -119,6 +124,9 @@ let prepare structure =
 
       method! expression expression =
         match expression.pexp_desc with
+        | Pexp_apply (pipe, [ (Nolabel, _); (Nolabel, right) ])
+          when is_pipe pipe && has_extension right ->
+            self#reject expression Pipeline_application
         | Pexp_apply (callee, arguments) -> (
             let placeholder_count =
               List.fold_left
