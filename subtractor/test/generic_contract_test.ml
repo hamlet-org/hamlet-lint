@@ -7,15 +7,23 @@ module Kind = Core.Kind
 module Leaf = Core.Leaf
 module Proof = Core.Proof
 module Residual = Core.Residual
+module Type_identity = Core.Type_identity
 
 let get_ok label = function
   | Ok value -> value
   | Error _ -> Alcotest.failf "%s: expected Ok" label
 
+let definition_context = "contract-test"
+
 let identity path declaration =
   Identity.make ~module_path:path ~declaration_name:declaration
-    ~interface_digest:"contract-test"
+    ~interface_digest:definition_context
   |> get_ok "identity"
+
+let identity_with_digest digest path declaration =
+  Identity.make ~module_path:path ~declaration_name:declaration
+    ~interface_digest:digest
+  |> get_ok "identity with digest"
 
 let error_leaf declaration label =
   let identity = identity [ "Errors" ] declaration in
@@ -88,6 +96,74 @@ let labels leaves =
 
 let check_names label expected evidence =
   Alcotest.(check (list string)) label expected (names (exact_leaves evidence))
+
+let rec type_identities value =
+  match Type_identity.view value with
+  | Type_identity.Primitive _ -> []
+  | Type_identity.Tuple elements -> List.concat_map type_identities elements
+  | Type_identity.Nominal { declaration; arguments } ->
+      declaration :: List.concat_map type_identities arguments
+
+let atom_identities atom =
+  Atom.declaration atom
+  ::
+  (match Atom.payload atom with
+  | Atom.No_payload -> []
+  | Atom.Payload payload -> type_identities payload)
+
+let leaf_identities leaf =
+  let materialization =
+    match Leaf.materialization leaf with
+    | Leaf.Error_cases { catalogue; union; _ } -> [ catalogue; union ]
+    | Leaf.Direct | Leaf.Structural_variant | Leaf.Requirement_tag
+    | Leaf.Unavailable _ ->
+        []
+  in
+  Leaf.identity leaf
+  :: (List.concat_map atom_identities (Leaf.members leaf) @ materialization)
+
+let proof_identities proof =
+  let origin =
+    match Proof.origin proof with
+    | Proof.Generalized_value identity | Proof.External_value identity ->
+        [ identity ]
+    | Proof.Closed_row | Proof.Composition _ -> []
+  in
+  origin @ List.concat_map leaf_identities (Proof.leaves proof)
+
+let evidence_identities evidence =
+  match Effect_certificate.evidence_view evidence with
+  | Effect_certificate.Exact_proof proof -> proof_identities proof
+  | Effect_certificate.Opaque_reasons _ -> []
+
+let rec expression_identities expression =
+  match Generic_contract.expression_view expression with
+  | Generic_contract.Input _ -> []
+  | Generic_contract.Evidence { evidence; _ } -> evidence_identities evidence
+  | Generic_contract.Union { terms; _ } ->
+      List.concat_map expression_identities terms
+  | Generic_contract.Subtract
+      { source; handled; explicitly_forwarded; recovery; _ } ->
+      expression_identities source
+      @ List.concat_map leaf_identities handled
+      @ List.concat_map leaf_identities explicitly_forwarded
+      @ expression_identities recovery
+
+let certificate_identities certificate =
+  expression_identities (Generic_contract.errors certificate)
+  @ expression_identities (Generic_contract.requirements certificate)
+
+let contract_identities contract =
+  let slot_identities slot =
+    expression_identities (Generic_contract.slot_input slot)
+    @ List.concat_map leaf_identities (Generic_contract.slot_claimed slot)
+    @ List.concat_map leaf_identities (Generic_contract.slot_handled slot)
+    @ List.concat_map leaf_identities
+        (Generic_contract.slot_explicitly_forwarded slot)
+    @ expression_identities (Generic_contract.slot_recovery slot)
+  in
+  List.concat_map slot_identities (Generic_contract.slots contract)
+  @ certificate_identities (Generic_contract.output contract)
 
 let slot_id value = Generic_contract.slot_id value |> get_ok "slot id"
 
@@ -162,7 +238,7 @@ let test_two_channel_substitution_and_slots () =
   in
   let contract =
     Generic_contract.create ~helper_fingerprint:"Helper.generic/1"
-      ~effect_parameter:1
+      ~definition_context ~effect_parameter:1
       ~slots:[ requirement_slot; error_slot ]
       ~output:after_provide
     |> get_ok "contract"
@@ -214,7 +290,8 @@ let test_two_channel_substitution_and_slots () =
 
 let simple_contract ?(slots = []) () =
   Generic_contract.create ~helper_fingerprint:"Helper.simple/1"
-    ~effect_parameter:0 ~slots ~output:Generic_contract.input_certificate
+    ~definition_context ~effect_parameter:0 ~slots
+    ~output:Generic_contract.input_certificate
   |> get_ok "simple contract"
 
 let test_deterministic_round_trip_and_digest () =
@@ -239,7 +316,163 @@ let test_deterministic_round_trip_and_digest () =
   Alcotest.(check string)
     "stable digest"
     (Generic_contract.digest contract |> get_ok "digest")
-    (Generic_contract.digest decoded |> get_ok "decoded digest")
+    (Generic_contract.digest decoded |> get_ok "decoded digest");
+  Alcotest.(check string)
+    "definition context round trips" definition_context
+    (Generic_contract.definition_context decoded)
+
+let test_portable_identity_rebase () =
+  let foreign_digest = "foreign-cmi" in
+  let local path declaration =
+    identity_with_digest definition_context path declaration
+  in
+  let foreign path declaration =
+    identity_with_digest foreign_digest path declaration
+  in
+  let leaf_identity = local [ "Local" ] "leaf" in
+  let atom_declaration = local [ "Local" ] "atom" in
+  let payload_outer = local [ "Payload" ] "outer" in
+  let payload_inner = local [ "Payload" ] "inner" in
+  let payload_foreign = foreign [ "Dependency" ] "payload" in
+  let payload_tuple =
+    Type_identity.tuple
+      [
+        Type_identity.nominal ~declaration:payload_inner ~arguments:[];
+        Type_identity.nominal ~declaration:payload_foreign ~arguments:[];
+      ]
+    |> get_ok "payload tuple"
+  in
+  let payload =
+    Type_identity.nominal ~declaration:payload_outer
+      ~arguments:[ payload_tuple ]
+  in
+  let member =
+    Atom.error ~declaration:atom_declaration ~label:"Local_error"
+      ~payload:(Atom.Payload payload)
+    |> get_ok "rebase member"
+  in
+  let catalogue = local [ "Local"; "Errors" ] "Cases" in
+  let union = foreign [ "Dependency"; "Errors" ] "union" in
+  let local_leaf =
+    Leaf.error ~identity:leaf_identity ~members:[ member ]
+      ~materialization:(Leaf.Error_cases { catalogue; union; field = "local" })
+    |> get_ok "rebase leaf"
+  in
+  let foreign_leaf_identity = foreign [ "Dependency" ] "foreign_leaf" in
+  let foreign_member =
+    Atom.error ~declaration:foreign_leaf_identity ~label:"Foreign_error"
+      ~payload:Atom.No_payload
+    |> get_ok "foreign member"
+  in
+  let foreign_leaf =
+    Leaf.error ~identity:foreign_leaf_identity ~members:[ foreign_member ]
+      ~materialization:Leaf.Direct
+    |> get_ok "foreign leaf"
+  in
+  let source_proof =
+    Proof.create ~kind:Kind.Error
+      ~origin:(Proof.Generalized_value (local [ "Local" ] "source"))
+      ~leaves:[ local_leaf; foreign_leaf ]
+    |> get_ok "source proof"
+  in
+  let recovery_proof =
+    Proof.create ~kind:Kind.Error
+      ~origin:(Proof.External_value (local [ "Local" ] "recovery"))
+      ~leaves:[ foreign_leaf ]
+    |> get_ok "recovery proof"
+  in
+  let requirement_identity = local [ "Local"; "Service"; "Tag" ] "r" in
+  let requirement_member =
+    Atom.requirement ~declaration:requirement_identity ~label:"Service"
+      ~payload:Atom.No_payload
+    |> get_ok "requirement member"
+  in
+  let requirement_leaf =
+    Leaf.requirement ~identity:requirement_identity ~member:requirement_member
+      ~materialization:Leaf.Requirement_tag
+    |> get_ok "requirement leaf"
+  in
+  let requirement_proof =
+    Proof.create ~kind:Kind.Requirement
+      ~origin:(Proof.External_value (local [ "Local" ] "requirements"))
+      ~leaves:[ requirement_leaf ]
+    |> get_ok "requirement proof"
+  in
+  let error_output =
+    Generic_contract.subtract ~operation:Proof.Catch ~inputs:[]
+      ~source:(Generic_contract.exact source_proof)
+      ~handled:[ local_leaf ] ~explicitly_forwarded:[ foreign_leaf ]
+      ~recovery:(Generic_contract.exact recovery_proof)
+    |> get_ok "error output"
+  in
+  let output =
+    Generic_contract.certificate ~errors:error_output
+      ~requirements:(Generic_contract.exact requirement_proof)
+    |> get_ok "rebase output"
+  in
+  let slot =
+    Generic_contract.slot ~id:(slot_id "portable") ~ordinal:0 ~kind:Kind.Error
+      ~input:(Generic_contract.exact source_proof)
+      ~claimed:[ local_leaf; foreign_leaf ]
+      ~handled:[ local_leaf ] ~explicitly_forwarded:[ foreign_leaf ]
+      ~recovery:(Generic_contract.exact recovery_proof)
+    |> get_ok "portable slot"
+  in
+  let contract =
+    Generic_contract.create ~helper_fingerprint:"Helper.portable/1"
+      ~definition_context ~effect_parameter:0 ~slots:[ slot ] ~output
+    |> get_ok "portable contract"
+  in
+  let module_prefix = [ "Installed_unit"; "Nested" ] in
+  let interface_digest = "installed-cmi" in
+  let rebased =
+    Generic_contract.rebase ~module_prefix ~interface_digest contract
+    |> get_ok "rebase contract"
+  in
+  Alcotest.(check string)
+    "definition context follows installed cmi" interface_digest
+    (Generic_contract.definition_context rebased);
+  let before = contract_identities contract in
+  let after = contract_identities rebased in
+  Alcotest.(check int)
+    "identity traversal is stable" (List.length before) (List.length after);
+  List.iter2
+    (fun original relocated ->
+      if String.equal (Identity.interface_digest original) definition_context
+      then (
+        Alcotest.(check (list string))
+          "local module path is prefixed"
+          (module_prefix @ Identity.module_path original)
+          (Identity.module_path relocated);
+        Alcotest.(check string)
+          "local digest uses installed cmi" interface_digest
+          (Identity.interface_digest relocated))
+      else
+        Alcotest.(check bool)
+          "dependency identity is preserved" true
+          (Identity.equal original relocated))
+    before after;
+  let encoded = Generic_contract.encode rebased |> get_ok "encode rebased" in
+  let decoded = Generic_contract.decode encoded |> get_ok "decode rebased" in
+  Alcotest.(check bool)
+    "rebased contract remains serializable" true
+    (Generic_contract.equal rebased decoded);
+  begin match
+    Generic_contract.rebase ~module_prefix:[] ~interface_digest contract
+  with
+  | Error (Generic_contract.Invalid_rebase_target Identity.Empty_module_path) ->
+      ()
+  | Error _ | Ok _ -> Alcotest.fail "empty rebase prefix was accepted"
+  end;
+  begin match
+    Generic_contract.rebase ~module_prefix ~interface_digest:"" contract
+  with
+  | Error
+      (Generic_contract.Invalid_rebase_target Identity.Empty_interface_digest)
+    ->
+      ()
+  | Error _ | Ok _ -> Alcotest.fail "empty installed digest was accepted"
+  end
 
 let test_malformed_and_oversized_contracts () =
   begin match Generic_contract.decode "{" with
@@ -261,7 +494,7 @@ let test_malformed_and_oversized_contracts () =
   in
   begin match Generic_contract.decode wrong_version with
   | Error
-      (Generic_contract.Schema_version_mismatch { expected = 2; actual = 999 })
+      (Generic_contract.Schema_version_mismatch { expected = 3; actual = 999 })
     ->
       ()
   | _ -> Alcotest.fail "schema mismatch was accepted"
@@ -306,7 +539,8 @@ let test_malformed_and_oversized_contracts () =
   let oversized_contract =
     Generic_contract.create
       ~helper_fingerprint:(String.make Generic_contract.max_encoded_bytes 'h')
-      ~effect_parameter:0 ~slots:[] ~output:Generic_contract.input_certificate
+      ~definition_context ~effect_parameter:0 ~slots:[]
+      ~output:Generic_contract.input_certificate
     |> get_ok "oversized contract value"
   in
   begin match Generic_contract.encode oversized_contract with
@@ -325,7 +559,7 @@ let test_duplicate_slots_and_expression_limits () =
   in
   begin match
     Generic_contract.create ~helper_fingerprint:"Helper.duplicate/1"
-      ~effect_parameter:0
+      ~definition_context ~effect_parameter:0
       ~slots:[ make_slot "same" 0; make_slot "same" 1 ]
       ~output:Generic_contract.input_certificate
   with
@@ -351,10 +585,26 @@ let test_duplicate_slots_and_expression_limits () =
   in
   begin match
     Generic_contract.create ~helper_fingerprint:"Helper.deep/1"
-      ~effect_parameter:0 ~slots:[] ~output
+      ~definition_context ~effect_parameter:0 ~slots:[] ~output
   with
   | Error (Generic_contract.Expression_too_deep _) -> ()
   | _ -> Alcotest.fail "overly deep expression was accepted"
+  end;
+  begin match
+    Generic_contract.create ~helper_fingerprint:"Helper.context/1"
+      ~definition_context:"" ~effect_parameter:0 ~slots:[]
+      ~output:Generic_contract.input_certificate
+  with
+  | Error Generic_contract.Empty_definition_context -> ()
+  | Error _ | Ok _ -> Alcotest.fail "empty definition context was accepted"
+  end;
+  begin match
+    Generic_contract.create ~helper_fingerprint:"Helper.context/1"
+      ~definition_context:" digest " ~effect_parameter:0 ~slots:[]
+      ~output:Generic_contract.input_certificate
+  with
+  | Error Generic_contract.Definition_context_has_surrounding_whitespace -> ()
+  | Error _ | Ok _ -> Alcotest.fail "definition context whitespace was accepted"
   end
 
 let test_guarded_claim_remains_residual () =
@@ -487,6 +737,8 @@ let () =
             test_two_channel_substitution_and_slots;
           Alcotest.test_case "deterministic round trip and digest" `Quick
             test_deterministic_round_trip_and_digest;
+          Alcotest.test_case "portable identities rebase recursively" `Quick
+            test_portable_identity_rebase;
           Alcotest.test_case "malformed and oversized payloads" `Quick
             test_malformed_and_oversized_contracts;
           Alcotest.test_case "duplicate slots and expression limits" `Quick

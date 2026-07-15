@@ -3667,7 +3667,7 @@ let helper_fingerprint helper =
   Digest.string ("hamlet-subtractor-generic-helper-v1:" ^ helper)
   |> Digest.to_hex
 
-let retained_generic_contract helper path env =
+let retained_contract_payload helper path env =
   let companion = Hamlet_subtractor_generic_contract.companion_name helper in
   let declaration =
     try
@@ -3684,17 +3684,34 @@ let retained_generic_contract helper path env =
   attribute_values Hamlet_subtractor_generic_contract.retained_attribute_name
     declaration.Types.md_attributes
   |> function
-  | [ payload ] -> (
-      match Core.Generic_resolution.decode_definition payload with
-      | Ok contract -> contract
-      | Error _ ->
-          refuse
-            (Core_validation_failed ("invalid retained contract for " ^ helper))
-      )
+  | [ payload ] -> payload
   | _ ->
       refuse
         (Core_validation_failed
            ("missing or duplicate retained contract for " ^ helper))
+
+let retained_contract_identity path =
+  let compilation_unit, suffix =
+    match split_path path with
+    | Some flattened -> flattened
+    | None -> refuse Higher_order_flow
+  in
+  let module_prefix =
+    match List.rev (compilation_unit :: suffix) with
+    | _helper :: (_ :: _ as reversed_prefix) -> List.rev reversed_prefix
+    | [] | [ _ ] ->
+        refuse
+          (Core_validation_failed
+             "retained generic helper has no compilation-unit path")
+  in
+  let interface_digest =
+    try Env.crc_of_unit compilation_unit |> Digest.BLAKE128.to_hex
+    with _ ->
+      refuse
+        (Core_validation_failed
+           ("missing interface digest for " ^ compilation_unit))
+  in
+  (module_prefix, interface_digest)
 
 let generic_contract_for_callee ~definitions callee =
   match callee.exp_desc with
@@ -3708,7 +3725,29 @@ let generic_contract_for_callee ~definitions callee =
             definitions
         with
         | Some definition -> definition.contract
-        | None -> retained_generic_contract helper path callee.exp_env
+        | None -> (
+            let contract =
+              retained_contract_payload helper path callee.exp_env
+              |> Core.Generic_resolution.decode_definition
+              |> function
+              | Ok contract -> contract
+              | Error _ ->
+                  refuse
+                    (Core_validation_failed
+                       ("invalid retained contract for " ^ helper))
+            in
+            let module_prefix, interface_digest =
+              retained_contract_identity path
+            in
+            match
+              Core.Generic_contract.rebase ~module_prefix ~interface_digest
+                contract
+            with
+            | Ok contract -> contract
+            | Error _ ->
+                refuse
+                  (Core_validation_failed
+                     ("invalid retained contract identity for " ^ helper)))
       in
       if
         not
@@ -4208,8 +4247,8 @@ let generic_contract_for_binding ~context_digest ~definitions nodes binding =
   let fingerprint = helper_fingerprint helper in
   let contract =
     Core.Generic_contract.create ~helper_fingerprint:fingerprint
-      ~effect_parameter:source_parameter ~slots:(List.rev !ordered_slots)
-      ~output
+      ~definition_context:context_digest ~effect_parameter:source_parameter
+      ~slots:(List.rev !ordered_slots) ~output
     |> function
     | Ok contract -> contract
     | Error _ -> refuse (Core_validation_failed "invalid generic contract")
@@ -4239,61 +4278,9 @@ let generic_definitions_typedtree ~context_digest structure =
   in
   loop [] (List.rev nodes.helpers)
 
-let retained_contract_payload helper path env =
-  let companion = Hamlet_subtractor_generic_contract.companion_name helper in
-  let declaration =
-    try
-      match path with
-      | Path.Pdot (parent, _) ->
-          Env.find_module (Path.Pdot (parent, companion)) env
-      | Path.Pident _ ->
-          Env.find_module_by_name (Longident.Lident companion) env |> snd
-      | Path.Papply _ | Path.Pextra_ty _ -> refuse Higher_order_flow
-    with Not_found ->
-      refuse
-        (Core_validation_failed ("missing retained contract for " ^ helper))
-  in
-  attribute_values Hamlet_subtractor_generic_contract.retained_attribute_name
-    declaration.Types.md_attributes
-  |> function
-  | [ payload ] -> payload
-  | _ ->
-      refuse
-        (Core_validation_failed
-           ("missing or duplicate retained contract for " ^ helper))
-
 let contract_for_call ~definitions callee =
   match callee.exp_desc with
-  | Texp_ident (path, _, _) ->
-      let helper = Path.last path in
-      let local =
-        definitions
-        |> List.find_opt (fun (definition : generic_definition) ->
-            String.equal definition.helper helper)
-      in
-      let contract =
-        match local with
-        | Some definition -> definition.contract
-        | None -> (
-            retained_contract_payload helper path callee.exp_env
-            |> Core.Generic_resolution.decode_definition
-            |> function
-            | Ok contract -> contract
-            | Error _ ->
-                refuse
-                  (Core_validation_failed
-                     ("invalid retained contract for " ^ helper)))
-      in
-      let fingerprint = helper_fingerprint helper in
-      if
-        not
-          (String.equal fingerprint
-             (Core.Generic_contract.helper_fingerprint contract))
-      then
-        refuse
-          (Core_validation_failed
-             ("generic helper fingerprint mismatch for " ^ helper));
-      contract
+  | Texp_ident _ -> generic_contract_for_callee ~definitions callee
   | _ -> refuse Fake_or_aliased_callee
 
 let exact_generic_call_input ~context_digest ~bindings source =

@@ -1,4 +1,4 @@
-let schema_version = 2
+let schema_version = 3
 let max_encoded_bytes = 1_048_576
 let max_slots = 256
 let max_expression_depth = 64
@@ -466,6 +466,7 @@ let equal_slot first second = compare_slot first second = 0
 
 type t = {
   helper_fingerprint : string;
+  definition_context : string;
   effect_parameter : int;
   slots : slot list;
   output : symbolic_certificate;
@@ -474,6 +475,8 @@ type t = {
 type validation_error =
   | Empty_helper_fingerprint
   | Helper_fingerprint_has_surrounding_whitespace
+  | Empty_definition_context
+  | Definition_context_has_surrounding_whitespace
   | Negative_effect_parameter of int
   | Duplicate_slot_id of slot_id
   | Duplicate_slot_ordinal of int
@@ -585,11 +588,20 @@ let find_duplicate projection compare values =
   in
   loop values
 
-let create ~helper_fingerprint ~effect_parameter ~slots ~output =
+let create
+    ~helper_fingerprint
+    ~definition_context
+    ~effect_parameter
+    ~slots
+    ~output =
   let trimmed = String.trim helper_fingerprint in
+  let trimmed_context = String.trim definition_context in
   if String.equal trimmed "" then Error Empty_helper_fingerprint
   else if not (String.equal trimmed helper_fingerprint) then
     Error Helper_fingerprint_has_surrounding_whitespace
+  else if String.equal trimmed_context "" then Error Empty_definition_context
+  else if not (String.equal trimmed_context definition_context) then
+    Error Definition_context_has_surrounding_whitespace
   else if effect_parameter < 0 then
     Error (Negative_effect_parameter effect_parameter)
   else if List.length slots > max_slots then
@@ -605,14 +617,162 @@ let create ~helper_fingerprint ~effect_parameter ~slots ~output =
             match validate_contract_limits slots output with
             | Error _ as error -> error
             | Ok () ->
-                Ok { helper_fingerprint; effect_parameter; slots; output }))
+                Ok
+                  {
+                    helper_fingerprint;
+                    definition_context;
+                    effect_parameter;
+                    slots;
+                    output;
+                  }))
 
 let helper_fingerprint contract = contract.helper_fingerprint
+let definition_context contract = contract.definition_context
 let effect_parameter contract = contract.effect_parameter
 let slots contract = contract.slots
 let output contract = contract.output
 let compare = Stdlib.compare
 let equal first second = compare first second = 0
+
+type rebase_error =
+  | Invalid_rebase_target of Identity.validation_error
+  | Invalid_rebased_contract of validation_error
+
+let rebase ~module_prefix ~interface_digest contract =
+  let target_validation =
+    Identity.make ~module_path:module_prefix
+      ~declaration_name:"hamlet_subtractor_rebase_target" ~interface_digest
+  in
+  match target_validation with
+  | Error error -> Error (Invalid_rebase_target error)
+  | Ok _ ->
+      let rebase_identity identity =
+        if
+          String.equal
+            (Identity.interface_digest identity)
+            contract.definition_context
+        then
+          Identity.make
+            ~module_path:(module_prefix @ Identity.module_path identity)
+            ~declaration_name:(Identity.declaration_name identity)
+            ~interface_digest
+          |> Result.get_ok
+        else identity
+      in
+      let rec rebase_type_identity value =
+        match Type_identity.view value with
+        | Type_identity.Primitive primitive -> Type_identity.primitive primitive
+        | Type_identity.Tuple elements ->
+            elements
+            |> List.map rebase_type_identity
+            |> Type_identity.tuple
+            |> Result.get_ok
+        | Type_identity.Nominal { declaration; arguments } ->
+            Type_identity.nominal
+              ~declaration:(rebase_identity declaration)
+              ~arguments:(List.map rebase_type_identity arguments)
+      in
+      let rebase_atom atom =
+        let payload =
+          match Atom.payload atom with
+          | Atom.No_payload -> Atom.No_payload
+          | Atom.Payload payload -> Atom.Payload (rebase_type_identity payload)
+        in
+        Atom.make ~kind:(Atom.kind atom)
+          ~declaration:(rebase_identity (Atom.declaration atom))
+          ~label:(Atom.label atom) ~payload
+        |> Result.get_ok
+      in
+      let rebase_materialization = function
+        | Leaf.Direct -> Leaf.Direct
+        | Leaf.Structural_variant -> Leaf.Structural_variant
+        | Leaf.Error_cases { catalogue; union; field } ->
+            Leaf.Error_cases
+              {
+                catalogue = rebase_identity catalogue;
+                union = rebase_identity union;
+                field;
+              }
+        | Leaf.Requirement_tag -> Leaf.Requirement_tag
+        | Leaf.Unavailable reason -> Leaf.Unavailable reason
+      in
+      let rebase_leaf leaf =
+        let identity = rebase_identity (Leaf.identity leaf) in
+        let members = List.map rebase_atom (Leaf.members leaf) in
+        let materialization =
+          rebase_materialization (Leaf.materialization leaf)
+        in
+        match Leaf.kind leaf with
+        | Kind.Error ->
+            Leaf.error ~identity ~members ~materialization |> Result.get_ok
+        | Kind.Requirement -> (
+            match members with
+            | [ member ] ->
+                Leaf.requirement ~identity ~member ~materialization
+                |> Result.get_ok
+            | [] | _ :: _ :: _ -> assert false)
+      in
+      let rebase_origin = function
+        | Proof.Closed_row -> Proof.Closed_row
+        | Proof.Generalized_value identity ->
+            Proof.Generalized_value (rebase_identity identity)
+        | Proof.External_value identity ->
+            Proof.External_value (rebase_identity identity)
+        | Proof.Composition composition -> Proof.Composition composition
+      in
+      let rebase_proof proof =
+        Proof.create ~kind:(Proof.kind proof)
+          ~origin:(rebase_origin (Proof.origin proof))
+          ~leaves:(List.map rebase_leaf (Proof.leaves proof))
+        |> Result.get_ok
+      in
+      let rebase_evidence evidence =
+        match Effect_certificate.evidence_view evidence with
+        | Effect_certificate.Exact_proof proof ->
+            Effect_certificate.exact (rebase_proof proof)
+        | Effect_certificate.Opaque_reasons reasons ->
+            Effect_certificate.opaque_many reasons |> Option.get
+      in
+      let rec rebase_expression = function
+        | Input_expression _ as expression -> expression
+        | Evidence_expression { kind; evidence } ->
+            Evidence_expression { kind; evidence = rebase_evidence evidence }
+        | Union_expression row ->
+            Union_expression
+              { row with terms = List.map rebase_expression row.terms }
+        | Subtract_expression row ->
+            Subtract_expression
+              {
+                row with
+                source = rebase_expression row.source;
+                handled = List.map rebase_leaf row.handled;
+                explicitly_forwarded =
+                  List.map rebase_leaf row.explicitly_forwarded;
+                recovery = rebase_expression row.recovery;
+              }
+      in
+      let rebase_certificate certificate =
+        {
+          errors = rebase_expression certificate.errors;
+          requirements = rebase_expression certificate.requirements;
+        }
+      in
+      let rebase_slot slot =
+        {
+          slot with
+          input = rebase_expression slot.input;
+          claimed = List.map rebase_leaf slot.claimed;
+          handled = List.map rebase_leaf slot.handled;
+          explicitly_forwarded = List.map rebase_leaf slot.explicitly_forwarded;
+          recovery = rebase_expression slot.recovery;
+        }
+      in
+      create ~helper_fingerprint:contract.helper_fingerprint
+        ~definition_context:interface_digest
+        ~effect_parameter:contract.effect_parameter
+        ~slots:(List.map rebase_slot contract.slots)
+        ~output:(rebase_certificate contract.output)
+      |> Result.map_error (fun error -> Invalid_rebased_contract error)
 
 type evaluation_error =
   | Opaque_expression of {
@@ -962,6 +1122,7 @@ let contract_to_json contract =
       ("protocol", `String "hamlet-subtractor-generic-contract");
       ("schema_version", `Int schema_version);
       ("helper_fingerprint", `String contract.helper_fingerprint);
+      ("definition_context", `String contract.definition_context);
       ("effect_parameter", `Int contract.effect_parameter);
       ("slots", `List (List.map slot_to_json contract.slots));
       ("output", certificate_to_json contract.output);
@@ -1160,6 +1321,8 @@ let decode_value json =
   in
   let* fingerprint_json = field path "helper_fingerprint" fields in
   let* helper_fingerprint = string [ "helper_fingerprint" ] fingerprint_json in
+  let* context_json = field path "definition_context" fields in
+  let* definition_context = string [ "definition_context" ] context_json in
   let* parameter_json = field path "effect_parameter" fields in
   let* effect_parameter = int [ "effect_parameter" ] parameter_json in
   let* slots_json = field path "slots" fields in
@@ -1167,7 +1330,8 @@ let decode_value json =
   let* slots = decode_list slot_of_json [ "slots" ] slot_values in
   let* output_json = field path "output" fields in
   let* output = certificate_of_json [ "output" ] output_json in
-  create ~helper_fingerprint ~effect_parameter ~slots ~output
+  create ~helper_fingerprint ~definition_context ~effect_parameter ~slots
+    ~output
   |> Result.map_error (fun error -> Invalid_contract error)
 
 let decode encoded =

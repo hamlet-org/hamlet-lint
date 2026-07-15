@@ -624,8 +624,9 @@ let test_generic_nested_composition_finalization () =
     ]
   in
   let contract =
-    Exact_contract.create ~helper_fingerprint:"outer-test" ~effect_parameter:1
-      ~slots ~output:Exact_contract.input_certificate
+    Exact_contract.create ~helper_fingerprint:"outer-test"
+      ~definition_context:"outer-test-context" ~effect_parameter:1 ~slots
+      ~output:Exact_contract.input_certificate
     |> get_ok "composed contract"
   in
   let payload =

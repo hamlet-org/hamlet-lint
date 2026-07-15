@@ -48,7 +48,7 @@ let fixture () =
   in
   let contract =
     Generic_contract.create ~helper_fingerprint:"Fixture.helper"
-      ~effect_parameter:0 ~slots:[ slot ] ~output
+      ~definition_context:"digest" ~effect_parameter:0 ~slots:[ slot ] ~output
     |> get_ok "contract"
   in
   (contract, certificate (proof Kind.Error [ missing; timeout ]))

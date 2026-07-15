@@ -155,6 +155,8 @@ type t
 type validation_error =
   | Empty_helper_fingerprint
   | Helper_fingerprint_has_surrounding_whitespace
+  | Empty_definition_context
+  | Definition_context_has_surrounding_whitespace
   | Negative_effect_parameter of int
   | Duplicate_slot_id of slot_id
   | Duplicate_slot_ordinal of int
@@ -166,17 +168,32 @@ type validation_error =
 
 val create :
   helper_fingerprint:string ->
+  definition_context:string ->
   effect_parameter:int ->
   slots:slot list ->
   output:symbolic_certificate ->
   (t, validation_error) result
 
 val helper_fingerprint : t -> string
+val definition_context : t -> string
 val effect_parameter : t -> int
 val slots : t -> slot list
 val output : t -> symbolic_certificate
 val compare : t -> t -> int
 val equal : t -> t -> bool
+
+type rebase_error =
+  | Invalid_rebase_target of Identity.validation_error
+  | Invalid_rebased_contract of validation_error
+
+(** Relocate identities created in the helper's definition context to the
+    installed compilation-unit identity. Identities originating elsewhere are
+    preserved. *)
+val rebase :
+  module_prefix:string list ->
+  interface_digest:string ->
+  t ->
+  (t, rebase_error) result
 
 type evaluation_error =
   | Opaque_expression of {
