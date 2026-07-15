@@ -20,6 +20,8 @@ This is the complete feature gate. It checks:
 - the final source and Typedtree seen by raw Merlin;
 - invalidation after a dependency interface changes;
 - expected refusals and explicit fallbacks;
+- arbitrarily long linear marker chains, including effects introduced between
+  markers, plus refusal of a two-predecessor marker merge;
 - linear generation for cross-module `Errors.Cases` catalogues.
 
 The same gate is available as
@@ -52,12 +54,17 @@ tests a separate project whose only PPX configuration is:
 ```
 
 This catches accidental dependencies on the source checkout. It verifies the
-runtime result, exact Merlin hovers, and the installed resolver path.
+runtime result, exact Merlin hovers, and the installed resolver path. Its
+generated `main.ml` includes:
 
-Use `make installed-consumer-keep` to preserve the fixture. The command prints
-its location, editor launch commands, and a cleanup command. Close the editor
-before cleanup because an editor process may still be using the temporary opam
-paths.
+- three automatic catches that handle old and newly introduced errors;
+- a requirement chain that introduces `Metrics` after providing `Logger`, then
+  proves that providing `Clock` leaves only `Metrics`.
+
+Use `make installed-consumer-keep` to preserve those examples as a real fixture
+project. The command prints its location, editor launch commands, and a cleanup
+command. Close the editor before cleanup because an editor process may still be
+using the temporary opam paths.
 
 ## Adding coverage
 
