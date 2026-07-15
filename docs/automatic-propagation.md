@@ -155,6 +155,13 @@ The outer contract incorporates the inner contract. The caller supplies one
 flattened evidence bundle for both helpers; the implementation does not inline
 the inner function body.
 
+A caller may pass the result to ordinary Hamlet code afterwards. For example,
+the nested helper can leave `Offline` and `Denied`, and an ordinary `catch` can
+handle those two cases. The result of a generic call is not yet an exact input
+for a *new* automatic marker: use ordinary complete handling there, or add an
+explicit `%hamlet.te`/`%hamlet.ts` boundary. This is a current tracing limit,
+not extra call-site syntax.
+
 Version-one generic helpers are deliberately regular:
 
 - a named, non-recursive function;
@@ -174,7 +181,7 @@ Automatic propagation can proceed from:
 - a concrete Hamlet computation the resolver can trace;
 - an imported or independently generalized value with a row that can be
   closed without changing types shared with its environment;
-- the proven output of an earlier automatic marker or generic-helper contract.
+- the proven output of an earlier automatic marker.
 
 “Independently generalized” means the value owns fresh type variables rather
 than borrowing its effect row from an argument, callback, mutable cell, object,
