@@ -1,69 +1,31 @@
-# Automatic Propagation
+# Automatic propagation
 
-Hamlet effects have three type parameters:
+A Hamlet computation has three type parameters:
 
 ```ocaml
 ('value, 'errors, 'requirements) Hamlet.t
 ```
 
-`'errors` records the failures that may be raised. `'requirements` records the
-services that must still be provided. Automatic propagation lets a handler
-deal with selected entries and forward the rest without manually listing the
-complete input row.
+`'errors` lists failures that may be raised. `'requirements` lists services
+that still need an implementation.
 
-The two markers are:
+Automatic propagation lets a handler process some entries and forward the
+rest without writing the complete input row by hand:
 
 ```ocaml
-[%hamlet.propagate_e.auto]
-[%hamlet.propagate_s.auto]
+[%hamlet.propagate_e.auto]  (* errors *)
+[%hamlet.propagate_s.auto]  (* services *)
 ```
 
-`e` means errors. `s` means services or requirements. `propagate_s.auto` is the
-only requirement spelling. There is no separate `propagate_r.auto` behavior.
-
-## Overview
-
-The subtractor is the compilation step that replaces an automatic marker with
-ordinary, typed OCaml propagation code. It proves the finite input row at the
-handler, removes the entries handled by complete preceding arms, and emits the
-exact residual handler before the normal compiler or Merlin types the module.
-
-This gives the feature three important properties:
-
-1. Merlin hover shows the final narrow effect type, including unsaved changes
-   in the current buffer, within the supported compiler configuration.
-2. Dune and Merlin type the same final expansion.
-3. If Hamlet cannot prove an exact finite row, compilation fails at the marker
-   and asks for an explicit `%hamlet.te` or `%hamlet.ts` annotation. Hamlet does
-   not guess or silently widen the result.
-
-There is no runtime reflection, editor plugin, or external rewrite command.
-The generated code uses the existing typed `Hamlet.Combinators.fail`,
-`Hamlet.Dispatch.need`, and `Errors.Cases` APIs.
+The PPX accepts a marker only when it can prove the complete finite input row.
+It subtracts the entries handled by preceding arms and generates ordinary OCaml
+cases for the remainder. If the row is not provably complete, it asks for an
+explicit `%hamlet.te` or `%hamlet.ts` boundary.
 
 ## Project setup
 
-Hamlet is not published in opam yet. Pin it, its PPX, and Hamlet Subtractor
-from GitHub before configuring Dune:
-
-```sh
-opam pin add --yes --no-action hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#main"
-opam pin add --yes --no-action ppx_hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#main"
-opam pin add --yes hamlet-subtractor \
-  "git+https://github.com/hamlet-org/hamlet-subtractor.git#automatic-propagation-subtractor"
-```
-
-The subtractor package records the two Hamlet Git pins as opam metadata too,
-so an opam installation can fetch its source dependencies without a manually
-managed checkout. `hamlet-subtractor` is tied to a specific OCaml
-compiler-libs generation. Compatibility begins at OCaml 5.5.0, and the current
-matrix contains 5.5.0. Dune 3.18 or newer is required. This repository tests
-the editor path with Merlin 5.7 for OCaml 5.5.0 and OCaml-LSP 1.26.
-
-Every Dune stanza containing an automatic marker must use the staged Hamlet
-rewriter:
+Install the packages as shown in the [root README](../README.md#installation).
+Then use the staged bundle in every target containing an automatic marker:
 
 ```lisp
 (library
@@ -73,86 +35,57 @@ rewriter:
   (staged_pps hamlet-subtractor.ppx)))
 ```
 
-The same form works for an `executable` or `test` stanza.
-`hamlet-subtractor.ppx` includes the normal `ppx_hamlet` transformations, so do not
-add a second `ppx_hamlet` entry to the same preprocessing field.
+The same field works in `executable` and `test` stanzas. The bundle includes
+`ppx_hamlet`, so do not add `ppx_hamlet` again in that target.
 
-That stanza is the complete setup for a repository consuming an installed
-release. In this repository's uninstalled checkout, the raw Merlin fixture
-also declares:
-
-```lisp
-(preprocessor_deps
- (package hamlet-subtractor))
-```
-
-This repository-only edge builds the local resolver before a raw editor query.
-The PPX then derives the resolver beside its own `.ppx` build directory in the
-same Dune build context. Installed projects use the resolver from the
-`hamlet-subtractor` Dune site and must not copy this source-tree stanza.
-
-### Why `staged_pps` is required
-
-`pps` is Dune's ordinary early preprocessing form. It is appropriate for
-syntax rewriting, but it can run before the CMI files for the target's
-dependencies are available to the PPX. Automatic propagation needs those
-interfaces: the resolver types a temporary probe against the live compilation
-context to prove the exact input row, including values and service tags defined
-in another compilation unit.
-
-`staged_pps` runs the same PPX bundle during Dune's compiler stage, after those
-dependency interfaces exist. The resolver can therefore type the probe, replace
-the marker with the exact forwarding AST, and let both the compiler and editor
-type that final result. `(pps hamlet-subtractor.ppx)` is intentionally rejected
-for automatic markers rather than producing an imprecise fallback.
-
-A dependency interface is the compiled `.cmi` description of another module:
-it records exported values, types, service tags, and the identities used by the
-resolver to distinguish real Hamlet operations from lookalikes. The current
-file can be an unsaved editor buffer because the PPX receives its live AST, but
-an unsaved dependency is represented only by its last Dune-built `.cmi` until
-that dependency is rebuilt. This is the same compilation boundary Dune uses for
-ordinary OCaml type checking.
-
-Modules that only declare services and never use an automatic marker may keep
-using the regular rewriter:
+Targets that only use Hamlet declarations or explicit propagation may keep:
 
 ```lisp
 (preprocess
  (pps ppx_hamlet))
 ```
 
-Standard Dune-generated Merlin configuration is sufficient. Dune builds the
-required dependency interfaces automatically, including on a clean build. An
-unsaved edit in the active module is visible immediately. An unsaved edit in a
-different module is represented by that module's last built interface until
-Dune rebuilds it.
+### Why `staged_pps` is required
 
-Keep Merlin's optional external PPX result cache disabled. Its cache key does
-not include the dependency `.cmi` files used by the resolver. If an upstream
-module changes, Merlin could reuse an expansion proved against the old
-interface instead of rerunning staged elaboration against the new one. Standard
-Dune-generated Merlin configuration leaves this cache disabled, so it receives
-the same dependency-aware expansion as a normal build.
+`pps` and `staged_pps` run a PPX at different points in a Dune build:
 
-If a target combines Hamlet with another whole-file PPX that rewrites the
-upstream effect or handler, that transform must run before Hamlet elaboration.
-A later transform that changes already elaborated handlers is unsupported.
+| Dune field | When it runs | Suitable for |
+| --- | --- | --- |
+| `pps` | Early, while Dune is still discovering dependencies | Syntax rewriting that does not need imported type information |
+| `staged_pps` | Again when the compiler runs, after dependencies are built | Rewriting that needs the compiled interfaces of imported modules |
 
-Automatic propagation supports the compilation modes carried by OCaml's
-standard PPX context and the normal defaults for modes that context omits.
-Unusual nondefault compiler modes that are invisible to an ordinary PPX are
-outside this guarantee. Examples include `-nopervasives`, `-no-std-include`,
-`-app-funct`, and nondefault strict sequence or format modes. Use an explicit
-`%hamlet.te` or `%hamlet.ts` boundary in targets that enable such modes unless
-the Hamlet release notes list the combination as supported. The final compiler
-still type-checks generated code, but the subtractor cannot claim identical
-probe context for an option it never receives.
+The subtractor needs imported type information. For example, when a handler
+mentions `Storage.Errors.read_error`, the PPX must know which declaration that
+path resolves to, every error in the relevant generated catalogue, and the
+actual type of the input computation.
 
-## Automatically propagating errors
+OCaml stores the public typed API of a compiled module in a `.cmi` file. This
+is its **dependency interface**. `Storage.cmi`, for example, contains the
+exported types and values of `Storage` together with the identities used by the
+type checker. It does not contain the module implementation.
 
-Use `propagate_e.auto` as the final arm of an inline
-`Hamlet.Combinators.catch` handler:
+During ordinary `pps`, those `.cmi` files may not exist yet on a clean build.
+During `staged_pps`, Dune has already built them, so the resolver can type its
+temporary probe against the same imports as the final compiler. The ordinary
+`pps` form is rejected for automatic markers instead of producing a weaker
+result.
+
+The active editor buffer is different from a dependency: Merlin passes the
+PPX the unsaved AST of the file currently being edited, so changes in that file
+are immediate. Another module is visible through its last built `.cmi`; save or
+rebuild that dependency before expecting its new API to affect the current
+file.
+
+Do not enable Merlin's optional external PPX result cache. Consider a consumer
+whose source has not changed while `Storage.cmi` gains a new error. The cache
+key does not include that `.cmi`, so Merlin could reuse forwarding code proved
+against the old error set. With the cache disabled, the staged PPX runs again
+and reads the new interface. Dune's normal Merlin configuration leaves this
+cache disabled.
+
+## Errors
+
+Place `propagate_e.auto` in the final arm of an inline `catch` handler:
 
 ```ocaml
 let recovered =
@@ -164,129 +97,86 @@ let recovered =
 ```
 
 If `storage_program` can fail with `read_error`, `write_error`, and
-`network_error`, the first arm removes `read_error`. The generated final arm
-forwards `write_error` and `network_error` with
-`Hamlet.Combinators.fail`.
+`network_error`, the first arm removes `read_error`. The generated arm forwards
+`write_error` and `network_error` with `Hamlet.Combinators.fail`.
 
-Errors introduced by recovery remain in the result:
+Errors and requirements introduced by recovery code remain in the result:
 
 ```ocaml
-let recovered =
-  Hamlet.Combinators.catch storage_program
-    ~handler:(fun error ->
-      match error with
-      | #Storage.Errors.read_error ->
-          Hamlet.Combinators.fail `Recovery_failed
-      | [%hamlet.propagate_e.auto] -> .)
+| #Storage.Errors.read_error ->
+    Hamlet.Combinators.fail `Recovery_failed
 ```
 
-The final error row contains `Recovery_failed` together with every residual
-error from `storage_program`. Recovery computations may also introduce service
-requirements, which remain in the third type parameter as usual.
+Here `Recovery_failed` is added to the residual error row. The recovery branch
+itself is not rewritten.
 
-The current marker remains type-safe even when the recovery computation is too
-indirect for Hamlet to analyze: the recovery branch is left unchanged and the
-final OCaml type check infers it normally. In that case both channels of its
-internal certificate become opaque, so a later automatic marker that depends
-on this result requires an explicit boundary. Direct canonical `success`,
-`return`, `fail`, generated `Tag.summon`, and other supported traced concrete
-computations retain exact certificates for dependent markers.
-
-An error arm subtracts a leaf only when it is an unguarded complete pattern:
+An error leaf is removed only by an unguarded, complete `#Path` pattern:
 
 ```ocaml
 | #Storage.Errors.read_error -> recover ()
 | #Storage.Errors.read_error as error -> recover error
 ```
 
-A guarded arm may decline a matching value, so it does not subtract that leaf:
+A guarded arm does not remove the leaf because control can continue to the
+automatic arm when the guard is false:
 
 ```ocaml
 | #Storage.Errors.read_error as error when retryable error -> recover error
 ```
 
-If the guard is false, the automatic arm still propagates `read_error`.
+## Service requirements
 
-## Automatically propagating requirements
-
-Use `propagate_s.auto` as the final arm of an inline
-`Hamlet.Combinators.provide` handler:
+Place `propagate_s.auto` in the final arm of an inline `provide` handler:
 
 ```ocaml
 let with_logger =
-  Hamlet.Combinators.provide
+  Hamlet.Combinators.provide program
     ~handler:(fun requirement ->
       match requirement with
       | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
       | [%hamlet.propagate_s.auto] -> .)
-    program
 ```
 
 If `program` requires `Logger`, `Clock`, and `Database`, the `Tag.give` arm
-discharges `Logger`. The generated final arm forwards `Clock` and `Database`
-with `Hamlet.Dispatch.need`.
+removes `Logger`. The generated arm forwards `Clock` and `Database` with
+`Hamlet.Dispatch.need`.
 
-An explicit arm that calls `Dispatch.need` forwards its service rather than
-discharging it, so that service remains in the final requirement row. Both
-`Tag.give` and `Dispatch.need` must be direct resolved calls using the witness
-bound by that same pattern. Indirect helper calls require the explicit
-fallback.
+An arm that directly calls `Dispatch.need witness` explicitly forwards its
+service, so that service remains in the output row. Both `Tag.give` and
+`Dispatch.need` must use the witness bound by the same pattern. A guard prevents
+subtraction for the same reason as in an error handler.
 
-Errors are not subtracted by `provide`: the program's error row remains
-intact, including errors produced when the supplied implementation runs.
+`provide` does not subtract errors. The source error row and any errors raised
+by the supplied implementation remain part of the result.
 
-As with errors, a guarded `Tag.give` arm does not subtract its service because
-the guard may fail.
+## What the PPX can prove
 
-## Supported handler shape
+The handler must have this shape:
 
-Automatic elaboration deliberately supports a narrow, predictable shape:
-
-- a direct `Combinators.catch` or `Combinators.provide` call, including the
-  `Hamlet.Combinators` qualified form and the normal pipeline form;
+- a direct `Hamlet.Combinators.catch` or `provide` call, including pipeline
+  form;
 - an inline `fun` or `function` handler;
-- a finite, materializable input row obtained from a supported exact origin;
-- complete `#Path` error arms and direct `#Service.Tag.r as witness` service
+- complete `#Path` error arms or direct `#Service.Tag.r as witness` service
   arms;
-- an automatic marker as the final arm with `.` as its body.
+- the automatic marker as the final arm, with `.` as its body;
+- a finite input row obtained from one of the exact sources below.
 
-Supported exact origins include an external value description, a direct
-canonical `success`, `return`, `fail`, or generated `Tag.summon`, an immutable
-alias of an already proven effect value, an explicit occurrence boundary, and
-the output of an earlier resolved marker. Within the supported compiler
-configuration, an independently generalized value with one unconstrained
-generic row tail is accepted only when Hamlet can close a fresh copy to its
-visible leaves without constraining the surrounding program. This includes a
-bare generic channel proven to be empty. Use an explicit boundary when a
-target relies on a nondefault compiler mode that the standard PPX context does
-not carry.
+An input row is exact when it comes from one of these sources:
 
-### Inferred concrete sources and local builders
+- a closed row or an explicit `%hamlet.te`/`%hamlet.ts` occurrence;
+- an imported or independently generalized value whose fresh row can be closed
+  to the visible leaves without constraining its environment;
+- a recognized concrete Hamlet expression such as `success`, `return`,
+  `fail`, generated `Tag.summon`, or supported direct composition;
+- the proven output of an earlier automatic marker.
 
-An annotation is not required just because a concrete local source was built
-with Hamlet combinators. For example, this source is inferred from its direct,
-recognized `Tag.summon` and `let*` composition:
+The PPX verifies resolved declaration identities, not printed names. A local
+function named `fail`, `catch`, or `give` is not treated as Hamlet code.
 
-```ocaml
-let requirement_source =
-  let open Hamlet.Combinators in
-  let* (module Logger) = Logger.Tag.summon in
-  let* () = Logger.log "ciao" in
-  let* (module Clock) = Clock.Tag.summon in
-  let* now = Clock.now () in
-  return (Printf.sprintf "ready at %d" now)
+### Local builders and first-class service modules
 
-let with_logger =
-  Hamlet.Combinators.provide requirement_source
-    ~handler:(fun requirement ->
-      match requirement with
-      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
-      | [%hamlet.propagate_s.auto] -> .)
-```
-
-The generated result still requires `Clock`, without a hand-written
-`[%hamlet.ts Logger, Clock]`. A directly applied local builder is accepted on
-the same basis:
+Concrete local builders do not need an explicit row annotation when the
+resolver can follow their construction:
 
 ```ocaml
 let build_requirement_source () =
@@ -296,69 +186,51 @@ let build_requirement_source () =
   let* (module Clock) = Clock.Tag.summon in
   let* now = Clock.now () in
   return (Printf.sprintf "ready at %d" now)
-
-let with_logger =
-  Hamlet.Combinators.provide (build_requirement_source ())
-    ~handler:(fun requirement ->
-      match requirement with
-      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
-      | [%hamlet.propagate_s.auto] -> .)
 ```
 
-`ppx_hamlet` supplies the package type for each `(module Service)` pattern.
-After lowering `Service.Tag.summon` to the primitive summon call, the resolver
-verifies the generated key/tag pair and follows only Hamlet effects called
-through that locally unpacked module. It can therefore prove the `Logger.log`
-and `Clock.now` calls above without treating an arbitrary first-class module
-as an independent source.
+`ppx_hamlet` adds the package type to each `(module Service)` pattern. After it
+lowers `Service.Tag.summon` to Hamlet's primitive summon call, the resolver
+checks that the key and tag belong to that generated service. It then follows
+Hamlet computations called through the verified local module. In the example,
+providing `Logger` leaves `Clock` in the requirement row.
 
-This is deliberately a proof of a concrete source, not a general row-difference
-operator. The resolver accepts only recognized direct Hamlet calls and binding
-operators, and every relevant builder branch must itself have an independent
-origin. It identifies those calls by resolved UID, never by their printed name.
-For a local builder application, the builder must be an independently
-generalized local function applied directly with positional arguments, and the
-selected error or requirement channel of its result must share no type variable
-with any applied argument. A unit builder is the usual case.
+This does not make arbitrary first-class modules exact. The module must come
+directly from a verified generated summon and retain the package type inserted
+by `ppx_hamlet`.
 
-This does not make a parameterized helper automatically polymorphic in its
-caller's row. In particular, a function whose effect row depends on a parameter,
-or whose source comes through a higher-order callback, mutable state, object,
-unverified first-class module escape, indirect combinator alias, or unrecognized
-composition still requires the explicit `%hamlet.te` or `%hamlet.ts` boundary.
-A marker in a generic helper body is elaborated when that body is compiled, not
-again for each caller or downstream compilation unit.
+A directly applied local builder is supported when it is independently
+generalized and its result row does not depend on its arguments. A
+`unit -> Hamlet.t` builder is the common case. A helper whose error row is
+derived from an argument, a callback, mutable state, an object, or an unknown
+first-class module needs an explicit boundary.
 
-Transparent public type aliases may be expanded. Abstract, private, or hidden
-aliases are not treated as evidence. Aliases of combinator functions and
-unrecognized or higher-order producer flows are outside the exact origin tracer
-and use the explicit fallback.
+The same rule excludes indirect combinator aliases and unsupported
+higher-order composition. A marker inside a generic helper is resolved when
+that helper is compiled; it is not specialized again for each caller.
 
-When every input leaf has already been handled, OCaml warning 11 remains
-visible. Remove the redundant automatic marker instead of suppressing the
-warning unless the test intentionally covers the exhausted case.
+## Common refusals
 
-Hamlet reports an actionable refusal for shapes whose exact meaning cannot be
-proved. Common examples include:
+The PPX refuses rather than guesses when it sees:
 
-- abstract or hidden row aliases;
-- genuinely open rows, context-only rows, or rows rooted in a function
-  parameter;
-- named, higher-order, or otherwise indirect handlers;
-- wildcard, or-pattern, partial payload, or unsupported control-flow arms;
-- grouped requirement aliases containing more than one service tag;
-- a marker that is not last.
+- an abstract, private, hidden, or genuinely open row;
+- a row controlled by a function parameter or higher-order callback;
+- a named or otherwise indirect handler;
+- wildcard, user-written or-pattern, partial-payload, or unsupported
+  control-flow arms;
+- an indirect `Tag.give` or `Dispatch.need` helper call;
+- a grouped requirement alias containing more than one service tag;
+- an external error universe without the required catalogue;
+- a marker that is not the last arm;
+- a nondefault compiler mode that the standard PPX context cannot report.
 
-This boundary is intentional. Automatic elaboration may reject a program, but
-it may not invent runtime reachability.
+When every input leaf has already been handled, the marker is redundant and
+OCaml warning 11 remains visible. Remove the marker unless the exhausted case
+is intentional.
 
 ## Explicit fallback
 
-Use the existing explicit syntax whenever automatic elaboration refuses the
-input or when an explicit API boundary is clearer.
-
-For errors, declare the universe with `%hamlet.te` and use the ordinary
-propagation marker:
+For errors, write the complete input universe with `%hamlet.te` and use the
+ordinary propagation marker:
 
 ```ocaml
 Hamlet.Combinators.catch source
@@ -371,28 +243,26 @@ Hamlet.Combinators.catch source
     | [%hamlet.propagate_e] -> .)
 ```
 
-A whole generated service universe can be written as
-`[%hamlet.te Storage]`.
+`[%hamlet.te Storage]` names the complete generated error universe for a
+service.
 
 For requirements, use `%hamlet.ts`:
 
 ```ocaml
-Hamlet.Combinators.provide
+Hamlet.Combinators.provide source
   ~handler:(fun (requirement : [%hamlet.ts Logger, Clock]) ->
     match requirement with
     | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
     | [%hamlet.propagate_s] -> .)
-  source
 ```
 
-The explicit annotation is the precision boundary chosen by the author. It is
-also the correct choice for public polymorphic functions whose callers may
-supply rows that are not finite at the definition site.
+An explicit boundary is also the right API for a public polymorphic function
+whose callers determine the row.
 
-## Services across compilation units
+## Cross-module error catalogues
 
-For a generated service whose error catalogue will be consumed from another
-compilation unit, expose the cross-unit propagation catalogue:
+When another compilation unit will automatically propagate a generated
+service's errors, declare the service with `[@@rest_cross_cu]`:
 
 ```ocaml
 [%%hamlet.service
@@ -406,123 +276,22 @@ end
 [@@rest_cross_cu]]
 ```
 
-This keeps downstream full-universe error propagation linear in the number of
-declared leaves. It is required when an automatic handler consumes an external
-generated error union. Hamlet first validates that `Errors.Cases` is a complete,
-non-overlapping partition and maps every structural atom uniquely to that
-catalogue. A certified proper subset is then emitted directly from its named
-leaves, while the complete universe uses `Cases.dispatch`. An external
-`%%hamlet.errors` union without the cross-unit protocol uses an explicit
-`%hamlet.te` fallback even when the observed residual appears smaller.
-Requirement tags need no additional opt-in.
+This generates a checked `Errors.Cases` catalogue. A downstream PPX can then
+map the input row back to complete named leaves and generate forwarding code in
+linear time. Requirement tags already carry enough identity and need no extra
+option.
 
-A producer module can use ordinary `pps ppx_hamlet`. The consumer module that
-contains an automatic marker must use `staged_pps hamlet-subtractor.ppx`.
-Using the staged bundle consistently for an entire application target is
-usually the simplest configuration.
+The producer can use ordinary `pps ppx_hamlet`. Only the target containing the
+automatic marker requires `staged_pps hamlet-subtractor.ppx`.
 
-## Testing in this repository
+## Tests and internals
 
-The focused tests live in `test/automatic_propagation` and exercise the public
-Hamlet and Dune interfaces from the uninstalled checkout. The positive
-raw-Merlin fixture has
-the repository-only `preprocessor_deps` edge described above so the resolver
-exists before the editor starts. `make installed-consumer` separately proves
-that external projects need only the documented `staged_pps` stanza.
-
-The active opam switch must provide `ocamlmerlin` and `ocamllsp` for the editor
-harnesses.
+Run the public acceptance gate with:
 
 ```sh
 dune runtest test/automatic_propagation
 ```
 
-This runs the complete acceptance gate: final CMT type and runtime behavior,
-saved and unsaved OCaml-LSP hovers, raw Merlin final preprocessing and
-Typedtree checks, dependency-CMI invalidation, refusal diagnostics, explicit
-fallbacks, and linear cross-unit generation. The mutable checks use a separate
-acceptance build directory while raw Merlin keeps the normal Dune editor
-context.
-
-```sh
-dune build @test/automatic_propagation/automatic-propagation-lsp
-```
-
-This starts a real installed OCaml-LSP session and verifies saved and unsaved
-hover types, diagnostics, and clean shutdown.
-
-```sh
-dune build @test/automatic_propagation/automatic-propagation-acceptance
-```
-
-This is an explicit name for the same complete acceptance gate.
-
-```sh
-test/automatic_propagation/run_acceptance.sh
-```
-
-This runs the same complete feature harness directly. It rejects embedded PPX
-errors, probe assertions, and internal marker attributes before accepting an
-editor result. The script temporarily changes its dependency fixture and
-restores it on exit.
-
-```sh
-make installed-consumer
-```
-
-This installs matching Hamlet and subtractor packages into a fresh temporary
-prefix, builds and runs a separate project whose only preprocessing entry is
-`(staged_pps hamlet-subtractor.ppx)`, confirms that the prefix-relative
-resolver was used, and checks narrow raw Merlin hovers. Its requirement source
-intentionally uses an inferred `let*` composition of generated `Tag.summon`
-calls rather than a closed annotation, while its error source is an
-unannotated direct `Combinators.fail` value. It protects the installed-project
-setup from accidentally depending on source-tree Dune metadata or
-annotation-only coverage.
-
-Run the repository-wide gate after the focused checks:
-
-```sh
-make all
-```
-
-When adding coverage:
-
-- add compile-positive `case_*` bindings to
-  `test/automatic_propagation/automatic_propagation_positive.ml`;
-- add runtime behavior to
-  `test/automatic_propagation/automatic_propagation_runtime_test.ml`;
-- add unsupported programs under `test/automatic_propagation/negative` and
-  record their required diagnostic fragments in
-  `automatic_propagation_diagnostics.expected`;
-- put cross-unit producer declarations in `automatic_propagation_external.ml`.
-
-Run Dune-backed checks serially. The feature harness already covers multiple
-compiler and editor entry points, so overlapping Dune processes only add noise
-and can leave stale build locks.
-
-## Testing in a consuming repository
-
-At minimum, keep three kinds of coverage:
-
-1. A compile-positive module or `.mli` that fixes the expected narrow error and
-   requirement rows.
-2. A runtime test proving handled leaves are recovered or discharged and
-   residual leaves still propagate.
-3. A negative compile test for any project-specific abstract or polymorphic
-   boundary that must keep the explicit `%hamlet.te` or `%hamlet.ts` fallback.
-
-Editor hover requires no separate project test or plugin. If a repository
-needs to lock that behavior for its own toolchain, use an OCaml-LSP session
-against a saved buffer and an unsaved `didChange`, following
-`test/automatic_propagation/automatic_propagation_lsp_client.ml` in this
-repository.
-
-## Related guides
-
-- [Hamlet Services](https://github.com/hamlet-org/hamlet/blob/main/docs/services.md)
-  explains service declarations, tags, and implementations.
-- [Hamlet Error Propagation](https://github.com/hamlet-org/hamlet/blob/main/docs/error-propagation.md)
-  explains the generated linear catalogue used at cross-unit boundaries.
-- [Subtractor Internals](./README.md) explains the probe,
-  proof model, compiler integration, and final AST generation for maintainers.
+See the [acceptance-test README](../test/automatic_propagation/README.md) for
+focused commands and fixture rules. For implementation details, continue with
+the [architecture guide](./architecture.md).

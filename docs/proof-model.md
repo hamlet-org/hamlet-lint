@@ -1,351 +1,257 @@
-# Proof and Soundness Model
+# Proof and soundness model
 
-The resolver does not ask whether forwarding would probably work. It builds a
-finite proof that every generated case corresponds to a value already present
-in the statically known input row.
+The subtractor generates a forwarding case only after proving that its pattern
+belongs to the complete input row. It never treats the tags currently visible
+in a type as the complete runtime universe.
 
-This distinction matters because OCaml polymorphic variant rows can be open,
-abstract, contextually widened, or rooted in a caller-controlled type
-parameter. A normal PPX cannot treat the visible lower bound of such a row as
-its complete runtime universe.
+This matters because an OCaml polymorphic-variant type can be open:
 
-## Core vocabulary
+```ocaml
+[> `Missing | `Timeout ]
+```
 
-The compiler-independent model lives in `Hamlet_subtractor_core`.
+That type says `Missing` and `Timeout` are possible; it does not say they are
+the only possibilities. Forwarding only those two tags would be unsound unless
+the PPX has separate evidence that the row can be closed exactly there.
 
-- `Identity.t`: a nominal declaration path plus an interface or source
-  fingerprint.
-- `Type_identity.t`: a normalized payload type used to distinguish equal
-  labels with different payloads.
-- `Atom.t`: one polymorphic variant label, channel, payload shape, and declaring
-  identity.
-- `Leaf.t`: one complete unit of subtraction, possibly containing several
-  atoms.
-- `Proof.t`: a finite non-overlapping set of leaves for one Hamlet channel and
-  its evidence origin.
-- `Effect_certificate.t`: independent evidence for both the error and
-  requirement channels.
-- `Residual.t`: the input proof, classified arms, handled leaves, forwarded
-  leaves, recovery leaves, generated residual, and output proof.
-- `Diagnostic.t`: a marker-local refusal code and explicit fallback
-  information.
+## Core values
 
-Compiler-libs nodes are converted into these values before the temporary
-typing session is reset.
+The compiler-independent model lives in `subtractor/core` and is exposed as
+`Hamlet_subtractor_core`.
 
-## Nominal identity and structural shape
+| Value | Meaning |
+| --- | --- |
+| `Identity.t` | The declaration that owns a leaf, plus a fingerprint of its source or compiled interface. |
+| `Type_identity.t` | A normalized payload type used to distinguish otherwise similar tags. |
+| `Atom.t` | One polymorphic-variant label with its channel, payload, and declaring identity. |
+| `Leaf.t` | The smallest complete unit that one handler arm may subtract. A generated alias can contain several atoms. |
+| `Proof.t` | A finite, non-overlapping set of leaves for one channel, together with the origin of that evidence. |
+| `Effect_certificate.t` | Independent evidence for the error and requirement channels of one computation. |
+| `Residual.t` | The input, classified arms, handled leaves, forwarded leaves, recovery contributions, generated residual, and final output. |
+| `Diagnostic.t` | A stable refusal reason, source span, and explicit fallback. |
 
-Hamlet needs both nominal and structural information.
+The Typedtree evidence layer converts compiler values into these immutable
+values before the resolver destroys its temporary compiler session.
+
+## Identity, shape, and payloads
+
+The proof needs both nominal identity and runtime shape.
 
 Nominal identity answers:
 
 ```text
-Is this Storage.Errors.read_error from this compiled interface?
+Is this the read_error declared by this Storage interface?
 ```
 
 Structural shape answers:
 
 ```text
-Is this `Read_error of string at runtime?
+Is its runtime pattern `Read_error of string?
 ```
 
-`Identity.t` contains:
+`Identity.t` records a normalized module path, declaration name, and a
+fingerprint of the defining source or `.cmi`. Module aliases normalize to the
+same declaration. This prevents a declaration with the same printed name from
+being mistaken for the original one.
 
-- a source-reachable module path;
-- a declaration name;
-- a stable fingerprint of the defining interface, or the current source when
-  the declaration belongs to the module being compiled.
-
-The semantic fingerprint must not depend on whether the caller is `ocamlc`,
-`ocamlopt`, or Merlin. Paths are normalized through the typing environment so
-module aliases do not create different identities for the same declaration.
-
-`Atom.equal` includes nominal identity. `Atom.equal_structural` compares the
-channel, label, and normalized payload while ignoring where the atom was
-declared. Structural comparison is used only during validated catalogue
-partitioning and ambiguity checks.
-
-## Payload normalization
-
-Variant payloads are normalized without printing compiler types. Supported
-forms include primitives, tuples, and nominal constructors whose arguments are
-also normalizable.
-
-Normalization records whether a variant has zero or one payload argument. The
-generator uses that arity to choose between:
+Payload types are normalized without printing compiler types. Supported forms
+include primitive types, tuples, and nominal type constructors whose arguments
+can also be normalized. The proof records whether a variant has zero or one
+payload argument so generation can choose:
 
 ```ocaml
 `Label
 `Label _
 ```
 
-Unresolved variables, functions, objects, packages, open variants inside a
-payload, and unsupported structural types cause a refusal. Two requirement
-tags with the same label but different `Tag.t Hamlet.P.t` payload identities
-therefore remain distinct.
+Functions, objects, packages, unresolved variables, nested open variants, and
+other unsupported payloads are refused. Requirement tags with the same label
+but different `Tag.t Hamlet.P.t` payload identities therefore remain distinct.
 
 ## Leaves and materialization
 
-A leaf is the smallest unit that may be subtracted by one complete arm.
-
-Generated Hamlet errors normally use one declared leaf alias:
+A leaf is the smallest unit a complete arm can handle. A normal generated error
+leaf looks like:
 
 ```ocaml
 type read_error = [ `Read_error of string ]
 ```
 
-A leaf can contain more than one atom if the declaration groups tags. Such a
-leaf must remain whole. The resolver refuses a row or arm that contains only a
-proper subset of its atoms.
+Some aliases group several atoms. Such a leaf remains indivisible: neither the
+input proof nor a handler arm may claim only part of it.
 
-Every leaf records how final source can materialize it:
+Every proven leaf must also have a safe source-level representation. The
+generator can use:
 
-- `Direct`: `#Module.Errors.leaf`.
-- `Structural_variant`: a raw polymorphic variant pattern with certified arity.
-- `Error_cases`: a direct proper-subset arm or full `Errors.Cases` dispatch.
-- `Requirement_tag`: `#Service.Tag.r`.
-- `Unavailable`: never generated and causes an explicit fallback refusal.
+- a named error pattern such as `#Storage.Errors.read_error`;
+- a structural variant whose label and payload arity are exact;
+- a validated `Errors.Cases` catalogue for a generated external universe;
+- a requirement pattern such as `#Logger.Tag.r`.
 
-Materialization is part of the proof obligation. Knowing that an atom exists
-is not enough if no ordinary type-safe OCaml pattern can represent it.
+A row is refused if a leaf is known to exist but cannot be represented by
+ordinary type-safe OCaml code.
 
-## Accepted row evidence
+## Accepted sources of exact rows
 
-There are three useful evidence sources.
+The resolver accepts four kinds of evidence.
 
-### Finite closed row
+### 1. Closed row
 
-After transparent alias expansion, a direct row is exact only when all of the
-following hold:
+A direct row is exact after transparent alias expansion when:
 
-- it is `Hamlet.never` or a polymorphic variant row;
-- the row is closed;
-- the flattened tail is `Tnil`;
-- the row is not fixed or private;
+- it is `Hamlet.never` or a closed polymorphic-variant row;
+- its tail is empty;
+- it is not private or fixed;
 - every relevant field is present;
-- no `Reither` or absent field is used as positive evidence;
-- every payload normalizes.
+- every payload can be normalized.
 
-Abstract aliases and hidden manifests are not opened by guesswork. A visible
-transparent alias may be expanded, while a private or unresolved boundary is
-refused.
+Abstract, private, hidden, and unresolved aliases are not opened by guesswork.
+A visible transparent alias may be expanded.
 
-### Independently generalized principal value
+### 2. Independently generalized value
 
-Typical Hamlet programs infer open lower bounds:
+OCaml often prints a principal value with an open lower bound:
 
 ```ocaml
 val program : ('a, [> `Missing | `Timeout ], [> Logger.Tag.r ]) Hamlet.t
 ```
 
-The visible tags are not automatically a finite universe. They become exact
-only under a narrower principal-scheme proof:
+The resolver may close a fresh copy of one channel to its visible leaves only
+when:
 
-1. the origin is an external value description or a binding reached by the
-   supported immutable effect-value provenance tracer;
-2. evidence comes from that value's original scheme, never the
-   context-instantiated occurrence or the probe-created isolation binding;
-3. all visible fields are present and the only tail is one unconstrained
-   generic variable;
-4. a fresh instance can be closed to the visible fields without constraining
-   anything in the surrounding lexical environment;
-5. typed UID provenance does not lead to a parameter, mutable cell, object
-   field, unverified first-class module escape, or opaque higher-order input.
+1. the type comes from the value's independently generalized definition, not
+   from a handler-widened occurrence;
+2. the only row tail is one unconstrained generic variable;
+3. closing a fresh copy does not constrain any surrounding type variable;
+4. provenance does not lead to a function parameter, mutable cell, object
+   field, unknown first-class module, or opaque higher-order input.
 
-The fresh closing check is performed on a copy. The user's scheme is never
-mutated.
+The check runs on a copy. It never mutates the user's type scheme.
 
-This proof is available only inside the supported compiler configuration. The
-standard PPX context carries principal mode and the other modes listed in the
-integration guide, but it omits several OCaml command-line options. A target
-using a nondefault omitted mode must place an explicit propagation boundary at
-the handler. The elaborator cannot prove parity for context it never receives.
+### 3. Traced concrete computation
 
-### Traced concrete source and local builder
+The resolver can trace a deliberately small set of real Hamlet expressions:
 
-The principal-scheme rule also applies to an unannotated local source when the
-resolver can prove that the source was built independently of the handler's
-context. This does not treat a visible lower bound as a universe. The trace
-only authorizes the existing fresh-instance closing check on the source's
-principal scheme.
+- direct `success`, `return`, `fail`, and generated `Tag.summon` calls;
+- supported direct combinators such as `chain`, `both`, `map`, `catch`,
+  `map_fail`, `tap`, and their audited variants when every contributing
+  expression is independently proven;
+- Hamlet `let*`, `and*`, and `let+` composition;
+- ordinary immutable `let` wrappers, the final expression of a sequence, and
+  control-flow branches when every possible result is proven;
+- a directly applied local builder whose body and result are independent of
+  its arguments.
 
-The traced domain is intentionally small:
+Each call is checked by its resolved Hamlet UID. Printed names are not
+evidence, and an alias of a combinator function is not treated as a direct
+canonical call.
 
-- direct canonical `success`, `return`, `fail`, and `summon` calls;
-- generated `Tag.summon` calls whose declaration has the service-tag metadata;
-- Hamlet-effect applications through a local module identifier only when that
-  identifier was package-typed by the PPX and unpacked from a verified generated
-  summon; the lowered `Combinators.summon` key/tag pair must identify the same
-  generated service;
-- direct canonical `Combinators.chain`, `both`, `map`, `catch`,
-  `catch_defect`, `map_fail`, `or_die`, `thaw`, `tap`, `tap_fail`,
-  `tap_defect`, and `tap_cause` calls when every contributing source and
-  callback result traces independently;
-- `let*` and `let+` expressions whose operators resolve to Hamlet's real
-  binding operators, with independently traced inputs, `and*` operands, and
-  result body where applicable;
-- ordinary `let` and structure-item wrappers, a sequence's final expression,
-  and `match` or total `if` branches only when every possible result traces;
-- a direct application of a locally bound builder whose function body traces
-  independently.
+For a first-class service module, all of these conditions are required:
 
-Names are not evidence. Every listed call and binding operator is validated by
-its resolved Hamlet UID. A local builder must have an independently generalized
-function scheme, be called directly with positional arguments, and have a
-result whose target channel shares no free type variable with any applied
-argument parameter. The selected target channel can then use the builder
-result scheme for the usual fresh closing check. This admits a concrete
-`unit -> Hamlet.t` builder while refusing a helper such as
-`fun error -> Hamlet.Combinators.fail error`, whose result error channel depends
-on its argument.
+1. the local module was unpacked from a generated `Tag.summon`;
+2. `ppx_hamlet` attached the expected package type to the unpack pattern;
+3. the lowered primitive summon key and tag identify the same generated
+   service;
+4. the method application through that local module has Hamlet's effect shape.
 
-The opposite channel is still independently exact or opaque. Exactness for one
-channel never fabricates an exact proof for the other. Higher-order callbacks,
-mutable or object sources, unverified first-class module escapes, indirect
-combinator aliases, unsupported branches, recursive builders, labelled or
-optional local builder applications, and any unrecognized composition refuse.
+This proves calls such as `Logger.log` and `Clock.now` after verified summons.
+It does not authorize arbitrary first-class module values.
 
-### Certified computation
+A local builder must be independently generalized, called directly with
+positional arguments, and return a target row that shares no free type variable
+with its applied arguments. This admits the common `unit -> Hamlet.t` builder
+and refuses a function such as `fun error -> fail error`, whose output row
+depends on its input.
 
-Some expressions are proven compositionally rather than from an occurrence
-row. The proof tracer recognizes real Hamlet value UIDs and combines only
-certified operands.
+The error and requirement channels are proven independently. Exact evidence
+for one never fabricates evidence for the other.
 
-Important constructors include:
+### 4. Certified earlier marker
 
-- `success` and `return`: empty error and requirement proofs;
-- direct `fail`: one exact error leaf;
-- generated `Tag.summon`: one exact requirement leaf;
-- a resolved auto `catch`: its output certificate;
-- a resolved auto `provide`: its output certificate.
+A resolved automatic `catch` or `provide` produces a complete two-channel
+certificate. A later marker may use that certificate when Typedtree value
+identity proves that it consumes the earlier result.
 
-A printed name is never sufficient. A local `fail`, `catch`, or `give`
-lookalike is refused. Immutable aliases of already proven effect values may be
-followed, but aliases of the combinator functions are not canonical calls. The
-traced concrete-source rule above admits only its audited direct composition
-forms. Arbitrary or higher-order producer flows are refused.
+## Generated catalogues
 
-## Catalogue evidence
+`ppx_hamlet` marks generated declarations as error leaves, error unions,
+`Errors.Cases` catalogues, or service tags. Attributes identify candidates;
+the resolver still validates the typed declarations.
 
-`ppx_hamlet` places compiler-visible attributes on generated declarations:
+For an error catalogue it checks that:
 
-```text
-hamlet.subtractor.error_leaf.v1
-hamlet.subtractor.error_union.v1
-hamlet.subtractor.error_cases.v1
-hamlet.subtractor.service_tag.v1
-```
-
-The attributes identify candidates. The resolver still validates the actual
-typed declarations.
-
-For an error service it checks:
-
-1. `Errors.error` is a transparent finite union;
-2. every `Errors.Cases.t` field is a callback whose domain is one declared
-   error leaf;
+1. the exported error type is a transparent finite union;
+2. every catalogue field accepts one declared leaf;
 3. field names and leaf paths are unique;
-4. leaf manifests normalize to disjoint atom sets;
-5. the fields form a complete partition of `Errors.error`;
-6. the catalogue identity and dependency interface fingerprint agree.
+4. leaf atom sets do not overlap;
+5. the fields form a complete partition of the error union;
+6. declaration identities and dependency-interface fingerprints agree.
 
-An inferred structural row is matched against complete validated partitions,
-not merely against leaves mentioned by user arms. The mapping must be unique.
-Unknown atoms, overlapping candidate partitions, a partly present grouped
-leaf, or a full external universe without `Errors.Cases` is refused.
+An inferred structural row must map uniquely to complete validated leaves.
+Unknown atoms, ambiguous partitions, partial grouped leaves, and a complete
+external universe without a catalogue are refused.
 
-For a proper certified external subset, each remaining whole leaf can be
-generated directly. For the complete external universe, the full catalogue is
-retained so generation uses the linear `Cases` protocol.
+For requirements, a generated `Tag.r` must contain exactly one tag with the
+expected service payload identity. An alias grouping several service tags is
+not one dischargeable leaf.
 
-For requirements, a generated `Tag.r` must contain exactly one tag carrying
-the expected `Tag.t Hamlet.P.t` payload. A custom alias grouping several
-services is not treated as one dischargeable leaf.
+## Handler arm classification
 
-## Arm classification
-
-The resolver uses both source shape and Typedtree identity.
-
-An error arm is complete when it is exactly:
+An error arm is complete only in one of these forms:
 
 ```ocaml
 #Path
 #Path as name
 ```
 
-Harmless constraint or alias wrappers may surround the pattern. The Typedtree
-must contain the expected `Tpat_type` expansion and the resolved declaration
-must match one certified leaf.
+The Typedtree expansion of `#Path` must resolve to one certified leaf. A
+wildcard, variable, partial payload pattern, or user-written or-pattern is not
+complete evidence.
 
-A user-authored or-pattern, wildcard, variable, raw partial payload pattern, or
-mixed structural pattern is refused. The classifier must distinguish an
-internal or-pattern created by OCaml's `#Path` expansion from an or-pattern
-written by the user.
+For a requirement arm, the right-hand side is also checked:
 
-Requirement subtraction additionally verifies the RHS:
+- `Tag.give witness implementation` marks the service as handled;
+- `Hamlet.Dispatch.need witness` marks it as explicitly forwarded;
+- `witness` must be the variable bound by that same arm.
 
-- direct `Tag.give witness implementation` marks the service handled;
-- direct `Hamlet.Dispatch.need witness` marks it explicitly forwarded;
-- the witness must be the variable bound by that exact arm;
-- helpers or unrelated witnesses are refused.
+For an error arm, direct `fail error` using the bound alias is explicit
+forwarding. Other right-hand sides are recovery computations.
 
-For error arms, direct `fail error` using the bound alias is explicit
-forwarding. Other RHS computations are recovery branches and receive their own
-certificate.
+A guard always prevents subtraction. If the guard is false, control reaches
+the generated final arm, so that leaf must remain in the residual.
 
-## Guards
+## Residual equations
 
-Every preceding leaf pattern is validated against the input universe, even
-when guarded. A guard changes subtraction only:
-
-```text
-unguarded complete Handle  subtract leaf
-unguarded complete Forward keep output through explicit branch
-guarded Handle             subtract nothing
-guarded Forward            subtract nothing
-```
-
-When a guard is false, evaluation continues to the generated marker branch.
-Keeping the leaf in the residual is therefore required for runtime soundness.
-
-## Residual calculation
-
-For one channel, define:
+For one channel:
 
 ```text
 U = certified input leaves
-H = unguarded complete handled leaves
-F = unguarded complete explicitly forwarded leaves
-C = exact recovery contributions for this channel
-```
+H = unguarded leaves handled by user code
+F = unguarded leaves explicitly forwarded by user code
+C = exact effects introduced by recovery code
 
-The generated fallback is:
-
-```text
-R = U minus H minus F
-```
-
-The final output proof is:
-
-```text
+R = U - H - F
 O = R union F union C
 ```
 
-`Residual.residual` is used for generated cases. `Residual.output` is used for
-the certificate passed to dependent markers. Keeping these projections
-separate prevents recovery errors from becoming fabricated fallback patterns.
+`R` is the set for which the PPX generates fallback cases. `O` is the output
+proof passed to a later dependent marker.
 
-Duplicate unguarded arms, arms outside `U`, conflicting recovery leaves, and
-unmaterializable members are refusals.
+Keeping them separate is essential: a recovery error belongs in the output
+type, but it was not present in the original input and must not become a
+generated input pattern.
+
+Duplicate complete arms, arms outside `U`, conflicting recovery leaves, and
+unmaterializable residuals are refused.
 
 ## Two-channel certificates
 
-Each marker resolves one target channel but must preserve both.
+Every marker preserves both Hamlet effect channels.
 
 For `catch`:
 
 ```text
-errors       = propagated residual errors union recovery errors
+errors       = residual input errors union recovery errors
 requirements = source requirements union recovery requirements
 ```
 
@@ -353,115 +259,84 @@ For `provide`:
 
 ```text
 errors       = source errors
-requirements = forwarded and residual requirements
+requirements = explicitly forwarded and residual requirements
 ```
 
-The certificate carries exact or opaque evidence independently for each
-channel. This matters when a recovery function is legal OCaml but cannot be
-traced exactly.
+Evidence for either channel is `exact` or `opaque`. Opaque recovery code does
+not invalidate the current marker: the branch remains unchanged and the final
+compiler types it. It does prevent a later marker from relying on an exact
+certificate for that result.
 
-An opaque recovery does not invalidate generation for the current marker. Its
-user branch remains unchanged and the final compiler types it normally. Both
-certificate channels become opaque, so a later automatic marker that needs an
-exact result refuses and asks for an explicit boundary.
+## Checks in the final AST
 
-## Final AST proof obligations
+The probe Typedtree supplies evidence, but the final compiler remains the
+authority. Generated source contains three normal OCaml checks:
 
-The temporary Typedtree is evidence, not authority. Final generated source
-contains two independent checks that the ordinary compiler types again.
+1. A ghost wildcard refutation follows generated forwarding patterns. It
+   type-checks only if those patterns cover the handler input.
+2. The original input expression is constrained to the row from which the
+   residual was computed. This prevents handler context from widening the
+   source afterward.
+3. The final `catch` or `provide` expression is constrained to the complete
+   error-and-requirement certificate. This prevents recovery code or a later
+   marker from widening the proven output.
 
-First, generated forwarding cases end with a ghost wildcard refutation. This
-detects an underapproximated residual because the wildcard can be refuted only
-when the preceding generated patterns cover the handler input. The exhausted
-case retains an additional unreachable wildcard so warning 11 remains visible.
-
-Second, the original upstream occurrence is constrained to the certified input
-row for the marker's target channel. Its opposite channel uses an exact proof
-only when one is available, otherwise `_`. This stops the final handler from
-contextually widening the very source from which the residual was derived.
-
-Third, each resolved `catch` or `provide` owner is constrained to the full
-two-channel output certificate:
-
-```ocaml
-(_, exact_errors, exact_requirements) Hamlet.t
-```
-
-An exact empty proof materializes as `Hamlet.never`. Opaque evidence
-materializes as `_`. Every exact nonempty proof must materialize as a closed
-ordinary polymorphic-variant row, otherwise elaboration refuses. This
-constraint prevents recovery polymorphism or a dependent marker from widening
-the proven owner result after replacement.
-
-The refutation prevents missing runtime cases. The input and output constraints
-prevent contextual widening. None permits the resolver to accept a row that it
-could not prove from the transported compiler context.
+An exact empty channel becomes `Hamlet.never`; opaque evidence becomes `_`.
+Every exact nonempty row must be expressible as a closed OCaml type or
+replacement refuses.
 
 ## Dependent markers
 
-Dependencies are derived from typed value UIDs and certified composition, not
-only from physical AST nesting.
-
-This must work:
+Consider:
 
 ```ocaml
 let first =
-  Hamlet.Combinators.catch source
-    ~handler:(fun error ->
-      match error with
-      | #Errors.a -> recover_a
-      | [%hamlet.propagate_e.auto] -> .)
+  Hamlet.Combinators.catch source ~handler:(fun error ->
+    match error with
+    | #Errors.a -> recover_a
+    | [%hamlet.propagate_e.auto] -> .)
 
 let second =
-  Hamlet.Combinators.catch first
-    ~handler:(fun error ->
-      match error with
-      | #Errors.b -> recover_b
-      | [%hamlet.propagate_e.auto] -> .)
+  Hamlet.Combinators.catch first ~handler:(fun error ->
+    match error with
+    | #Errors.b -> recover_b
+    | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The bottom-lowered probe result for `first` is never accepted as the universe
-of `second`. The UID edge causes the engine to resolve `first`, then supply its
-full certificate to `second`.
+The engine resolves `first` before `second` and uses `first`'s output
+certificate as `second`'s input evidence. It follows typed value UIDs, not just
+AST nesting.
 
-The engine orders ready markers deterministically. It supports a direct chain
-with zero or one proven marker predecessor at each step. Multi-source marker
-composition, opaque edges, and unsupported higher-order combinations refuse.
-Strongly connected marker components receive a recursive-dependency
-diagnostic.
+The supported dependency graph is a deterministic chain with at most one
+proven marker predecessor for each marker. Cycles, opaque edges, and unsupported
+multi-source marker composition receive explicit diagnostics.
 
-## Permanent refusal boundary
+## Refusal boundary
 
 Automatic elaboration refuses when exact evidence is unavailable, including:
 
 - abstract, hidden, private, fixed, or genuinely open rows;
 - parameter-rooted or unresolved row variables;
-- unsupported higher-order, mutable, object, or unverified first-class module
-  flows;
-- ambiguous structural-to-nominal catalogue mapping;
-- partial grouped leaves;
-- unsupported patterns or requirement helper calls;
+- unsupported higher-order, mutable, object, or first-class module flows;
+- ambiguous structural-to-nominal catalogue mappings;
+- partial grouped leaves or unsupported patterns;
+- indirect requirement helper calls;
 - unmaterializable payloads;
-- missing cross-unit catalogue support;
-- recursive marker dependencies.
+- missing cross-module catalogue support;
+- recursive or unsupported marker dependencies.
 
 The fallback is ordinary typed Hamlet code with an explicit `%hamlet.te` or
-`%hamlet.ts` universe. Refusal is part of the soundness model, not a degraded
+`%hamlet.ts` universe. Refusal is part of the proof model, not a degraded
 automatic mode.
 
-## Soundness checklist
+Before accepting a new evidence path, tests must show that:
 
-Before a new evidence path is accepted, its tests must establish all of these:
-
-1. The source of the row cannot have hidden additional leaves.
-2. Nominal identities are stable across compiler, native compiler, and Merlin.
-3. Module aliases normalize to the same declarations and payload identities.
-4. Every input atom maps to exactly one complete materializable leaf.
-5. Guarded and partial control flow cannot reach an unreachable generated
-   callback.
-6. Recovery evidence is traced before handler contextual widening.
-7. Let-bound direct marker chains carry dependency certificates.
-8. The final wildcard refutation validates complete forwarding coverage.
-9. The owner-result constraint materializes the complete output certificate.
-10. The final compiler sees no probe scaffolding or internal attributes.
-11. Failure points to the responsible marker and names the explicit fallback.
+1. hidden leaves cannot exist;
+2. declaration identities are stable across compiler and Merlin paths;
+3. every input atom maps to one complete materializable leaf;
+4. guards and partial control flow cannot reach a missing generated case;
+5. recovery effects are measured before handler widening;
+6. dependent markers receive complete two-channel certificates;
+7. final refutations and constraints recheck the proof;
+8. no probe scaffolding or internal attribute reaches the final AST;
+9. failure points to the responsible marker and names the explicit fallback.
