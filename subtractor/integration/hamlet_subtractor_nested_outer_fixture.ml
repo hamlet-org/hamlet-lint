@@ -9,6 +9,6 @@ let[@hamlet.generic] recover_other source =
 type source_errors = [ `Extra | `Missing | `Other ]
 
 let source : (unit, source_errors, Hamlet.never) Hamlet.t = assert false
-let specialization = recover_other source [%hamlet.forward.auto]
+let case_nested = recover_other source [%hamlet.forward.auto]
 
-let narrow : (unit, [ `Extra ], Hamlet.never) Hamlet.t = specialization
+let narrow : (unit, [ `Extra ], Hamlet.never) Hamlet.t = case_nested

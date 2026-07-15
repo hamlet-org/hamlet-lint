@@ -1131,7 +1131,7 @@ let test_generic_slot_routes_complete_input () =
     end
   in
   iterator#expression slot;
-  Alcotest.(check (list int)) "two leaves and a refutation" [ 3 ] !matches
+  Alcotest.(check (list int)) "two leaves and an invariant guard" [ 3 ] !matches
 
 let test_generic_slot_uses_catalogue_dispatch () =
   let catalogue, first, second, third = cases_fixture () in

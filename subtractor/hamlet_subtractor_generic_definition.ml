@@ -580,7 +580,8 @@ let row_preserving_combinator = function
   | "catch" | "provide" | "chain" | "map" | "map_fail" | "tap" | "tap_fail"
   | "tap_defect" | "tap_cause" | "catch_defect" | "catch_cause" | "catch_filter"
   | "catch_cause_filter" | "or_die" | "thaw" | "sandbox" | "scoped"
-  | "scoped_with" | "suspend" | "ensuring" | "acquire_use_release" | "both" ->
+  | "sandbox_cause" | "scoped_with" | "suspend" | "ensuring" | "add_finalizer"
+  | "add_finalizer_exit" | "acquire_release" | "acquire_use_release" | "both" ->
       true
   | _ -> false
 

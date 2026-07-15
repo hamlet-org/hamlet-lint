@@ -16,7 +16,8 @@ let upstream_attribute = "hamlet.subtractor.upstream.v1"
 let callee_attribute = "hamlet.subtractor.callee.v1"
 let handler_attribute = "hamlet.subtractor.handler.v1"
 let owner_attribute = "hamlet.subtractor.owner.v1"
-let generic_owner_attribute = Hamlet_subtractor_generic_definition.owner_attribute
+let generic_owner_attribute =
+  Hamlet_subtractor_generic_definition.owner_attribute
 let error_leaf_attribute = "hamlet.subtractor.error_leaf.v1"
 let error_union_attribute = "hamlet.subtractor.error_union.v1"
 let error_cases_attribute = "hamlet.subtractor.error_cases.v1"
@@ -1878,14 +1879,14 @@ let classify_typed_arm ~context_digest ~kind (Arm (pattern, guard, rhs)) =
   let guard =
     match guard with None -> Residual.Unguarded | Some _ -> Residual.Guarded
   in
-      {
-        arm = Residual.arm ~target:(Residual.Complete_leaf identity) ~guard ~action;
-        identity;
-        members;
-        structural = false;
-        action;
-        rhs;
-      }
+  {
+    arm = Residual.arm ~target:(Residual.Complete_leaf identity) ~guard ~action;
+    identity;
+    members;
+    structural = false;
+    action;
+    rhs;
+  }
 
 let classify_arms ~context_digest ~kind ~marker_id handler =
   let arms =
@@ -2021,6 +2022,10 @@ let marker_dependencies nodes marker_id upstream =
         (fun self expression ->
           let owners =
             attribute_values owner_attribute expression.exp_attributes
+            @ attribute_values generic_owner_attribute expression.exp_attributes
+            @ attribute_values
+                Hamlet_subtractor_generic_definition.nested_call_attribute
+                expression.exp_attributes
             |> List.filter (fun id -> not (String.equal id marker_id))
           in
           if owners <> [] then dependencies := owners @ !dependencies
@@ -2371,6 +2376,9 @@ let rec source_plan_for_expression
     @
     if Option.is_some generic_input then
       attribute_values generic_owner_attribute expression.exp_attributes
+      @ attribute_values
+          Hamlet_subtractor_generic_definition.nested_call_attribute
+          expression.exp_attributes
     else [])
     |> List.filter (fun id -> not (String.equal id marker_id))
     |> List.sort_uniq String.compare
@@ -2836,7 +2844,9 @@ let rec symbolic_certificate_of_source_plan dependencies = function
   | Dependency_source id -> (
       match List.assoc_opt id dependencies with
       | Some certificate -> certificate
-      | None -> refuse Higher_order_flow)
+      | None ->
+          refuse
+            (Core_validation_failed ("unresolved symbolic dependency " ^ id)))
   | Chained_source plans ->
       plans
       |> List.map (symbolic_certificate_of_source_plan dependencies)
@@ -3456,6 +3466,18 @@ let generic_handler_attribute =
 
 let generic_slot_attribute = Hamlet_subtractor_generic_definition.slot_attribute
 
+let generic_nested_call_attribute =
+  Hamlet_subtractor_generic_definition.nested_call_attribute
+
+let generic_nested_callee_attribute =
+  Hamlet_subtractor_generic_definition.nested_callee_attribute
+
+let generic_nested_source_attribute =
+  Hamlet_subtractor_generic_definition.nested_source_attribute
+
+let generic_nested_placeholder_attribute =
+  Hamlet_subtractor_generic_definition.nested_placeholder_attribute
+
 type generic_definition = {
   attachment_id : string;
   helper : string;
@@ -3514,6 +3536,10 @@ type generic_nodes = {
   calls : (string, expression list) Hashtbl.t;
   call_sources : (string, expression list) Hashtbl.t;
   call_placeholders : (string, expression list) Hashtbl.t;
+  nested_calls : (string, expression list) Hashtbl.t;
+  nested_callees : (string, expression list) Hashtbl.t;
+  nested_sources : (string, expression list) Hashtbl.t;
+  nested_placeholders : (string, expression list) Hashtbl.t;
   mutable helpers : value_binding list;
   mutable companions : string list;
   mutable bindings : value_binding_origin list;
@@ -3530,6 +3556,10 @@ let collect_generic_nodes structure =
       calls = Hashtbl.create 16;
       call_sources = Hashtbl.create 16;
       call_placeholders = Hashtbl.create 16;
+      nested_calls = Hashtbl.create 16;
+      nested_callees = Hashtbl.create 16;
+      nested_sources = Hashtbl.create 16;
+      nested_placeholders = Hashtbl.create 16;
       helpers = [];
       companions = [];
       bindings = [];
@@ -3590,6 +3620,10 @@ let collect_generic_nodes structure =
             nodes.call_sources;
           collect Hamlet_subtractor_generic_call.placeholder_attribute
             nodes.call_placeholders;
+          collect generic_nested_call_attribute nodes.nested_calls;
+          collect generic_nested_callee_attribute nodes.nested_callees;
+          collect generic_nested_source_attribute nodes.nested_sources;
+          collect generic_nested_placeholder_attribute nodes.nested_placeholders;
           default.expr self expression);
     }
   in
@@ -3632,6 +3666,61 @@ let helper_uid binding =
 let helper_fingerprint helper =
   Digest.string ("hamlet-subtractor-generic-helper-v1:" ^ helper)
   |> Digest.to_hex
+
+let retained_generic_contract helper path env =
+  let companion = Hamlet_subtractor_generic_contract.companion_name helper in
+  let declaration =
+    try
+      match path with
+      | Path.Pdot (parent, _) ->
+          Env.find_module (Path.Pdot (parent, companion)) env
+      | Path.Pident _ ->
+          Env.find_module_by_name (Longident.Lident companion) env |> snd
+      | Path.Papply _ | Path.Pextra_ty _ -> refuse Higher_order_flow
+    with Not_found ->
+      refuse
+        (Core_validation_failed ("missing retained contract for " ^ helper))
+  in
+  attribute_values Hamlet_subtractor_generic_contract.retained_attribute_name
+    declaration.Types.md_attributes
+  |> function
+  | [ payload ] -> (
+      match Core.Generic_resolution.decode_definition payload with
+      | Ok contract -> contract
+      | Error _ ->
+          refuse
+            (Core_validation_failed ("invalid retained contract for " ^ helper))
+      )
+  | _ ->
+      refuse
+        (Core_validation_failed
+           ("missing or duplicate retained contract for " ^ helper))
+
+let generic_contract_for_callee ~definitions callee =
+  match callee.exp_desc with
+  | Texp_ident (path, _, _) ->
+      let helper = Path.last path in
+      let contract =
+        match
+          List.find_opt
+            (fun (definition : generic_definition) ->
+              String.equal definition.helper helper)
+            definitions
+        with
+        | Some definition -> definition.contract
+        | None -> retained_generic_contract helper path callee.exp_env
+      in
+      if
+        not
+          (String.equal
+             (Core.Generic_contract.helper_fingerprint contract)
+             (helper_fingerprint helper))
+      then
+        refuse
+          (Core_validation_failed
+             ("generic helper fingerprint mismatch for " ^ helper));
+      contract
+  | _ -> refuse Higher_order_flow
 
 let helper_source_origin binding source_parameter =
   match binding.vb_expr.exp_desc with
@@ -3796,7 +3885,8 @@ let symbolic_input_for_expression
     }
   in
   let dependencies =
-    Hashtbl.fold (fun id certificate values -> (id, certificate) :: values)
+    Hashtbl.fold
+      (fun id certificate values -> (id, certificate) :: values)
       resolved []
   in
   let plan, catalogues =
@@ -3827,132 +3917,299 @@ let generic_recovery_expression kind recoveries =
       | Kind.Requirement -> Core.Generic_contract.requirements certificate
       end
 
-let generic_contract_for_binding ~context_digest nodes binding =
+type generic_event =
+  | Local_generic_marker of Hamlet_subtractor_generic_contract.slot * expression
+  | Nested_generic_call of string * expression
+
+let with_generic_context message operation =
+  try operation ()
+  with Refuse Higher_order_flow -> refuse (Core_validation_failed message)
+
+let helper_body binding =
+  match binding.vb_expr.exp_desc with
+  | Texp_function (_, Tfunction_body body) -> body
+  | Texp_function (_, Tfunction_cases _) -> refuse Higher_order_flow
+  | _ -> refuse Higher_order_flow
+
+let generic_contract_for_binding ~context_digest ~definitions nodes binding =
   let helper, source_parameter = generic_helper_link binding in
   let provisional = provisional_contract nodes helper in
   if provisional.source_parameter <> source_parameter then
     refuse Higher_order_flow;
   let _, source_uid = helper_source_origin binding source_parameter in
-  let resolved = Hashtbl.create (List.length provisional.slots) in
+  let nested_ids = ref [] in
+  let default = Tast_iterator.default_iterator in
+  let iterator =
+    {
+      default with
+      expr =
+        (fun self expression ->
+          nested_ids :=
+            attribute_values generic_nested_call_attribute
+              expression.exp_attributes
+            @ !nested_ids;
+          default.expr self expression);
+    }
+  in
+  iterator.expr iterator binding.vb_expr;
+  let nested_ids = List.sort_uniq String.compare !nested_ids in
+  let resolved =
+    Hashtbl.create (List.length provisional.slots + List.length nested_ids)
+  in
   let catalogues = ref [] in
-  let slots =
+  let ordered_slots = ref [] in
+  let next_nested_ordinal = ref (List.length provisional.slots) in
+  let process_local (provisional_slot : Hamlet_subtractor_generic_contract.slot)
+      =
+    let marker_id = provisional_slot.marker_id in
+    let kind =
+      match provisional_slot.kind with
+      | Hamlet_subtractor_generic_contract.Error -> Kind.Error
+      | Requirement -> Kind.Requirement
+    in
+    let callee =
+      generic_require nodes.callees marker_id generic_callee_attribute
+    in
+    verify_owner_callee kind callee;
+    ignore (generic_require nodes.owners marker_id generic_owner_attribute);
+    let upstream =
+      generic_require nodes.upstreams marker_id generic_upstream_attribute
+    in
+    let source, source_catalogues =
+      with_generic_context ("cannot trace automatic marker source " ^ marker_id)
+        (fun () ->
+          symbolic_input_for_expression ~context_digest ~nodes ~source_uid
+            ~marker_id ~kind ~resolved upstream)
+    in
+    let handler =
+      generic_require nodes.handlers marker_id generic_handler_attribute
+    in
+    let slot_expression =
+      generic_require nodes.slots marker_id generic_slot_attribute
+    in
+    let handled_callback = slot_handled_callback slot_expression in
+    let classified =
+      with_generic_context
+        ("cannot classify automatic marker handler " ^ marker_id) (fun () ->
+          classify_generic_arms ~context_digest ~kind
+            ~count:provisional_slot.handled_cases handled_callback)
+    in
+    let claimed = List.map (leaf_for_classified kind) classified in
+    let handled =
+      classified
+      |> List.filter_map (fun classified ->
+          match (Residual.guard classified.arm, classified.action) with
+          | Residual.Unguarded, Residual.Handle ->
+              Some (leaf_for_classified kind classified)
+          | Residual.Unguarded, Residual.Forward
+          | Residual.Guarded, (Residual.Handle | Residual.Forward) ->
+              None)
+    in
+    let explicitly_forwarded =
+      classified
+      |> List.filter_map (fun classified ->
+          match (Residual.guard classified.arm, classified.action) with
+          | Residual.Unguarded, Residual.Forward ->
+              Some (leaf_for_classified kind classified)
+          | Residual.Unguarded, Residual.Handle
+          | Residual.Guarded, (Residual.Handle | Residual.Forward) ->
+              None)
+    in
+    let recoveries, recovery_catalogues =
+      match kind with
+      | Kind.Error ->
+          with_generic_context
+            ("cannot trace automatic marker recovery " ^ marker_id) (fun () ->
+              generic_recoveries ~context_digest ~bindings:nodes.bindings
+                classified)
+      | Kind.Requirement -> ([], [])
+    in
+    catalogues :=
+      source_catalogues @ List.concat recovery_catalogues @ !catalogues;
+    let recovery = generic_recovery_expression kind recoveries in
+    let input =
+      match kind with
+      | Kind.Error -> Core.Generic_contract.errors source
+      | Kind.Requirement -> Core.Generic_contract.requirements source
+    in
+    let id =
+      Core.Generic_contract.slot_id marker_id |> function
+      | Ok id -> id
+      | Error _ -> refuse Higher_order_flow
+    in
+    let slot =
+      Core.Generic_contract.slot ~id ~ordinal:provisional_slot.ordinal ~kind
+        ~input ~claimed ~handled ~explicitly_forwarded ~recovery
+      |> function
+      | Ok slot -> slot
+      | Error _ ->
+          refuse (Core_validation_failed "invalid generic evidence slot")
+    in
+    let output =
+      (match kind with
+        | Kind.Error ->
+            Core.Generic_contract.catch ~inputs:[] ~source ~handled
+              ~explicitly_forwarded
+              ~recoveries:(List.map Core.Generic_contract.concrete recoveries)
+        | Kind.Requirement ->
+            Core.Generic_contract.provide ~inputs:[] ~source ~handled
+              ~explicitly_forwarded ~handlers:[])
+      |> function
+      | Ok output -> output
+      | Error _ -> refuse (Core_validation_failed "invalid generic slot output")
+    in
+    Hashtbl.replace resolved marker_id output;
+    ignore handler;
+    ordered_slots := slot :: !ordered_slots
+  in
+  let process_nested id =
+    let callee =
+      generic_require nodes.nested_callees id generic_nested_callee_attribute
+    in
+    let source_expression =
+      generic_require nodes.nested_sources id generic_nested_source_attribute
+    in
+    ignore
+      (generic_require nodes.nested_placeholders id
+         generic_nested_placeholder_attribute);
+    let inner =
+      with_generic_context "cannot resolve nested generic-helper contract"
+        (fun () -> generic_contract_for_callee ~definitions callee)
+    in
+    let source, source_catalogues =
+      with_generic_context "cannot trace nested generic-helper source"
+        (fun () ->
+          symbolic_input_for_expression ~context_digest ~nodes ~source_uid
+            ~marker_id:id ~kind:Kind.Error ~resolved source_expression)
+    in
+    catalogues := source_catalogues @ !catalogues;
+    Core.Generic_contract.slots inner
+    |> List.iter (fun slot ->
+        let id =
+          Core.Generic_contract.namespace_slot_id ~namespace:id
+            (Core.Generic_contract.slot_id_value slot)
+          |> function
+          | Ok id -> id
+          | Error _ ->
+              refuse
+                (Core_validation_failed "invalid nested evidence slot identity")
+        in
+        let input =
+          Core.Generic_contract.substitute_expression ~input:source
+            (Core.Generic_contract.slot_input slot)
+        in
+        let recovery =
+          Core.Generic_contract.substitute_expression ~input:source
+            (Core.Generic_contract.slot_recovery slot)
+        in
+        let composed =
+          Core.Generic_contract.slot ~id ~ordinal:!next_nested_ordinal
+            ~kind:(Core.Generic_contract.slot_kind slot)
+            ~input
+            ~claimed:(Core.Generic_contract.slot_claimed slot)
+            ~handled:(Core.Generic_contract.slot_handled slot)
+            ~explicitly_forwarded:
+              (Core.Generic_contract.slot_explicitly_forwarded slot)
+            ~recovery
+          |> function
+          | Ok slot -> slot
+          | Error _ ->
+              refuse (Core_validation_failed "invalid composed evidence slot")
+        in
+        incr next_nested_ordinal;
+        ordered_slots := composed :: !ordered_slots);
+    let output =
+      Core.Generic_contract.substitute ~input:source
+        (Core.Generic_contract.output inner)
+    in
+    Hashtbl.replace resolved id output
+  in
+  let local_events =
     provisional.slots
-    |> List.sort (fun (left : Hamlet_subtractor_generic_contract.slot) right ->
-        Int.compare left.ordinal right.ordinal)
-    |> List.map
-         (fun (provisional_slot : Hamlet_subtractor_generic_contract.slot) ->
-           let marker_id = provisional_slot.marker_id in
-           let kind =
-             match provisional_slot.kind with
-             | Hamlet_subtractor_generic_contract.Error -> Kind.Error
-             | Requirement -> Kind.Requirement
-           in
-           let callee =
-             generic_require nodes.callees marker_id generic_callee_attribute
-           in
-           verify_owner_callee kind callee;
-           ignore
-             (generic_require nodes.owners marker_id generic_owner_attribute);
-           let upstream =
-             generic_require nodes.upstreams marker_id
-               generic_upstream_attribute
-           in
-           let source, source_catalogues =
-             symbolic_input_for_expression ~context_digest ~nodes
-               ~source_uid ~marker_id ~kind ~resolved upstream
-           in
-           let handler =
-             generic_require nodes.handlers marker_id generic_handler_attribute
-           in
-           let slot_expression =
-             generic_require nodes.slots marker_id generic_slot_attribute
-           in
-           let handled_callback = slot_handled_callback slot_expression in
-           let classified =
-             classify_generic_arms ~context_digest ~kind
-               ~count:provisional_slot.handled_cases handled_callback
-           in
-           let claimed = List.map (leaf_for_classified kind) classified in
-           let handled =
-             classified
-             |> List.filter_map (fun classified ->
-                 match (Residual.guard classified.arm, classified.action) with
-                 | Residual.Unguarded, Residual.Handle ->
-                     Some (leaf_for_classified kind classified)
-                 | Residual.Unguarded, Residual.Forward
-                 | Residual.Guarded, (Residual.Handle | Residual.Forward) ->
-                     None)
-           in
-           let explicitly_forwarded =
-             classified
-             |> List.filter_map (fun classified ->
-                 match (Residual.guard classified.arm, classified.action) with
-                 | Residual.Unguarded, Residual.Forward ->
-                     Some (leaf_for_classified kind classified)
-                 | Residual.Unguarded, Residual.Handle
-                 | Residual.Guarded, (Residual.Handle | Residual.Forward) ->
-                     None)
-           in
-           let recoveries, recovery_catalogues =
-             match kind with
-             | Kind.Error ->
-                 generic_recoveries ~context_digest ~bindings:nodes.bindings
-                   classified
-             | Kind.Requirement -> ([], [])
-           in
-           catalogues :=
-             source_catalogues @ List.concat recovery_catalogues @ !catalogues;
-           let recovery = generic_recovery_expression kind recoveries in
-           let input =
-             match kind with
-             | Kind.Error -> Core.Generic_contract.errors source
-             | Kind.Requirement -> Core.Generic_contract.requirements source
-           in
-           let id =
-             Core.Generic_contract.slot_id marker_id |> function
-             | Ok id -> id
-             | Error _ -> refuse Higher_order_flow
-           in
-           let slot =
-             Core.Generic_contract.slot ~id ~ordinal:provisional_slot.ordinal
-               ~kind ~input ~claimed ~handled ~explicitly_forwarded ~recovery
-             |> function
-             | Ok slot -> slot
-             | Error _ ->
-                 refuse (Core_validation_failed "invalid generic evidence slot")
-           in
-           let output =
-             (match kind with
-               | Kind.Error ->
-                   Core.Generic_contract.catch ~inputs:[] ~source ~handled
-                     ~explicitly_forwarded
-                     ~recoveries:
-                       (List.map Core.Generic_contract.concrete recoveries)
-               | Kind.Requirement ->
-                   Core.Generic_contract.provide ~inputs:[] ~source ~handled
-                     ~explicitly_forwarded ~handlers:[])
-             |> function
-             | Ok output -> output
-             | Error _ ->
-                 refuse (Core_validation_failed "invalid generic slot output")
-           in
-           Hashtbl.replace resolved marker_id output;
-           ignore handler;
-           slot)
+    |> List.map (fun (slot : Hamlet_subtractor_generic_contract.slot) ->
+        let marker =
+          generic_require nodes.slots slot.marker_id generic_slot_attribute
+        in
+        Local_generic_marker (slot, marker))
   in
-  let output =
-    match List.rev provisional.slots with
-    | (last : Hamlet_subtractor_generic_contract.slot) :: _ -> (
-        match Hashtbl.find_opt resolved last.marker_id with
-        | Some output -> output
-        | None -> refuse Higher_order_flow)
-    | [] -> refuse Higher_order_flow
+  let nested_events =
+    List.map
+      (fun id ->
+        Nested_generic_call
+          ( id,
+            generic_require nodes.nested_calls id generic_nested_call_attribute
+          ))
+      nested_ids
   in
+  let event_location = function
+    | Local_generic_marker (_, expression) | Nested_generic_call (_, expression)
+      ->
+        expression.exp_loc
+  in
+  let event_id = function
+    | Local_generic_marker (slot, _) -> slot.marker_id
+    | Nested_generic_call (id, _) -> id
+  in
+  let event_source = function
+    | Local_generic_marker (slot, _) ->
+        generic_require nodes.upstreams slot.marker_id
+          generic_upstream_attribute
+    | Nested_generic_call (id, _) ->
+        generic_require nodes.nested_sources id generic_nested_source_attribute
+  in
+  let dependency_nodes =
+    {
+      upstreams = Hashtbl.create 0;
+      callees = Hashtbl.create 0;
+      handlers = Hashtbl.create 0;
+      markers = Hashtbl.create 0;
+      bindings = nodes.bindings;
+    }
+  in
+  let event_dependencies event =
+    marker_dependencies dependency_nodes (event_id event) (event_source event)
+  in
+  let compare_events first second =
+    Int.compare (event_location first).loc_start.pos_cnum
+      (event_location second).loc_start.pos_cnum
+  in
+  let process_event = function
+    | Local_generic_marker (slot, _) -> process_local slot
+    | Nested_generic_call (id, _) -> process_nested id
+  in
+  let rec process_events pending =
+    match pending with
+    | [] -> ()
+    | _ ->
+        let ready, waiting =
+          List.partition
+            (fun event ->
+              event_dependencies event |> List.for_all (Hashtbl.mem resolved))
+            pending
+        in
+        if ready = [] then
+          refuse
+            (Core_validation_failed
+               "generic-helper composition contains an unresolved or cyclic \
+                symbolic dependency")
+        else (
+          ready |> List.sort compare_events |> List.iter process_event;
+          process_events waiting)
+  in
+  process_events (local_events @ nested_events);
+  let output, output_catalogues =
+    with_generic_context "cannot trace generic-helper output" (fun () ->
+        symbolic_input_for_expression ~context_digest ~nodes ~source_uid
+          ~marker_id:("generic-output:" ^ helper)
+          ~kind:Kind.Error ~resolved (helper_body binding))
+  in
+  catalogues := output_catalogues @ !catalogues;
   ignore (helper_uid binding);
   let fingerprint = helper_fingerprint helper in
   let contract =
     Core.Generic_contract.create ~helper_fingerprint:fingerprint
-      ~effect_parameter:source_parameter ~slots ~output
+      ~effect_parameter:source_parameter ~slots:(List.rev !ordered_slots)
+      ~output
     |> function
     | Ok contract -> contract
     | Error _ -> refuse (Core_validation_failed "invalid generic contract")
@@ -3970,8 +4227,12 @@ let generic_definitions_typedtree ~context_digest structure =
     | [] -> Ok (List.rev accumulated)
     | binding :: rest -> (
         try
+          let helper, _ = generic_helper_link binding in
           let definition =
-            generic_contract_for_binding ~context_digest nodes binding
+            with_generic_context
+              ("cannot resolve generic-helper definition " ^ helper) (fun () ->
+                generic_contract_for_binding ~context_digest
+                  ~definitions:(List.rev accumulated) nodes binding)
           in
           loop (definition :: accumulated) rest
         with Refuse reason -> Error { location = binding.vb_loc; reason })

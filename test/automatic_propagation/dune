@@ -79,7 +79,9 @@
  (libraries
   hamlet
   automatic_propagation_external
+  hamlet_subtractor_generic_definition_fixture
   hamlet_subtractor_generic_helper_producer
+  hamlet_subtractor_nested_outer_fixture
   alcotest)
  (preprocess
   (staged_pps hamlet-subtractor.ppx)))
@@ -113,6 +115,22 @@
  (alias runtest)
  (action
   (diff generic_helper_types.expected generic_helper_types.actual)))
+
+(rule
+ (targets nested_generic_helper_types.actual)
+ (deps
+  ../../subtractor/integration/.hamlet_subtractor_nested_outer_fixture.objs/byte/hamlet_subtractor_nested_outer_fixture.cmt)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ./automatic_propagation_cmt_dump.exe %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff
+   nested_generic_helper_types.expected
+   nested_generic_helper_types.actual)))
 
 (rule
  (alias automatic-propagation-lsp)

@@ -3,6 +3,23 @@ module type Logger = sig
   val log : string -> (unit, 'e, 'r) Hamlet.t
 end]
 
+[%%hamlet.service
+module type Clock = sig
+  val now : unit -> (int, 'e, 'r) Hamlet.t
+end]
+
+let logger_requirement : (unit, Hamlet.never, Logger.Tag.r) Hamlet.t =
+  let open Hamlet.Combinators in
+  let* _logger = Logger.Tag.summon in
+  return ()
+
+let requirements : (unit, Hamlet.never, [ Logger.Tag.r | Clock.Tag.r ]) Hamlet.t
+    =
+  let open Hamlet.Combinators in
+  let* _logger = Logger.Tag.summon in
+  let* _clock = Clock.Tag.summon in
+  return ()
+
 let[@hamlet.generic] recover_missing source =
   Hamlet.Combinators.catch source ~handler:(function
     | `Missing -> Hamlet.Combinators.fail `Recovery

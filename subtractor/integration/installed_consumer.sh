@@ -209,6 +209,26 @@ cat > "$consumer/dune" <<'EOF'
   (staged_pps hamlet-subtractor.ppx)))
 EOF
 
+cat > "$consumer/producer.ml" <<'EOF'
+open Hamlet
+
+let[@hamlet.generic] recover_missing source =
+  Combinators.catch source ~handler:(function
+    | `Missing -> Combinators.return "generic missing"
+    | [%hamlet.propagate_e.auto] -> .)
+EOF
+
+cat > "$consumer/outer.ml" <<'EOF'
+open Hamlet
+
+let[@hamlet.generic] recover_timeout source =
+  Combinators.catch
+    (Producer.recover_missing source [%hamlet.forward.auto])
+    ~handler:(function
+      | `Timeout -> Combinators.return "generic timeout"
+      | [%hamlet.propagate_e.auto] -> .)
+EOF
+
 cat > "$consumer/main.ml" <<'EOF'
 open Hamlet
 
@@ -266,6 +286,13 @@ let error_effect =
       match error with
       | #Storage.Errors.missing -> Combinators.return "recovered"
       | [%hamlet.propagate_e.auto] -> .)
+
+let generic_source =
+  if Sys.opaque_identity true then Combinators.fail `Missing
+  else Combinators.fail `Timeout
+
+let generic_effect =
+  Outer.recover_timeout generic_source [%hamlet.forward.auto]
 
 let chained_error_source : (string, Chain_errors.old, never) t =
   Combinators.fail (`Old_a : Chain_errors.old)
@@ -359,6 +386,7 @@ let requirement_done : (string, never, never) t =
     | #Metrics.Tag.r as witness -> Metrics.Tag.give witness (module Metrics_live))
 
 let error_hover = error_effect
+let generic_hover = generic_effect
 let requirement_hover = requirement_effect
 let chained_error_hover = chained_error_effect
 let alternating_error_hover = alternating_error_effect
@@ -371,12 +399,14 @@ let check expected = function
 
 let () =
   check "recovered" (Interpreter.run error_effect);
+  check "generic missing" (Interpreter.run generic_effect);
   check "handled introduced error" (Interpreter.run chained_error_done);
   check "handled alternating error" (Interpreter.run alternating_error_done);
   check "ready at 42" (Interpreter.run requirement_done)
 EOF
 
 reject_file_text "$consumer/main.ml" "let error_source :"
+reject_file_text "$consumer/main.ml" "let generic_source :"
 reject_file_text "$consumer/main.ml" "let requirement_source () :"
 reject_file_text "$consumer/main.ml" ": Logger.Tag.t"
 reject_file_text "$consumer/main.ml" ": Clock.Tag.t"
@@ -396,6 +426,9 @@ test -s "$trace" || fail "installed resolver was not executed by Dune"
 error_position=$(awk '/^let error_hover = error_effect$/ {
   print NR ":" (index($0, "error_effect") - 1)
 }' "$consumer/main.ml")
+generic_position=$(awk '/^let generic_hover = generic_effect$/ {
+  print NR ":" (index($0, "generic_effect") - 1)
+}' "$consumer/main.ml")
 requirement_position=$(awk '/^let requirement_hover = requirement_effect$/ {
   print NR ":" (index($0, "requirement_effect") - 1)
 }' "$consumer/main.ml")
@@ -410,6 +443,7 @@ chained_requirement_position=$(awk '/^let chained_requirement_hover = requiremen
 }' "$consumer/main.ml")
 
 test -n "$error_position" || fail "error hover position was not found"
+test -n "$generic_position" || fail "generic hover position was not found"
 test -n "$requirement_position" || fail "requirement hover position was not found"
 test -n "$chained_error_position" || fail "chained error hover position was not found"
 test -n "$alternating_error_position" ||
@@ -420,6 +454,11 @@ test -n "$chained_requirement_position" ||
 error_hover=$(
   cd "$consumer"
   "$launcher" ocamlmerlin single type-enclosing -position "$error_position" \
+    -index 0 -verbosity 0 -filename main.ml < main.ml
+)
+generic_hover=$(
+  cd "$consumer"
+  "$launcher" ocamlmerlin single type-enclosing -position "$generic_position" \
     -index 0 -verbosity 0 -filename main.ml < main.ml
 )
 requirement_hover=$(
@@ -448,11 +487,13 @@ chained_requirement_hover=$(
 )
 
 error_hover_compact=$(printf '%s' "$error_hover" | tr -d '[:space:]')
+generic_hover_compact=$(printf '%s' "$generic_hover" | tr -d '[:space:]')
 requirement_hover_compact=$(printf '%s' "$requirement_hover" | tr -d '[:space:]')
 chained_error_hover_compact=$(printf '%s' "$chained_error_hover" | tr -d '[:space:]')
 alternating_error_hover_compact=$(printf '%s' "$alternating_error_hover" | tr -d '[:space:]')
 chained_requirement_hover_compact=$(printf '%s' "$chained_requirement_hover" | tr -d '[:space:]')
 require_text "$error_hover_compact" '"class":"return"'
+require_text "$generic_hover_compact" '"class":"return"'
 require_text "$requirement_hover_compact" '"class":"return"'
 require_text "$chained_error_hover_compact" '"class":"return"'
 require_text "$alternating_error_hover_compact" '"class":"return"'
@@ -460,6 +501,8 @@ require_text "$chained_requirement_hover_compact" '"class":"return"'
 require_one_of "$error_hover" "Timeout" "Storage.Errors.timeout"
 reject_text "$error_hover" "Missing"
 reject_text "$error_hover" "Storage.Errors.missing"
+reject_text "$generic_hover" "Missing"
+reject_text "$generic_hover" "Timeout"
 require_text "$requirement_hover" "Clock"
 reject_text "$requirement_hover" "Logger"
 require_text "$chained_error_hover" "Old_c"

@@ -60,6 +60,10 @@ let callback ~loc ~claimed name =
     (A.evar ~loc (if claimed then "handled" else "forward"))
     [ (Nolabel, A.evar ~loc name) ]
 
+let warning_attribute ~loc value =
+  A.attribute ~loc ~name:{ txt = "warning"; loc }
+    ~payload:(PStr [ A.pstr_eval ~loc (A.estring ~loc value) [] ])
+
 let direct_case ~loc ~claimed leaf =
   let name =
     match Leaf.kind leaf with Kind.Error -> "error" | Requirement -> "witness"
@@ -212,9 +216,10 @@ let catalogue_case ~loc ~input ~claimed catalogue =
   in
   A.case ~lhs ~guard:None ~rhs
 
-let refutation_case ~loc =
+let invariant_case ~loc =
   let loc = ghost loc in
-  A.case ~lhs:(A.ppat_any ~loc) ~guard:None ~rhs:(A.pexp_unreachable ~loc)
+  A.case ~lhs:(A.ppat_any ~loc) ~guard:None
+    ~rhs:(A.pexp_assert ~loc (A.ebool ~loc false))
 
 let leaf_case ~loc ~claimed leaf =
   match Leaf.materialization leaf with
@@ -256,7 +261,7 @@ let dispatch_cases ~loc ~catalogues ~input ~claimed =
         |> List.filter (fun leaf -> not (belongs_to_full_catalogue leaf))
       in
       Result.map
-        (fun direct -> catalogue_cases @ direct @ [ refutation_case ~loc ])
+        (fun direct -> catalogue_cases @ direct @ [ invariant_case ~loc ])
         (generate [] leaves)
 
 let slot ~loc ~catalogues ~input ~claimed =
@@ -265,7 +270,8 @@ let slot ~loc ~catalogues ~input ~claimed =
   | Ok cases ->
       let value = "_hamlet_subtractor_value" in
       let body =
-        A.pexp_match ~loc (A.evar ~loc value) cases
+        let expression = A.pexp_match ~loc (A.evar ~loc value) cases in
+        { expression with pexp_attributes = [ warning_attribute ~loc "-11" ] }
         |> A.pexp_fun ~loc (Labelled "forward") None
              (A.ppat_var ~loc { txt = "forward"; loc })
         |> A.pexp_fun ~loc (Labelled "handled") None

@@ -1,320 +1,201 @@
 # Architecture
 
-`hamlet-subtractor.ppx` replaces an automatic marker with exact forwarding
-cases. It either proves the complete finite input row or reports an error that
-asks for an explicit `%hamlet.te` or `%hamlet.ts` boundary.
-
-Three compiler terms appear throughout this guide:
-
-- an **AST** is OCaml syntax represented as data;
-- a **Typedtree** is the compiler's AST after names and types have been
-  resolved;
-- a **UID** is the compiler identity of a resolved declaration. It
-  distinguishes the real `Hamlet.Combinators.catch` from a local function with
-  the same name.
+Hamlet Subtractor is a PPX with a short-lived compiler helper. The PPX owns the
+source transformation; the helper, called the resolver, gives it exact typed
+facts. The final result is ordinary OCaml.
 
 ## End-to-end flow
 
 ```mermaid
-flowchart TB
-  Source["Saved source or live editor buffer"]
-  Bundle["hamlet_subtractor_ppx.ml<br/>runs ppx_hamlet and owns the lifecycle"]
-  Mode{"Who invoked the PPX?"}
-  Deps["Dependency-safe AST<br/>used only by ocamldep"]
-
-  subgraph PPX["PPX process"]
-    Prepare["probe.ml<br/>find markers and owners"]
-    Base["Base AST<br/>the program to modify"]
-    Probe["Probe AST<br/>temporary analysis copy"]
-    Client["resolver_client.ml<br/>send probe and compiler context"]
-    Engine["engine.ml<br/>subtract handled leaves<br/>and order dependent markers"]
-    Generate["generator.ml<br/>build forwarding cases"]
-    Replace["replace.ml<br/>insert cases and constraints"]
-  end
-
-  subgraph Helper["hamlet_subtractor_resolver.ml — isolated process"]
-    TypeProbe["compiler_compat.ml<br/>type-check the probe"]
-    Evidence["compiler_evidence.ml<br/>verify Hamlet UIDs and exact rows"]
-    Proof["Compiler-independent proof<br/>rows, catalogues, certificates"]
-  end
-
-  Core["subtractor/core<br/>proof values and algorithms"]
-  Final["Final ordinary OCaml AST"]
-  TypeFinal["Normal compiler or Merlin type-check"]
-
-  Source --> Bundle --> Mode
-  Mode -->|"ocamldep: imported interfaces may not exist"| Deps
-  Mode -->|"ocamlc, ocamlopt, or Merlin"| Prepare
-  Prepare -->|"keep user code separate from analysis"| Base
-  Prepare --> Probe
-  Probe -->|"live AST, locations, and context"| Client
-  Client --> TypeProbe --> Evidence --> Proof
-  Core -->|"defines the returned proof"| Proof
-  Proof --> Engine
-  Core -->|"residual algorithms"| Engine
-  Engine --> Generate
-  Base --> Replace
-  Generate --> Replace --> Final --> TypeFinal
+flowchart TD
+    Source[User source] --> PPX[hamlet_subtractor_ppx]
+    PPX --> Hamlet[ordinary ppx_hamlet rewrite]
+    Hamlet --> Base[base AST]
+    Hamlet --> ProbeBuilder[hamlet_subtractor_probe]
+    ProbeBuilder --> Probe[temporary probe AST]
+    Probe --> Resolver[hamlet_subtractor_resolver]
+    Resolver --> Typecheck[isolated OCaml type checker]
+    Typecheck --> Typedtree[probe Typedtree]
+    Typedtree --> Evidence[hamlet_subtractor_compiler_evidence]
+    Evidence --> Proofs[immutable exact proofs]
+    Proofs --> Engine[hamlet_subtractor_engine]
+    Engine --> Generator[generator and replace]
+    Base --> Generator
+    Generator --> Final[final ordinary OCaml AST]
+    Final --> Compiler[OCaml compiler or Merlin]
 ```
 
-The separation has two purposes:
+The temporary probe is never returned as user code. The resolver types it only
+to discover declaration identities and exact effect rows. The final compiler
+or Merlin sees and types only the final expansion.
 
-1. Compiler internals stay inside the resolver process. The PPX receives plain,
-   immutable proof values rather than compiler state.
-2. The temporary probe is never treated as the user's program. The compiler or
-   Merlin accepts only the final AST produced after replacement.
+## Base AST and probe AST
 
-The PPX starts the resolver automatically. How that executable is located is
-explained in [Compiler and Editor Integration](./integration.md#resolver-process).
+After `ppx_hamlet` has expanded services and primitives, the PPX keeps two
+related trees.
 
-## The base and probe ASTs
+The base AST is the program that will become the final output. It retains each
+automatic marker until replacement.
 
-`Hamlet_subtractor_probe.prepare` creates two related versions of the module.
+The probe AST is a temporary copy. A marker is replaced by type-safe placeholder
+code, and private attributes connect four expressions:
 
-### Base AST
+- the marker;
+- its owning `catch` or `provide` call;
+- the input computation;
+- the inline handler.
 
-The base AST contains the transformed user program and stable marker IDs. It
-does not contain the temporary bindings used for analysis. Replacement always
-starts here, which prevents probe code from appearing in builds or editor
-output.
+Stable IDs preserve those links after OCaml has rewritten the syntax into a
+Typedtree. Locations still point to the user's live source, including an
+unsaved Merlin buffer.
 
-The PPX adds internal attributes to the original marker, its `catch` or
-`provide` call, and the input expression. These attributes are links, not
-proofs. They tell replacement where to insert generated cases and type
-constraints. All of them are removed before the PPX returns.
+## Why a separate resolver exists
 
-### Probe AST
+OCaml's compiler libraries keep mutable global state: include paths,
+environments, loaded interfaces, type variables, and flags. Performing a
+second type check inside a compiler or Merlin PPX process could corrupt the
+host session.
 
-The probe is a type-safe analysis copy. An unresolved marker becomes a bottom
-branch:
+The PPX therefore starts a matching resolver process. The resolver reconstructs
+the reported compiler context, types one probe, returns immutable evidence, and
+exits. No `Env.t`, mutable type expression, or Typedtree node crosses the
+process boundary.
 
-```ocaml
-| _ -> (assert false [@hamlet.subtractor.marker.v1 "marker-id"])
-```
+The request and response use a bounded, versioned protocol. It rejects missing
+or duplicate evidence, stale versions, wrong AST digests, crashes, timeouts,
+and oversized payloads.
 
-The probe also binds the handler and upstream computation separately. This is
-important because handler patterns can widen a polymorphic variant row during
-type inference. The separate upstream binding lets the resolver inspect the
-producer before that widening.
+Resolver installation and `staged_pps` are covered in
+[Compiler and Editor Integration](./integration.md).
 
-Probe-created bindings are never accepted as evidence by themselves. Evidence
-must come from the original expression, an independently generalized user
-value, a supported Hamlet construction, or an earlier resolved marker.
+## Typed evidence
 
-## Marker discovery
+`hamlet_subtractor_compiler_evidence.ml` reads the probe Typedtree. It verifies
+resolved declarations rather than printed names. A local function called
+`catch`, `fail`, or `give` is therefore not accepted as a Hamlet primitive.
 
-`ppx_hamlet` recognizes:
+For each marker it proves:
 
-```ocaml
-[%hamlet.propagate_e.auto]
-[%hamlet.propagate_s.auto]
-```
+- the two effect channels of the input computation;
+- every complete error or requirement leaf;
+- the handler arms that handle or explicitly forward a leaf;
+- effects added by handler bodies and intervening combinators;
+- dependencies on earlier markers or generic-helper calls.
 
-The syntax pass first checks that:
+Compiler-specific values are immediately converted into immutable values from
+`subtractor/core`. The deterministic proof engine does not depend on
+compiler-libs.
 
-- the marker is the final match arm;
-- its body is the refutation expression `.`;
-- an error marker belongs to `catch` and a service marker to `provide`;
-- the handler is inline;
-- the owner is a supported direct or pipeline call.
-
-These checks only identify a candidate. The Typedtree pass later verifies that
-the owner resolves to Hamlet's actual `catch` or `provide` UID.
-
-Every candidate receives an ID derived from its source location and transformed
-source. The ID correlates the base AST, probe AST, resolver response, and final
-replacement during one PPX invocation. Correctness does not depend on a
-persistent marker cache.
-
-## PPX invocation modes
-
-The same executable serves three callers:
-
-| Caller | What the PPX returns | Why |
-| --- | --- | --- |
-| `ocamldep` | A dependency-safe AST with no probe attributes | Dune may not have built imported `.cmi` files yet. This pass only discovers dependencies. |
-| `ocamlc` or `ocamlopt` | The fully resolved final AST | Dependency interfaces are available and the compiler will type-check the result. |
-| Merlin | The same final AST, built from the live buffer | Hover and diagnostics must describe the code currently open in the editor. |
-
-An ordinary Dune `pps` invocation identifies itself as an early PPX driver. If
-it contains automatic markers, the subtractor reports that `staged_pps` is
-required.
-
-## From the probe to an exact proof
-
-The PPX serializes the already transformed probe AST with its source locations
-and sends it to the resolver. It does not reread the source file. This is why
-unsaved changes in the active editor buffer survive the process boundary.
-
-Inside the resolver:
-
-1. `hamlet_subtractor_compiler_compat.ml` recreates the relevant compiler
-   context and type-checks the probe in a fresh compiler store.
-2. `hamlet_subtractor_compiler_evidence.ml` finds the linked Typedtree nodes.
-3. It verifies the real Hamlet owner, combinator, service-tag, and catalogue
-   identities.
-4. It reads the exact source rows before handler widening.
-5. It classifies preceding handler arms and the effects of recovery code.
-6. It converts every accepted fact into values defined by `subtractor/core`.
-
-No `Typedtree`, compiler environment, mutable type expression, or compiler UID
-is returned to the PPX. The resolver response contains only exact leaves,
-catalogues, certificates, source spans, and structured refusals.
-
-The response is accepted only if its request ID, compiler context, probe digest,
-and marker set match the current invocation. A partial or mismatched response
-is an error; the PPX never fills gaps with guesses.
-
-## Residual and marker dependencies
+## Residual computation
 
 For one channel, the engine computes:
 
 ```text
-generated residual = input leaves
-                     - handled leaves
-                     - explicitly forwarded leaves
-
-final output = generated residual
-               + explicitly forwarded leaves
-               + effects introduced by recovery code
+forwarded input = input - definitely handled leaves
+output = forwarded input + effects introduced by handled branches
 ```
 
-Only the generated residual becomes new match cases. User recovery branches
-remain unchanged.
+A guarded arm claims a leaf for code generation but does not remove it from the
+forwarded input. An explicit `fail error` or `Dispatch.need witness` also keeps
+the leaf.
 
-A marker may consume the result of an earlier marker:
+Errors and requirements are tracked separately. A `catch` changes the error
+channel while retaining requirements from its source and recovery code. A
+`provide` changes requirements while retaining errors from the source and
+provider code.
 
-```ocaml
-let first = catch source ~handler:first_handler
-let second = catch first ~handler:second_handler
-```
-
-The Typedtree records that `second` uses the value bound as `first`. The engine
-therefore resolves `first`, passes its complete error-and-requirement
-certificate to `second`, and then resolves `second`.
-
-The earlier result may sit inside supported composition:
-
-```ocaml
-let with_new_effect =
-  let* value = first in
-  operation_that_adds_a_known_effect value
-```
-
-The evidence layer builds a small source plan instead of flattening every
-primitive into a union:
-
-```mermaid
-flowchart LR
-  Previous["Earlier marker certificate"]
-  Exact["Exact new computation"]
-  Preserve["Preserve rows<br/>chain, both, tap, ensuring"]
-  Replace["Replace errors<br/>catch and catch filters"]
-  Clear["Clear one row<br/>or_die, sandbox, scoped"]
-  Next["Exact input of next marker"]
-
-  Previous --> Preserve
-  Exact --> Preserve
-  Previous --> Replace
-  Exact --> Replace
-  Previous --> Clear
-  Preserve --> Next
-  Replace --> Next
-  Clear --> Next
-```
-
-For a preserving primitive, the plan unions exact contributors. For an
-ordinary `catch`, it discards source errors, uses recovery errors, and retains
-requirements from both sides. Clearing wrappers remove only the channel their
-API eliminates. Primitives controlled by user code, such as `map_fail` or a
-plain `provide`, use the call's output row only when that row is independently
-exact.
-
-The first marker has no predecessor. The second and every later marker may
-have at most one earlier predecessor, so a linear chain may contain any number
-of markers and exact new contributions. `chain`, `catch`, and supported
-wrappers may alternate. Cycles, opaque links, and merges of two independently
-marked values receive deterministic errors.
+When several markers occur in one linear flow, the engine resolves the
+dependency graph. A marker may use the exact output of an earlier marker, even
+when `chain`, another `catch`, `provide`, or another supported primitive adds or
+removes effects between them. Cyclic or ambiguous predecessor graphs are
+refused.
 
 ## Generated code
 
-The generator uses four forms.
+`hamlet_subtractor_generator.ml` materializes forwarding branches. It uses the
+representation proved for each leaf:
 
-### Named leaf
+- a named `#Path.type` pattern;
+- a structural polymorphic-variant pattern;
+- a generated `Errors.Cases.dispatch` catalogue;
+- a generated service-tag pattern.
 
-```ocaml
-| #Storage.Errors.write_error as error ->
-    Hamlet.Combinators.fail error
+`hamlet_subtractor_replace.ml` inserts those cases at the marker location and
+removes every private probe attribute. If nothing remains, the marker's
+refutation branch remains exhausted and normal OCaml warning 11 tells the user
+that the marker is redundant.
+
+The generated cases preserve user-facing locations. Helper nodes receive ghost
+locations so diagnostics stay attached to meaningful source.
+
+## Generic-helper flow
+
+Generic helpers add a symbolic contract to the same architecture.
+
+```mermaid
+flowchart LR
+    Def[annotated helper definition] --> Rewrite[append evidence argument]
+    Rewrite --> Contract[symbolic contract]
+    Contract --> CMI[generated companion in .cmi]
+    CMI --> Call[direct call with forward.auto]
+    Concrete[caller's concrete effect] --> Call
+    Call --> Instantiate[instantiate every contract slot]
+    Instantiate --> Bundle[generate evidence slot or tuple]
+    Bundle --> TypedCall[ordinary fully applied OCaml call]
 ```
 
-This is used when a complete leaf has a source-level path.
+At the definition site:
 
-### Structural variant
+1. `hamlet_subtractor_generic_definition.ml` validates the helper and rewrites
+   each marker to call an evidence slot.
+2. Compiler evidence builds symbolic input, recovery, and output expressions.
+3. The exact contract is retained on a generated companion module declaration,
+   because inferred value attributes do not survive in a `.cmi`.
 
-```ocaml
-| `Retry_later as error -> Hamlet.Combinators.fail error
-| `Unavailable _ as error -> Hamlet.Combinators.fail error
-```
+At the call site:
 
-This is allowed only when the closed proof determines the label and payload
-arity unambiguously.
+1. `hamlet_subtractor_generic_call.ml` links the direct call, concrete source,
+   and final `[%hamlet.forward.auto]` argument.
+2. The resolver loads the callee's retained contract and proves the concrete
+   caller input.
+3. `hamlet_subtractor_generic_generator.ml` creates one exhaustive rank-2
+   dispatcher per marker and bundles them into the final argument.
 
-### External catalogue
+The helper body is compiled once. Callers receive its symbolic contract, not
+its source code.
 
-For a complete generated error universe from another module, the PPX uses its
-validated `Errors.Cases` catalogue. This avoids nested structural matching and
-keeps generated code linear in the number of declared leaves.
+### Nested generic helpers
 
-### Empty residual
+An annotated helper may directly call an earlier generic helper. The outer
+contract substitutes its symbolic source into the inner contract, namespaces
+the inner slot IDs, and incorporates the inner output before resolving later
+markers. The final outer ABI still has one evidence argument; nested and local
+slots are flattened into that bundle.
 
-If earlier arms handled every leaf, the generated branch remains unreachable.
-OCaml warning 11 then reports the redundant marker.
+No body inlining occurs. Cross-module nesting uses the companion contract from
+the dependency `.cmi`, while same-module nesting uses the already resolved
+earlier definition. Recursive contracts are refused.
 
-Every nonempty generated fallback ends with a ghost wildcard refutation. The
-final type checker accepts that refutation only if the generated patterns cover
-the actual handler input.
+## Reading the code
 
-Replacement also adds ordinary OCaml type constraints to:
+- `subtractor/core` defines compiler-independent proof values and the pure
+  algorithms that validate, combine, serialize, and instantiate them.
+- `subtractor/hamlet_subtractor_probe.ml` finds ordinary automatic markers and
+  builds the linked base/probe pair.
+- `subtractor/hamlet_subtractor_compiler_evidence.ml` verifies Typedtree facts
+  and converts them into immutable exact or symbolic proofs.
+- `subtractor/hamlet_subtractor_engine.ml` subtracts handled leaves and orders
+  dependent ordinary markers.
+- `subtractor/hamlet_subtractor_generator.ml` generates ordinary propagation
+  cases; `hamlet_subtractor_replace.ml` splices them into the base AST.
+- `subtractor/hamlet_subtractor_generic_definition.ml`,
+  `hamlet_subtractor_generic_call.ml`, and
+  `hamlet_subtractor_generic_generator.ml` implement the generic definition,
+  call, and evidence-bundle phases.
+- `subtractor/hamlet_subtractor_ppx.ml` coordinates the complete lifecycle and
+  returns the final AST.
+- `subtractor/hamlet_subtractor_resolver.ml` is the resolver executable entry
+  point; its server types one prepared probe and returns the normalized result.
 
-- the original input expression, using the row from which subtraction was
-  computed;
-- the complete `catch` or `provide` result, using the final error and
-  requirement certificate.
-
-These constraints prevent later type inference from widening the proven input
-or output. They are checked by the normal compiler, not trusted from the probe.
-
-## Worked examples
-
-For errors:
-
-```text
-input                 { read_error, write_error, network_error }
-handled               { read_error }
-generated residual    { write_error, network_error }
-recovery contribution { recovery_error }
-final error row        { write_error, network_error, recovery_error }
-```
-
-For requirements:
-
-```text
-input                  { Logger, Clock, Database }
-provided               { Logger }
-explicitly forwarded   { Clock }
-generated residual     { Database }
-final requirement row  { Clock, Database }
-```
-
-`provide` leaves the computation's error channel unchanged.
-
-## Why the final type is precise
-
-The compiler and Merlin never type the probe as user code. They receive only
-the final AST containing the proven forwarding cases and constraints. Recovery
-branches remain normal user code, so their effects are inferred and combined
-with the generated residual in the usual OCaml type check.
-
-The acceptance tests inspect the final PPX output, the Typedtree Merlin types,
-and hovers for saved and unsaved buffers. They fail if probe assertions or
-internal attributes escape into the final AST.
+For the exact value model and refusal rules, continue with
+[Proof Model](./proof-model.md).
