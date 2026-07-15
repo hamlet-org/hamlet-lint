@@ -19,6 +19,7 @@
  (modules
   hamlet_subtractor_compiler_compat
   hamlet_subtractor_compiler_evidence
+  hamlet_subtractor_generic_call
   hamlet_subtractor_probe
   hamlet_subtractor_resolver_server
   hamlet_subtractor_version)
