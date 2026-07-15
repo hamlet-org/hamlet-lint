@@ -73,6 +73,21 @@ let union_evidence ~kind ~operation ~inputs evidence =
     in
     union_exact ~kind ~operation ~inputs proofs
 
+let chain ~inputs certificates =
+  let errors =
+    certificates
+    |> List.map errors
+    |> union_evidence ~kind:Kind.Error ~operation:Proof.Chain ~inputs
+  in
+  let requirements =
+    certificates
+    |> List.map requirements
+    |> union_evidence ~kind:Kind.Requirement ~operation:Proof.Chain ~inputs
+  in
+  match (errors, requirements) with
+  | Ok errors, Ok requirements -> create ~errors ~requirements
+  | (Error _ as error), _ | _, (Error _ as error) -> error
+
 let proof_from_result ~operation ~inputs result =
   Proof.create ~kind:(Residual.kind result)
     ~origin:(Proof.Composition { operation; inputs })

@@ -25,6 +25,11 @@ module type Local_audit = sig
   val record : string -> (unit, [> ], 'r) t
 end]
 
+[%%hamlet.service
+module type Local_metrics = sig
+  val increment : string -> (unit, [> ], 'r) t
+end]
+
 module Local_logger_live = Local_logger.Make (struct
   let log _ = Hamlet.Combinators.return ()
 end)
@@ -35,6 +40,10 @@ end)
 
 module Local_audit_live = Local_audit.Make (struct
   let record _ = Hamlet.Combinators.return ()
+end)
+
+module Local_metrics_live = Local_metrics.Make (struct
+  let increment _ = Hamlet.Combinators.return ()
 end)
 
 module Provision_live = Automatic_propagation_external.Provision.Make (struct
@@ -51,6 +60,17 @@ module Mixed_errors = struct
   type a = [ `Mixed_a ]
   type b = [ `Mixed_b of string ]
   type error = [ a | b ]
+end
+
+module Chain_errors = struct
+  type old_a = [ `Chain_old_a ]
+  type old_b = [ `Chain_old_b ]
+  type old_c = [ `Chain_old_c ]
+  type old = [ old_a | old_b | old_c ]
+  type introduced_one = [ `Chain_introduced_one ]
+  type introduced_two = [ `Chain_introduced_two ]
+  type after_first = [ old_b | old_c | introduced_one ]
+  type after_second = [ old_c | introduced_one | introduced_two ]
 end
 
 let local_error_source :
@@ -80,6 +100,9 @@ let storage_subset_source : (string, storage_subset, Hamlet.never) Hamlet.t =
 let mixed_source :
     (string, Mixed_errors.error, [ Local_logger.Tag.r | Local_clock.Tag.r ]) t =
   Hamlet.Combinators.fail (`Mixed_a : Mixed_errors.error)
+
+let chain_source : (string, Chain_errors.old, Hamlet.never) Hamlet.t =
+  Hamlet.Combinators.fail (`Chain_old_a : Chain_errors.old)
 
 let case_error_local_direct =
   Combinators.catch local_error_source ~handler:(fun error ->
@@ -141,6 +164,36 @@ let case_error_dependent =
       | #Local_io.Errors.local_corrupt -> Hamlet.Combinators.return "corrupt"
       | [%hamlet.propagate_e.auto] -> .)
 
+let case_error_chain_composition =
+  let first =
+    chain_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Chain_errors.old_a -> Hamlet.Combinators.return "old-a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  let with_introduced_one =
+    let first =
+      (first :> (string, Chain_errors.after_first, Hamlet.never) Hamlet.t)
+    in
+    let open Hamlet.Combinators in
+    let* _ = first in
+    (fail (`Chain_introduced_one : Chain_errors.introduced_one)
+      :> (string, Chain_errors.after_first, Hamlet.never) Hamlet.t)
+  in
+  with_introduced_one
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Chain_errors.old_b ->
+          (Hamlet.Combinators.fail
+             (`Chain_introduced_two : Chain_errors.introduced_two)
+            :> (string, Chain_errors.after_second, Hamlet.never) Hamlet.t)
+      | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Chain_errors.introduced_one -> Hamlet.Combinators.return "introduced"
+      | [%hamlet.propagate_e.auto] -> .)
+
 let case_requirement_local_direct =
   Combinators.provide
     ~handler:(fun requirement ->
@@ -193,6 +246,39 @@ let case_requirement_dependent =
       match requirement with
       | #Local_clock.Tag.r as witness ->
           Local_clock.Tag.give witness (module Local_clock_live)
+      | [%hamlet.propagate_s.auto] -> .)
+
+type requirement_chain =
+  [ Local_clock.Tag.r | Local_audit.Tag.r | Local_metrics.Tag.r ]
+
+let case_requirement_chain_composition =
+  let without_logger =
+    local_requirement_source
+    |> Combinators.provide ~handler:(fun requirement ->
+        match requirement with
+        | #Local_logger.Tag.r as witness ->
+            Local_logger.Tag.give witness (module Local_logger_live)
+        | [%hamlet.propagate_s.auto] -> .)
+  in
+  let with_metrics =
+    let without_logger =
+      (without_logger :> (string, Hamlet.never, requirement_chain) Hamlet.t)
+    in
+    let open Hamlet.Combinators in
+    let* value = without_logger in
+    let* (module Metrics) = Local_metrics.Tag.summon in
+    return value
+  in
+  with_metrics
+  |> Combinators.provide ~handler:(fun requirement ->
+      match requirement with
+      | #Local_clock.Tag.r as witness ->
+          Local_clock.Tag.give witness (module Local_clock_live)
+      | [%hamlet.propagate_s.auto] -> .)
+  |> Combinators.provide ~handler:(fun requirement ->
+      match requirement with
+      | #Local_metrics.Tag.r as witness ->
+          Local_metrics.Tag.give witness (module Local_metrics_live)
       | [%hamlet.propagate_s.auto] -> .)
 
 let case_interleaved =

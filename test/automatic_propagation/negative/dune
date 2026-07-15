@@ -23,6 +23,7 @@
   hidden_alias
   grouped_requirement
   external_no_cases
+  multiple_marker_sources
   exhausted_warning)
  (libraries
   hamlet

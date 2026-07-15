@@ -1901,19 +1901,21 @@ let marker_dependencies nodes marker_id upstream =
       default with
       expr =
         (fun self expression ->
-          attribute_values owner_attribute expression.exp_attributes
-          |> List.iter (fun id ->
-              if not (String.equal id marker_id) then
-                dependencies := id :: !dependencies);
-          (match expression.exp_desc with
-          | Texp_ident (path, _, description) ->
-              let uid = description.Types.val_uid in
-              if not (List.exists (Shape.Uid.equal uid) !visited) then (
-                visited := uid :: !visited;
-                Option.iter (self.expr self)
-                  (find_value_binding nodes.bindings path uid))
-          | _ -> ());
-          default.expr self expression);
+          let owners =
+            attribute_values owner_attribute expression.exp_attributes
+            |> List.filter (fun id -> not (String.equal id marker_id))
+          in
+          if owners <> [] then dependencies := owners @ !dependencies
+          else (
+            (match expression.exp_desc with
+            | Texp_ident (path, _, description) ->
+                let uid = description.Types.val_uid in
+                if not (List.exists (Shape.Uid.equal uid) !visited) then (
+                  visited := uid :: !visited;
+                  Option.iter (self.expr self)
+                    (find_value_binding nodes.bindings path uid))
+            | _ -> ());
+            default.expr self expression));
     }
   in
   iterator.expr iterator upstream;
@@ -2155,10 +2157,171 @@ let recovery_certificate
     | None -> opaque ()
   with Refuse _ -> opaque ()
 
+type source_plan =
+  | Known_source of Effect_certificate.t
+  | Dependency_source of string
+  | Chained_source of source_plan list
+
+let rec source_plan_dependencies = function
+  | Known_source _ -> []
+  | Dependency_source id -> [ id ]
+  | Chained_source plans ->
+      plans
+      |> List.concat_map source_plan_dependencies
+      |> List.sort_uniq String.compare
+
+let chain_source_plans = function
+  | [ plan ] -> plan
+  | plans -> Chained_source plans
+
+let rec source_plan_for_expression
+    ~context_digest
+    ~nodes
+    ~marker_id
+    ~kind
+    ~seen
+    expression =
+  let owners =
+    attribute_values owner_attribute expression.exp_attributes
+    |> List.filter (fun id -> not (String.equal id marker_id))
+    |> List.sort_uniq String.compare
+  in
+  match owners with
+  | [ owner ] -> (Dependency_source owner, [])
+  | _ :: _ :: _ -> refuse Higher_order_flow
+  | [] ->
+      let dependencies = marker_dependencies nodes marker_id expression in
+      let known_source () =
+        let _, certificate, catalogues =
+          certificate_for_input ~context_digest ~bindings:nodes.bindings ~kind
+            expression
+        in
+        (Known_source certificate, catalogues)
+      in
+      begin match intrinsic_certificate ~context_digest expression with
+      | Some (certificate, catalogues) -> (Known_source certificate, catalogues)
+      | None -> (
+          match expression.exp_desc with
+          | Texp_ident (path, _, description) when dependencies <> [] ->
+              let uid = description.Types.val_uid in
+              if List.exists (Shape.Uid.equal uid) seen then
+                refuse Higher_order_flow;
+              begin match find_value_binding nodes.bindings path uid with
+              | Some rhs ->
+                  source_plan_for_expression ~context_digest ~nodes ~marker_id
+                    ~kind ~seen:(uid :: seen) rhs
+              | None -> refuse Higher_order_flow
+              end
+          | Texp_let (_, _, body) | Texp_struct_item (_, body) ->
+              source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
+                ~seen body
+          | Texp_sequence (_, last) ->
+              source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
+                ~seen last
+          | Texp_letop { let_; ands; body; _ }
+            when canonical_binding_operator expression let_ "let*"
+                 && List.for_all
+                      (fun operator ->
+                        canonical_binding_operator expression operator "and*")
+                      ands ->
+              let expressions =
+                let_.bop_exp
+                :: List.map (fun operator -> operator.bop_exp) ands
+                @ [ body.c_rhs ]
+              in
+              source_plans_for_expressions ~context_digest ~nodes ~marker_id
+                ~kind ~seen expressions
+          | Texp_apply (callee, arguments) ->
+              begin match canonical_combinator_name callee with
+              | Some "chain" ->
+                  begin match
+                    ( positional_arguments arguments,
+                      labelled_argument "handler" arguments,
+                      labelled_argument "f" arguments )
+                  with
+                  | source :: _, Some handler, _
+                  | source :: _, None, Some handler ->
+                      let source_plan, source_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      let handler_plan, handler_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen handler
+                      in
+                      ( chain_source_plans [ source_plan; handler_plan ],
+                        source_catalogues @ handler_catalogues )
+                  | _ -> refuse Higher_order_flow
+                  end
+              | Some "both" ->
+                  begin match positional_arguments arguments with
+                  | [ left; right ] ->
+                      source_plans_for_expressions ~context_digest ~nodes
+                        ~marker_id ~kind ~seen [ left; right ]
+                  | _ -> refuse Higher_order_flow
+                  end
+              | Some "map" ->
+                  begin match positional_arguments arguments with
+                  | source :: _ ->
+                      source_plan_for_expression ~context_digest ~nodes
+                        ~marker_id ~kind ~seen source
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some _ | None ->
+                  if dependencies = [] then known_source ()
+                  else refuse Higher_order_flow
+              end
+          | Texp_match (_, cases, _, _) ->
+              cases
+              |> List.map (fun (case : computation case) -> case.c_rhs)
+              |> source_plans_for_expressions ~context_digest ~nodes ~marker_id
+                   ~kind ~seen
+          | Texp_ifthenelse (_, if_true, Some if_false) ->
+              source_plans_for_expressions ~context_digest ~nodes ~marker_id
+                ~kind ~seen [ if_true; if_false ]
+          | _ ->
+              if dependencies = [] then known_source ()
+              else refuse Higher_order_flow)
+      end
+
+and source_plan_for_function_result
+    ~context_digest
+    ~nodes
+    ~marker_id
+    ~kind
+    ~seen
+    expression =
+  match expression.exp_desc with
+  | Texp_function (_, Tfunction_body body) ->
+      source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind ~seen
+        body
+  | Texp_function (_, Tfunction_cases { cases; _ }) ->
+      cases
+      |> List.map (fun (case : value case) -> case.c_rhs)
+      |> source_plans_for_expressions ~context_digest ~nodes ~marker_id ~kind
+           ~seen
+  | _ -> refuse Higher_order_flow
+
+and source_plans_for_expressions
+    ~context_digest
+    ~nodes
+    ~marker_id
+    ~kind
+    ~seen
+    expressions =
+  let plans, catalogues =
+    expressions
+    |> List.map
+         (source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
+            ~seen)
+    |> List.split
+  in
+  (chain_source_plans plans, List.concat catalogues)
+
 type node = {
   marker : Core.Marker.t;
   dependencies : string list;
-  base_certificate : Effect_certificate.t option;
+  source_plan : source_plan;
   arms : Residual.arm list;
   arm_members : (Identity.t * Atom.t list) list;
   recoveries : Effect_certificate.t list;
@@ -2183,15 +2346,19 @@ let extract_node ~context_digest nodes marker_id marker_expression =
   in
   verify_owner_callee kind callee;
   let dependencies = marker_dependencies nodes marker_id upstream in
-  let base_certificate, source_catalogues =
+  let source_plan, source_catalogues =
     if dependencies = [] then
       let _, certificate, catalogues =
         certificate_for_input ~context_digest ~bindings:nodes.bindings ~kind
           upstream
       in
-      (Some certificate, catalogues)
-    else (None, [])
+      (Known_source certificate, catalogues)
+    else
+      source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
+        ~seen:[] upstream
   in
+  if source_plan_dependencies source_plan <> dependencies then
+    refuse Higher_order_flow;
   let classified_arms =
     classify_arms ~context_digest ~kind ~marker_id handler
   in
@@ -2210,7 +2377,7 @@ let extract_node ~context_digest nodes marker_id marker_expression =
   {
     marker;
     dependencies;
-    base_certificate;
+    source_plan;
     arms = List.map (fun classified -> classified.arm) classified_arms;
     arm_members =
       List.map
@@ -2381,13 +2548,40 @@ let output_certificate (node : node) source residual =
   | Ok certificate -> certificate
   | Error _ -> refuse (Core_validation_failed "effect composition failed")
 
+let rec resolve_source_plan dependencies = function
+  | Known_source certificate -> (certificate, [])
+  | Dependency_source id -> (
+      match
+        List.find_map
+          (fun (marker, (resolved : Hamlet_subtractor_engine.resolved)) ->
+            let dependency_id =
+              marker |> Core.Marker.id |> Core.Marker.id_to_string
+            in
+            if String.equal id dependency_id then
+              Some (resolved.certificate, [ Core.Marker.id marker ])
+            else None)
+          dependencies
+      with
+      | Some source -> source
+      | None -> refuse Higher_order_flow)
+  | Chained_source plans ->
+      let certificates, inputs =
+        plans |> List.map (resolve_source_plan dependencies) |> List.split
+      in
+      let inputs =
+        List.concat inputs |> List.sort_uniq Core.Marker.compare_id
+      in
+      let certificate =
+        Effect_certificate.chain ~inputs certificates |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "effect chain composition failed")
+      in
+      (certificate, inputs)
+
 let resolve_node_without_dependencies (node : node) =
   if node.dependencies <> [] then refuse Higher_order_flow;
-  let source =
-    match node.base_certificate with
-    | Some source -> source
-    | None -> refuse Higher_order_flow
-  in
+  let source, _ = resolve_source_plan [] node.source_plan in
   let residual = residual_for_node node source in
   let certificate = output_certificate node source residual in
   {
@@ -2502,16 +2696,9 @@ let engine_backend =
         | None -> Error Core.Diagnostic.Higher_order_flow
         | Some node -> (
             try
-              let source =
-                match (node.dependencies, dependencies) with
-                | [], [] -> (
-                    match node.base_certificate with
-                    | Some certificate -> certificate
-                    | None -> refuse Higher_order_flow)
-                | [ _ ], [ (_, (resolved : Hamlet_subtractor_engine.resolved)) ]
-                  ->
-                    resolved.certificate
-                | _ -> refuse Higher_order_flow
+              if List.length node.dependencies > 1 then refuse Higher_order_flow;
+              let source, _ =
+                resolve_source_plan dependencies node.source_plan
               in
               let residual = residual_for_node node source in
               let certificate = output_certificate node source residual in

@@ -25,6 +25,8 @@ val create :
 val errors : t -> evidence
 val requirements : t -> evidence
 
+val chain : inputs:Marker.id list -> t list -> (t, validation_error) result
+
 val catch :
   inputs:Marker.id list ->
   source:t ->

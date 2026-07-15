@@ -157,6 +157,63 @@ let dependent_error_markers () =
     | `Storage_corrupt _ -> Hamlet.Combinators.return "corrupt")
   |> expect_ok "dependent error markers" "corrupt"
 
+module Chain_errors = struct
+  type old_a = [ `Chain_old_a ]
+  type old_b = [ `Chain_old_b ]
+  type old_c = [ `Chain_old_c ]
+  type old = [ old_a | old_b | old_c ]
+  type introduced_one = [ `Chain_introduced_one ]
+  type introduced_two = [ `Chain_introduced_two ]
+  type after_first = [ old_b | old_c | introduced_one ]
+  type after_second = [ old_c | introduced_one | introduced_two ]
+end
+
+let chained_error_markers use_second =
+  let source : (string, Chain_errors.old, Hamlet.never) Hamlet.t =
+    if use_second then Hamlet.Combinators.fail (`Chain_old_b : Chain_errors.old)
+    else Hamlet.Combinators.fail (`Chain_old_a : Chain_errors.old)
+  in
+  let first =
+    source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Chain_errors.old_a -> Hamlet.Combinators.return "old-a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  let with_introduced_one =
+    let first =
+      (first :> (string, Chain_errors.after_first, Hamlet.never) Hamlet.t)
+    in
+    let open Hamlet.Combinators in
+    let* _ = first in
+    (fail (`Chain_introduced_one : Chain_errors.introduced_one)
+      :> (string, Chain_errors.after_first, Hamlet.never) Hamlet.t)
+  in
+  with_introduced_one
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Chain_errors.old_b ->
+          (Hamlet.Combinators.fail
+             (`Chain_introduced_two : Chain_errors.introduced_two)
+            :> (string, Chain_errors.after_second, Hamlet.never) Hamlet.t)
+      | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Chain_errors.introduced_one ->
+          Hamlet.Combinators.return "introduced-one"
+      | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.catch ~handler:(function
+    | `Chain_old_c -> Hamlet.Combinators.return "old-c"
+    | `Chain_introduced_two -> Hamlet.Combinators.return "introduced-two")
+
+let chain_handles_effect_added_by_let () =
+  chained_error_markers false
+  |> expect_ok "chain handles let effect" "introduced-one"
+
+let chain_handles_recovery_added_later () =
+  chained_error_markers true
+  |> expect_ok "chain handles recovery effect" "introduced-two"
+
 let () =
   Alcotest.run "automatic propagation"
     [
@@ -167,6 +224,10 @@ let () =
           Alcotest.test_case "recovery adds error" `Quick
             recovery_error_is_preserved;
           Alcotest.test_case "dependent markers" `Quick dependent_error_markers;
+          Alcotest.test_case "chain adds an error" `Quick
+            chain_handles_effect_added_by_let;
+          Alcotest.test_case "recovery adds a later error" `Quick
+            chain_handles_recovery_added_later;
           Alcotest.test_case "provision error crosses provide" `Quick
             provision_error_crosses_provide;
         ] );

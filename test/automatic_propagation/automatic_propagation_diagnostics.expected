@@ -13,4 +13,5 @@ outside_universe|outside the proven error universe|%hamlet.te
 hidden_alias|abstract or hidden error row|%hamlet.te
 grouped_requirement|groups multiple requirement tags|%hamlet.ts
 external_no_cases|external error union has no|%hamlet.te
+multiple_marker_sources|higher-order effect flow|%hamlet.te
 exhausted_warning|warning 11|unused
