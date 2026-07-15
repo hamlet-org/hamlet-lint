@@ -223,7 +223,7 @@ open Hamlet
 
 let[@hamlet.generic] recover_timeout source =
   Combinators.catch
-    (Producer.recover_missing source [%hamlet.forward.auto])
+    (Producer.recover_missing source)
     ~handler:(function
       | `Timeout -> Combinators.return "generic timeout"
       | [%hamlet.propagate_e.auto] -> .)
@@ -292,7 +292,7 @@ let generic_source =
   else Combinators.fail `Timeout
 
 let generic_effect =
-  Outer.recover_timeout generic_source [%hamlet.forward.auto]
+  Outer.recover_timeout generic_source
 
 let chained_error_source : (string, Chain_errors.old, never) t =
   Combinators.fail (`Old_a : Chain_errors.old)

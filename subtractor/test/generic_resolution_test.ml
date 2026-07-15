@@ -71,7 +71,9 @@ let test_call_round_trip () =
     Generic_resolution.encode_call ~contract ~input |> get_ok "encode call"
   in
   let decoded_contract, decoded_input =
-    Generic_resolution.decode_call payload |> get_ok "decode call"
+    match Generic_resolution.decode_call payload |> get_ok "decode call" with
+    | Generic_resolution.Resolved value -> value
+    | Generic_resolution.Ignored -> Alcotest.fail "expected resolved call"
   in
   Alcotest.(check bool)
     "same contract" true
@@ -99,6 +101,17 @@ let test_digest_tampering_is_rejected () =
   | Error _ -> Alcotest.fail "tampering produced the wrong refusal"
   | Ok _ -> Alcotest.fail "tampered contract digest was accepted"
 
+let test_ignored_call_round_trip () =
+  let payload =
+    Generic_resolution.encode_ignored_call () |> get_ok "encode ignored call"
+  in
+  match
+    Generic_resolution.decode_call payload |> get_ok "decode ignored call"
+  with
+  | Generic_resolution.Ignored -> ()
+  | Generic_resolution.Resolved _ ->
+      Alcotest.fail "ignored candidate became a specialization"
+
 let () =
   Alcotest.run "hamlet-subtractor-generic-resolution"
     [
@@ -107,6 +120,8 @@ let () =
           Alcotest.test_case "definition round trip" `Quick
             test_definition_round_trip;
           Alcotest.test_case "call round trip" `Quick test_call_round_trip;
+          Alcotest.test_case "ignored call round trip" `Quick
+            test_ignored_call_round_trip;
           Alcotest.test_case "digest tampering" `Quick
             test_digest_tampering_is_rejected;
         ] );

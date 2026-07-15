@@ -31,7 +31,7 @@ val slot_attribute : string
 val nested_call_attribute : string
 val nested_callee_attribute : string
 val nested_source_attribute : string
-val nested_placeholder_attribute : string
+val nested_specialized_attribute : string
 
 val strip_linkage_attributes :
   Ppxlib.Parsetree.structure -> Ppxlib.Parsetree.structure
@@ -47,8 +47,6 @@ type composition_finalization_error =
   | Invalid_definition_attachment of string
   | Invalid_helper_link
   | Missing_nested_slots of string
-  | Duplicate_nested_placeholder of string
-  | Missing_nested_placeholder of string
   | Invalid_generated_evidence_parameter of string
 
 val composition_finalization_error_message :

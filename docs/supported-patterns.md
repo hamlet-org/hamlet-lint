@@ -309,7 +309,7 @@ let[@hamlet.generic] recover_missing source =
     | `Missing -> Hamlet.Combinators.return ()
     | [%hamlet.propagate_e.auto] -> .)
 
-let result = recover_missing concrete_source [%hamlet.forward.auto]
+let result = recover_missing concrete_source
 ```
 
 ## Generic requirement helper
@@ -322,7 +322,7 @@ let[@hamlet.generic] with_logger logger source =
     | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
     | [%hamlet.propagate_s.auto] -> .)
 
-let result = with_logger logger concrete_source [%hamlet.forward.auto]
+let result = with_logger logger concrete_source
 ```
 
 The caller-generated slot forwards every concrete requirement other than
@@ -353,7 +353,7 @@ the result:
 ```ocaml
 let[@hamlet.generic] recover_more source =
   Hamlet.Combinators.catch
-    (recover_missing source [%hamlet.forward.auto])
+    (recover_missing source)
     ~handler:(function
       | `Unavailable -> Hamlet.Combinators.return ()
       | [%hamlet.propagate_e.auto] -> .)

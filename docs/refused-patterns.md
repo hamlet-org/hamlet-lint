@@ -67,7 +67,7 @@ let[@hamlet.generic] handle source =
     | `Missing -> Hamlet.Combinators.return ()
     | [%hamlet.propagate_e.auto] -> .)
 
-let result = handle concrete_source [%hamlet.forward.auto]
+let result = handle concrete_source
 ```
 
 ## Callback-controlled effect
@@ -329,7 +329,7 @@ The specialization must be direct and fully applied:
 
 ```ocaml
 let alias = recover_missing
-let result = alias source [%hamlet.forward.auto]
+let result = alias source
 ```
 
 Partial application and pipeline specialization are also refused.
@@ -337,8 +337,12 @@ Partial application and pipeline specialization are also refused.
 Fix:
 
 ```ocaml
-let result = recover_missing source [%hamlet.forward.auto]
+let result = recover_missing source
 ```
+
+The call must name the annotated helper itself. An alias exposes only the
+transformed function type; it does not carry the companion contract that tells
+the caller how to construct evidence.
 
 ## Hidden generic contract in a handwritten interface
 

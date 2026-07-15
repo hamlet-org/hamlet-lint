@@ -218,7 +218,7 @@ all slots are flattened into the outer evidence argument.
 
 The resolver proof is not a replacement type checker. After generation:
 
-- the PPX removes all probe-only attributes and placeholders;
+- the PPX removes all probe-only links and temporary evidence values;
 - the compiler or Merlin types the final AST normally;
 - generated patterns must be valid for the inferred input type;
 - generated forwarding expressions must have the inferred output type;

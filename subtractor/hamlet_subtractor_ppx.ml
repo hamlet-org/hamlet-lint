@@ -278,7 +278,8 @@ let resolve ~context structure =
             "generic automatic propagation call preparation failed: %s" message
     in
     let generic_expectations = definition_expectations @ call_expectations in
-    let has_generic = generic_expectations <> [] in
+    let has_definitions = definition_expectations <> [] in
+    let has_candidates = call_expectations <> [] in
     let prepared =
       {
         prepared with
@@ -286,24 +287,28 @@ let resolve ~context structure =
         structure = generic_calls.probe_structure;
       }
     in
-    match (prepared.markers, has_generic) with
-    | [], false -> prepared.base_structure
-    | marker :: _, _ when tool_mode tool_name = Fast_pipeline ->
+    match (prepared.markers, has_definitions, has_candidates) with
+    | [], false, false -> prepared.base_structure
+    | marker :: _, _, _ when tool_mode tool_name = Fast_pipeline ->
         Location.raise_errorf ~loc:marker.loc "%s"
           (fast_pipeline_message marker)
-    | [], true when tool_mode tool_name = Fast_pipeline ->
+    | [], true, _ when tool_mode tool_name = Fast_pipeline ->
         Location.raise_errorf
           "generic automatic propagation requires Dune's classic PPX pipeline; \
            configure (staged_pps hamlet-subtractor.ppx), not (pps \
            hamlet-subtractor.ppx)"
-    | marker :: _, _ when tool_mode tool_name = Unknown ->
+    | [], false, true when tool_mode tool_name = Fast_pipeline ->
+        prepared.base_structure
+    | marker :: _, _, _ when tool_mode tool_name = Unknown ->
         Location.raise_errorf ~loc:marker.loc "%s"
           (unknown_tool_message marker tool_name)
-    | [], true when tool_mode tool_name = Unknown ->
+    | [], true, _ when tool_mode tool_name = Unknown ->
         Location.raise_errorf
           "generic automatic propagation cannot prove that PPX tool context %S \
            performs a final compiler or Merlin type-check"
           tool_name
+    | [], false, true when tool_mode tool_name = Unknown ->
+        prepared.base_structure
     | _ -> (
         match prepared.refusals with
         | refusal :: _ ->

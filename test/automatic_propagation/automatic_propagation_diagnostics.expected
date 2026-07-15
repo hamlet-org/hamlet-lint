@@ -15,5 +15,4 @@ grouped_requirement|groups multiple requirement tags|%hamlet.ts
 external_no_cases|external error union has no|%hamlet.te
 multiple_marker_sources|higher-order effect flow|%hamlet.te
 exhausted_warning|warning 11|unused
-generic_non_helper|missing retained|[@hamlet.generic] helper
-generic_alias|missing retained|[@hamlet.generic] helper
+generic_alias|Evidence.slot|Hamlet.t

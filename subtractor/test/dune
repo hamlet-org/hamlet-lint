@@ -56,7 +56,7 @@
  (name hamlet_subtractor_generic_call_test)
  (package hamlet-subtractor)
  (modules hamlet_subtractor_generic_call_test)
- (libraries alcotest hamlet_subtractor_private ppxlib))
+ (libraries alcotest hamlet_subtractor_core hamlet_subtractor_private ppxlib))
 
 (test
  (name hamlet_subtractor_engine_test)

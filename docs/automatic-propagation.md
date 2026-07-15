@@ -117,19 +117,22 @@ let[@hamlet.generic] recover_missing source =
 Call:
 
 ```ocaml
-let recovered = recover_missing concrete_source [%hamlet.forward.auto]
+let recovered = recover_missing concrete_source
 ```
 
 No row annotation is needed when `concrete_source` already has an exact
 inferred type. A type annotation is needed only when ordinary OCaml inference
 cannot express the intended public row, for example when an API deliberately
-widens a computation that currently constructs one error. The two PPX
-annotations have different jobs:
+widens a computation that currently constructs one error. Only the definition
+is annotated:
 
 - `[@hamlet.generic]` changes the exported function type: compiled callers pass
   one final generated evidence argument;
-- `[%hamlet.forward.auto]` asks the caller's PPX to build that argument from
-  the concrete source row.
+- at a direct call, the caller's PPX recognizes the retained helper contract
+  and builds that argument from the concrete source row.
+
+The extra argument exists only in generated OCaml. It is not part of the
+source syntax users write.
 
 The helper still has one final generated argument even when its body contains
 many markers. With one marker the argument is one evidence slot. With several
@@ -142,7 +145,7 @@ Generic helpers may call earlier generic helpers directly:
 ```ocaml
 let[@hamlet.generic] recover_both source =
   Hamlet.Combinators.catch
-    (recover_missing source [%hamlet.forward.auto])
+    (recover_missing source)
     ~handler:(function
       | `Unavailable -> Hamlet.Combinators.return ()
       | [%hamlet.propagate_e.auto] -> .)
@@ -157,8 +160,7 @@ Version-one generic helpers are deliberately regular:
 - a named, non-recursive function;
 - the last user-written positional parameter is the generic `Hamlet.t`;
 - that parameter follows one supported linear effect flow;
-- direct, fully applied helper calls only;
-- the final call argument is `[%hamlet.forward.auto]`.
+- direct, fully applied helper calls only.
 
 Aliases, partial application, first-class escape, handwritten interfaces that
 hide the generated companion, and opaque callbacks are refused.

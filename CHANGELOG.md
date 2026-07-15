@@ -9,7 +9,7 @@
   alternating `catch` and `provide`, chaining, filters, scope, and resource
   primitives.
 - Add generic automatic helpers with `let[@hamlet.generic]` definitions and
-  caller specialization through a final `[%hamlet.forward.auto]` argument.
+  automatic specialization at direct calls; caller source needs no annotation.
 - Export symbolic helper contracts through generated companion declarations so
   separate compilation and nested generic helpers do not require body inlining.
 - Run Typedtree evidence collection in a matching isolated resolver process and

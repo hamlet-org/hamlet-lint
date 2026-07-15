@@ -2,17 +2,9 @@ type call = {
   id : string;
   loc : Ppxlib.Location.t;
   callee_loc : Ppxlib.Location.t;
-  source_loc : Ppxlib.Location.t;
-  placeholder_loc : Ppxlib.Location.t;
 }
 
-type refusal_reason =
-  | Not_a_final_argument
-  | Labelled_argument
-  | Missing_effect_argument
-  | Multiple_placeholders
-  | Pipeline_application
-
+type refusal_reason = Legacy_forward_extension
 type refusal = { loc : Ppxlib.Location.t; reason : refusal_reason }
 
 type prepared = {
@@ -22,14 +14,14 @@ type prepared = {
   refusals : refusal list;
 }
 
-(** Find explicit generic-helper call sites and replace their final forwarding
-    argument with a bottom expression in the temporary probe. *)
+(** Link plausible direct calls in the temporary probe. The resolver classifies
+    each call from compiler identities; ordinary calls are left unchanged. *)
 val prepare : Ppxlib.Parsetree.structure -> prepared
 
 val call_attribute : string
 val callee_attribute : string
 val source_attribute : string
-val placeholder_attribute : string
+val specialized_attribute : string
 
 val expectations :
   prepared ->
@@ -43,8 +35,8 @@ type finalization_error =
   | Invalid_attachment of string
   | Contract_evaluation_failed of string
   | Generation_failed of Hamlet_subtractor_generator.error
-  | Missing_placeholder of string
-  | Duplicate_placeholder of string
+  | Missing_call of string
+  | Duplicate_call of string
 
 val finalization_error_message : finalization_error -> string
 

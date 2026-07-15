@@ -3511,8 +3511,8 @@ let generic_nested_callee_attribute =
 let generic_nested_source_attribute =
   Hamlet_subtractor_generic_definition.nested_source_attribute
 
-let generic_nested_placeholder_attribute =
-  Hamlet_subtractor_generic_definition.nested_placeholder_attribute
+let generic_nested_specialized_attribute =
+  Hamlet_subtractor_generic_definition.nested_specialized_attribute
 
 type generic_definition = {
   attachment_id : string;
@@ -3521,13 +3521,15 @@ type generic_definition = {
   catalogues : Hamlet_subtractor_catalogue.t list;
 }
 
-type generic_call = {
-  attachment_id : string;
-  contract : Core.Generic_contract.t;
-  input : Effect_certificate.t;
-  catalogues : Hamlet_subtractor_catalogue.t list;
-  location : Location.t;
-}
+type generic_call =
+  | Ignored_generic_call of { attachment_id : string }
+  | Resolved_generic_call of {
+      attachment_id : string;
+      contract : Core.Generic_contract.t;
+      input : Effect_certificate.t;
+      catalogues : Hamlet_subtractor_catalogue.t list;
+      location : Location.t;
+    }
 
 type generic_refusal = { location : Location.t; reason : refusal_reason }
 
@@ -3536,8 +3538,8 @@ let generic_refusal_message refusal =
   | Core_validation_failed message
     when String.starts_with ~prefix:"missing retained contract for " message ->
       message
-      ^ "; [%hamlet.forward.auto] must be the final argument of a direct call \
-         to a [@hamlet.generic] helper whose generated companion is visible"
+      ^ "; call the [@hamlet.generic] helper directly because aliases and \
+         higher-order calls cannot be specialized"
   | _ ->
       let location = refusal.location in
       let span =
@@ -3571,11 +3573,11 @@ type generic_nodes = {
   slots : (string, expression list) Hashtbl.t;
   calls : (string, expression list) Hashtbl.t;
   call_sources : (string, expression list) Hashtbl.t;
-  call_placeholders : (string, expression list) Hashtbl.t;
+  call_specialized : (string, expression list) Hashtbl.t;
   nested_calls : (string, expression list) Hashtbl.t;
   nested_callees : (string, expression list) Hashtbl.t;
   nested_sources : (string, expression list) Hashtbl.t;
-  nested_placeholders : (string, expression list) Hashtbl.t;
+  nested_specialized : (string, expression list) Hashtbl.t;
   mutable helpers : value_binding list;
   mutable companions : string list;
   mutable bindings : value_binding_origin list;
@@ -3591,11 +3593,11 @@ let collect_generic_nodes structure =
       slots = Hashtbl.create 16;
       calls = Hashtbl.create 16;
       call_sources = Hashtbl.create 16;
-      call_placeholders = Hashtbl.create 16;
+      call_specialized = Hashtbl.create 16;
       nested_calls = Hashtbl.create 16;
       nested_callees = Hashtbl.create 16;
       nested_sources = Hashtbl.create 16;
-      nested_placeholders = Hashtbl.create 16;
+      nested_specialized = Hashtbl.create 16;
       helpers = [];
       companions = [];
       bindings = [];
@@ -3648,18 +3650,19 @@ let collect_generic_nodes structure =
           in
           collect generic_owner_attribute nodes.owners;
           collect generic_callee_attribute nodes.callees;
+          collect Hamlet_subtractor_generic_call.callee_attribute nodes.callees;
           collect generic_upstream_attribute nodes.upstreams;
           collect generic_handler_attribute nodes.handlers;
           collect generic_slot_attribute nodes.slots;
           collect Hamlet_subtractor_generic_call.call_attribute nodes.calls;
           collect Hamlet_subtractor_generic_call.source_attribute
             nodes.call_sources;
-          collect Hamlet_subtractor_generic_call.placeholder_attribute
-            nodes.call_placeholders;
+          collect Hamlet_subtractor_generic_call.specialized_attribute
+            nodes.call_specialized;
           collect generic_nested_call_attribute nodes.nested_calls;
           collect generic_nested_callee_attribute nodes.nested_callees;
           collect generic_nested_source_attribute nodes.nested_sources;
-          collect generic_nested_placeholder_attribute nodes.nested_placeholders;
+          collect generic_nested_specialized_attribute nodes.nested_specialized;
           default.expr self expression);
     }
   in
@@ -3755,10 +3758,13 @@ let generic_contract_for_callee ~definitions callee =
       let helper = Path.last path in
       let contract =
         match
-          List.find_opt
-            (fun (definition : generic_definition) ->
-              String.equal definition.helper helper)
-            definitions
+          match path with
+          | Path.Pident _ ->
+              List.find_opt
+                (fun (definition : generic_definition) ->
+                  String.equal definition.helper helper)
+                definitions
+          | Path.Pdot _ | Path.Papply _ | Path.Pextra_ty _ -> None
         with
         | Some definition -> definition.contract
         | None -> (
@@ -4138,6 +4144,11 @@ let generic_contract_for_binding ~context_digest ~definitions nodes binding =
     ordered_slots := slot :: !ordered_slots
   in
   let process_nested id =
+    if not (Hashtbl.mem nodes.nested_specialized id) then
+      refuse
+        (Core_validation_failed
+           "the generic source flows through a call that is not a direct \
+            [@hamlet.generic] helper");
     let callee =
       generic_require nodes.nested_callees id generic_nested_callee_attribute
     in
@@ -4145,8 +4156,8 @@ let generic_contract_for_binding ~context_digest ~definitions nodes binding =
       generic_require nodes.nested_sources id generic_nested_source_attribute
     in
     ignore
-      (generic_require nodes.nested_placeholders id
-         generic_nested_placeholder_attribute);
+      (generic_require nodes.nested_specialized id
+         generic_nested_specialized_attribute);
     let inner =
       with_generic_context "cannot resolve nested generic-helper contract"
         (fun () -> generic_contract_for_callee ~definitions callee)
@@ -4337,11 +4348,11 @@ let exact_generic_call_input ~context_digest ~bindings source =
   in
   (input, error_catalogues @ requirement_catalogues)
 
-let validate_call_source_position contract call source =
+let validate_call_source_position _contract call source =
   match call.exp_desc with
   | Texp_apply (_, arguments) ->
       let positional = positional_arguments arguments in
-      let source_position = Core.Generic_contract.effect_parameter contract in
+      let source_position = List.length positional - 2 in
       begin match List.nth_opt positional source_position with
       | Some candidate when candidate == source -> ()
       | Some candidate
@@ -4389,45 +4400,50 @@ let generic_calls_typedtree ~context_digest ~definitions structure =
           generic_require nodes.calls id
             Hamlet_subtractor_generic_call.call_attribute
         in
-        try
-          let callee =
-            generic_require nodes.callees id
-              Hamlet_subtractor_generic_call.callee_attribute
-          in
-          let source =
-            generic_require nodes.call_sources id
-              Hamlet_subtractor_generic_call.source_attribute
-          in
-          ignore
-            (generic_require nodes.call_placeholders id
-               Hamlet_subtractor_generic_call.placeholder_attribute);
-          let contract = contract_for_call ~definitions callee in
-          validate_call_source_position contract call source;
-          let input, catalogues =
-            exact_generic_call_input ~context_digest ~bindings:nodes.bindings
-              source
-          in
-          begin match
-            Core.Generic_contract.instantiate_slots ~input contract
-          with
-          | Ok _ -> ()
-          | Error error ->
-              refuse
-                (Core_validation_failed
-                   ("generic helper contract instantiation failed: "
-                   ^ generic_evaluation_error error))
-          end;
-          let result =
-            {
-              attachment_id = id;
-              contract;
-              input;
-              catalogues =
-                List.sort_uniq Hamlet_subtractor_catalogue.compare catalogues;
-              location = call.exp_loc;
-            }
-          in
-          loop (result :: accumulated) rest
-        with Refuse reason -> Error { location = call.exp_loc; reason })
+        if not (Hashtbl.mem nodes.call_specialized id) then
+          loop (Ignored_generic_call { attachment_id = id } :: accumulated) rest
+        else
+          try
+            let callee =
+              generic_require nodes.callees id
+                Hamlet_subtractor_generic_call.callee_attribute
+            in
+            let source =
+              generic_require nodes.call_sources id
+                Hamlet_subtractor_generic_call.source_attribute
+            in
+            ignore
+              (generic_require nodes.call_specialized id
+                 Hamlet_subtractor_generic_call.specialized_attribute);
+            let contract = contract_for_call ~definitions callee in
+            validate_call_source_position contract call source;
+            let input, catalogues =
+              exact_generic_call_input ~context_digest ~bindings:nodes.bindings
+                source
+            in
+            begin match
+              Core.Generic_contract.instantiate_slots ~input contract
+            with
+            | Ok _ -> ()
+            | Error error ->
+                refuse
+                  (Core_validation_failed
+                     ("generic helper contract instantiation failed: "
+                     ^ generic_evaluation_error error))
+            end;
+            let result =
+              Resolved_generic_call
+                {
+                  attachment_id = id;
+                  contract;
+                  input;
+                  catalogues =
+                    List.sort_uniq Hamlet_subtractor_catalogue.compare
+                      catalogues;
+                  location = call.exp_loc;
+                }
+            in
+            loop (result :: accumulated) rest
+          with Refuse reason -> Error { location = call.exp_loc; reason })
   in
   loop [] ids

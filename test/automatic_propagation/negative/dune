@@ -25,7 +25,6 @@
   external_no_cases
   multiple_marker_sources
   exhausted_warning
-  generic_non_helper
   generic_alias)
  (libraries
   hamlet

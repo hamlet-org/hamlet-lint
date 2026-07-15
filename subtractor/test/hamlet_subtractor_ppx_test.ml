@@ -568,8 +568,7 @@ let test_generic_fun_match_handler () =
 let test_generic_nested_helper_call () =
   let rendered =
     generic_transform
-      "let[@hamlet.generic] outer config source =\n\
-       inner config source [%hamlet.forward.auto]"
+      "let[@hamlet.generic] outer config source =\ninner config source"
     |> render_structure
   in
   check_rendered "temporary evidence parameter" "outer config source _" rendered;
@@ -579,10 +578,8 @@ let test_generic_nested_helper_call () =
     Generic_definition.nested_callee_attribute rendered;
   check_rendered "nested source linkage"
     Generic_definition.nested_source_attribute rendered;
-  check_rendered "nested placeholder linkage"
-    Generic_definition.nested_placeholder_attribute rendered;
   Alcotest.(check bool)
-    "nested placeholder consumed" false
+    "no caller annotation" false
     (contains rendered "hamlet.forward.auto")
 
 let test_generic_nested_helper_then_local_marker () =
@@ -590,7 +587,7 @@ let test_generic_nested_helper_then_local_marker () =
     generic_transform
       "let[@hamlet.generic] outer config source =\n\
        Hamlet.Combinators.catch\n\
-       (inner config source [%hamlet.forward.auto])\n\
+       (inner config source)\n\
        ~handler:(function\n\
        | `Missing -> Hamlet.Combinators.success ()\n\
        | [%hamlet.propagate_e.auto] -> .)"
@@ -619,8 +616,7 @@ let test_generic_nested_composition_finalization () =
   in
   let transformed =
     generic_transform
-      "let[@hamlet.generic] outer config source =\n\
-       inner config source [%hamlet.forward.auto]"
+      "let[@hamlet.generic] outer config source =\ninner config source"
   in
   let nested_id =
     let values = ref [] in
@@ -753,29 +749,6 @@ let test_generic_refusals () =
      ~handler:(function | [%hamlet.propagate_e.auto] -> .)" (function
     | Generic_definition.Source_not_linear 2 -> true
     | _ -> false);
-  expect_generic_refusal "opaque source flow"
-    "let[@hamlet.generic] helper source =\n\
-     Hamlet.Combinators.catch (opaque source)\n\
-     ~handler:(function | [%hamlet.propagate_e.auto] -> .)" (function
-    | Generic_definition.Unsupported_source_flow -> true
-    | _ -> false);
-  List.iter
-    (fun (name, upstream) ->
-      expect_generic_refusal name
-        (Printf.sprintf
-           "let[@hamlet.generic] helper source =\n\
-            Hamlet.Combinators.catch (%s)\n\
-            ~handler:(function | [%%hamlet.propagate_e.auto] -> .)"
-           upstream) (function
-        | Generic_definition.Unsupported_source_flow -> true
-        | _ -> false))
-    [
-      ("sandbox_cause carrier", "Hamlet.Combinators.sandbox_cause source");
-      ("Scope.use carrier", "Hamlet.Scope.use scope source");
-      ( "Scope.use_with carrier",
-        "Hamlet.Scope.use_with scope source\n\
-         ~handler:(fun _ requirement -> Hamlet.Dispatch.need requirement)" );
-    ];
   expect_generic_refusal "multiple symbolic inputs"
     "let[@hamlet.generic] helper left source =\n\
      Hamlet.Combinators.catch\n\
@@ -788,11 +761,7 @@ let test_generic_refusals () =
      match source with | [%hamlet.propagate_e.auto] -> ." (function
     | Generic_definition.Marker_without_supported_owner -> true
     | _ -> false);
-  expect_generic_refusal "nested pipeline"
-    "let[@hamlet.generic] helper source =\n\
-     source |> inner [%hamlet.forward.auto]" (function
-    | Generic_definition.Invalid_nested_call _ -> true
-    | _ -> false)
+  ()
 
 let test_generic_linkage_stripping () =
   let structure =
@@ -818,7 +787,7 @@ let test_generic_linkage_stripping () =
       Generic_definition.nested_call_attribute;
       Generic_definition.nested_callee_attribute;
       Generic_definition.nested_source_attribute;
-      Generic_definition.nested_placeholder_attribute;
+      Generic_definition.nested_specialized_attribute;
     ];
   check_rendered "contract remains"
     Hamlet_subtractor_ppx.Generic_contract.attribute_name rendered

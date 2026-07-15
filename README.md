@@ -28,8 +28,8 @@ opam pin add --yes hamlet-subtractor \
   "git+https://github.com/hamlet-org/hamlet-subtractor.git#main"
 ```
 
-Use the staged PPX in each target that contains automatic propagation or a
-generic automatic helper:
+Use the staged PPX in each target that contains automatic propagation, defines
+a generic helper, or calls one:
 
 ```lisp
 (library
@@ -47,8 +47,8 @@ target. Targets that use no subtractor feature may keep ordinary
 
 - `[%hamlet.propagate_e.auto]` forwards errors not handled by a `catch`.
 - `[%hamlet.propagate_s.auto]` forwards services not supplied by a `provide`.
-- `let[@hamlet.generic]` and a final `[%hamlet.forward.auto]` let callers
-  specialize an annotated reusable helper for their concrete effect row.
+- `let[@hamlet.generic]` makes a reusable helper specialize automatically when
+  called directly with a concrete effect.
 
 One marker is enough. Multiple markers may form a supported linear sequence of
 Hamlet operations. When a row is open or hidden, declare an explicit universe

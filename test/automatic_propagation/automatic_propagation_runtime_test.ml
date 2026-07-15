@@ -278,7 +278,6 @@ let generic_helper_handles_claimed_error () =
   in
   let specialized =
     Hamlet_subtractor_generic_helper_producer.recover_missing source
-      [%hamlet.forward.auto]
   in
   match Hamlet.Interpreter.run specialized with
   | Error `Recovery -> ()
@@ -291,18 +290,58 @@ let generic_helper_forwards_residual_error () =
   in
   let specialized =
     Hamlet_subtractor_generic_helper_producer.recover_missing source
-      [%hamlet.forward.auto]
   in
   match Hamlet.Interpreter.run specialized with
   | Error `Timeout -> ()
   | Error `Recovery -> Alcotest.fail "residual error used the handled callback"
   | Ok () -> Alcotest.fail "residual error disappeared"
 
+let generic_helper_specializes_again () =
+  let source : (unit, [ `Missing | `Offline ], Hamlet.never) Hamlet.t =
+    Hamlet.Combinators.fail `Offline
+  in
+  let specialized =
+    Hamlet_subtractor_generic_helper_producer.recover_missing source
+  in
+  match Hamlet.Interpreter.run specialized with
+  | Error `Offline -> ()
+  | Error `Recovery -> Alcotest.fail "second specialization changed residual"
+  | Ok () -> Alcotest.fail "second specialization lost its residual"
+
+let generic_call_inside_catch () =
+  let source : (unit, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t =
+    Hamlet.Combinators.fail `Missing
+  in
+  Hamlet.Combinators.catch
+    (Hamlet_subtractor_generic_helper_producer.recover_missing source)
+    ~handler:(function
+    | `Recovery -> Hamlet.Combinators.return ()
+    | `Timeout -> Hamlet.Combinators.return ())
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject)) "generic call inside catch" (Ok ())
+
+let generic_call_inside_chain () =
+  let source : (string, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t =
+    Hamlet.Combinators.return "ready"
+  in
+  Hamlet.Combinators.chain
+    (Hamlet_subtractor_generic_helper_producer.recover_missing source)
+    ~handler:(fun value -> Hamlet.Combinators.return (value ^ "!"))
+  |> Hamlet.Combinators.catch ~handler:(function
+    | `Recovery -> Hamlet.Combinators.return "recovery"
+    | `Timeout -> Hamlet.Combinators.return "timeout")
+  |> expect_ok "generic call inside chain" "ready!"
+
+let ordinary_qualified_calls_are_unchanged () =
+  Alcotest.(check int)
+    "ordinary qualified application" 42
+    (Hamlet_subtractor_generic_helper_producer.Ordinary.identity
+       (Hamlet_subtractor_generic_helper_producer.Ordinary.add 19 23))
+
 let generic_helper_infers_concrete_source () =
   let source = Hamlet.Combinators.fail `Missing in
   let specialized =
     Hamlet_subtractor_generic_helper_producer.recover_missing source
-      [%hamlet.forward.auto]
   in
   match Hamlet.Interpreter.run specialized with
   | Error `Recovery -> ()
@@ -314,7 +353,6 @@ let nested_generic_helper_handles_inner_error () =
   in
   let specialized =
     Hamlet_subtractor_nested_outer_fixture.recover_other source
-      [%hamlet.forward.auto]
   in
   Alcotest.(check (result unit reject))
     "inner helper handles Missing" (Ok ())
@@ -326,7 +364,6 @@ let nested_generic_helper_handles_outer_error () =
   in
   let specialized =
     Hamlet_subtractor_nested_outer_fixture.recover_other source
-      [%hamlet.forward.auto]
   in
   Alcotest.(check (result unit reject))
     "outer helper handles Other" (Ok ())
@@ -338,11 +375,26 @@ let nested_generic_helper_forwards_residual_error () =
   in
   let specialized =
     Hamlet_subtractor_nested_outer_fixture.recover_other source
-      [%hamlet.forward.auto]
   in
   match Hamlet.Interpreter.run specialized with
   | Error `Extra -> ()
   | Ok () -> Alcotest.fail "residual error disappeared"
+
+let two_nested_generic_helpers_handle_both_errors () =
+  let missing : (unit, [ `Extra | `Missing | `Other ], Hamlet.never) Hamlet.t =
+    Hamlet.Combinators.fail `Missing
+  in
+  let other : (unit, [ `Extra | `Missing | `Other ], Hamlet.never) Hamlet.t =
+    Hamlet.Combinators.fail `Other
+  in
+  Alcotest.(check (result unit reject))
+    "first nested helper" (Ok ())
+    (Hamlet.Interpreter.run
+       (Hamlet_subtractor_nested_outer_fixture.recover_both missing));
+  Alcotest.(check (result unit reject))
+    "second nested helper" (Ok ())
+    (Hamlet.Interpreter.run
+       (Hamlet_subtractor_nested_outer_fixture.recover_both other))
 
 module Generic_logger_live =
 Hamlet_subtractor_generic_helper_producer.Logger.Make (struct
@@ -365,7 +417,7 @@ let generic_helper_provides_requirement () =
   let specialized =
     Hamlet_subtractor_generic_helper_producer.provide_logger
       (module Generic_logger_live)
-      source [%hamlet.forward.auto]
+      source
   in
   Alcotest.(check (result unit reject))
     "generic helper provides Logger" (Ok ())
@@ -383,7 +435,7 @@ let generic_helper_forwards_residual_requirement () =
   let specialized =
     Hamlet_subtractor_generic_helper_producer.provide_logger
       (module Generic_logger_live)
-      source [%hamlet.forward.auto]
+      source
   in
   specialized
   |> Combinators.provide ~handler:(function
@@ -420,6 +472,14 @@ let () =
             generic_helper_handles_claimed_error;
           Alcotest.test_case "generic helper forwards residual error" `Quick
             generic_helper_forwards_residual_error;
+          Alcotest.test_case "generic helper specializes again" `Quick
+            generic_helper_specializes_again;
+          Alcotest.test_case "generic call inside catch" `Quick
+            generic_call_inside_catch;
+          Alcotest.test_case "generic call inside chain" `Quick
+            generic_call_inside_chain;
+          Alcotest.test_case "ordinary qualified calls remain ordinary" `Quick
+            ordinary_qualified_calls_are_unchanged;
           Alcotest.test_case "generic helper infers concrete source" `Quick
             generic_helper_infers_concrete_source;
           Alcotest.test_case "nested helper handles inner error" `Quick
@@ -428,6 +488,8 @@ let () =
             nested_generic_helper_handles_outer_error;
           Alcotest.test_case "nested helper forwards residual error" `Quick
             nested_generic_helper_forwards_residual_error;
+          Alcotest.test_case "two nested generic helpers" `Quick
+            two_nested_generic_helpers_handle_both_errors;
         ] );
       ( "requirements",
         [

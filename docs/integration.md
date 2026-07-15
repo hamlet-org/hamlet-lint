@@ -29,7 +29,7 @@ elaboration, after dependency interfaces are available.
  (staged_pps hamlet-subtractor.ppx))
 ```
 
-Targets that use no subtractor marker or generic helper may use
+Targets that use no subtractor marker, generic definition, or generic call may use
 `(pps ppx_hamlet)` instead.
 
 ## What happens in the later pass
@@ -38,11 +38,11 @@ The PPX:
 
 1. runs ordinary `ppx_hamlet` rewriting;
 2. keeps the program it will eventually return as the base AST;
-3. creates a temporary probe AST with links between each marker, owner,
-   handler, and input;
+3. creates a temporary probe AST with links between each marker and each
+   plausible direct helper call;
 4. sends the probe and compiler context to the resolver;
-5. receives immutable evidence, computes the residual rows, and generates
-   forwarding code;
+5. receives immutable evidence and call classifications, computes residual
+   rows, and generates forwarding code;
 6. inserts that code into the base AST and removes all internal links.
 
 The probe is typed only to obtain evidence. It is discarded. The compiler or
@@ -51,9 +51,10 @@ replace the ordinary OCaml type check.
 
 Generic helpers use the same round trip. A definition exports a small symbolic
 contract in a hidden generated module declaration that survives in its `.cmi`.
-A call containing
-`[%hamlet.forward.auto]` loads that contract from the callee's `.cmi`, applies
-it to the caller's concrete rows, and generates exhaustive evidence records.
+At a direct call, the resolver checks whether the callee has that companion
+contract. If it does, the resolver applies the contract to the concrete source
+rows and the PPX appends exhaustive evidence records. If it does not, the call
+is an ordinary OCaml call and remains unchanged.
 
 ## Resolver process
 

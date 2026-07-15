@@ -57,13 +57,15 @@ type generic_definition = {
   catalogues : Hamlet_subtractor_catalogue.t list;
 }
 
-type generic_call = {
-  attachment_id : string;
-  contract : Core.Generic_contract.t;
-  input : Core.Effect_certificate.t;
-  catalogues : Hamlet_subtractor_catalogue.t list;
-  location : Location.t;
-}
+type generic_call =
+  | Ignored_generic_call of { attachment_id : string }
+  | Resolved_generic_call of {
+      attachment_id : string;
+      contract : Core.Generic_contract.t;
+      input : Core.Effect_certificate.t;
+      catalogues : Hamlet_subtractor_catalogue.t list;
+      location : Location.t;
+    }
 
 type generic_refusal = { location : Location.t; reason : refusal_reason }
 

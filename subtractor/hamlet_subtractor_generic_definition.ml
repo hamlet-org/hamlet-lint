@@ -13,10 +13,8 @@ let slot_attribute = "hamlet.subtractor.generic_slot.v1"
 let nested_call_attribute = "hamlet.subtractor.generic_nested_call.v1"
 let nested_callee_attribute = "hamlet.subtractor.generic_nested_callee.v1"
 let nested_source_attribute = "hamlet.subtractor.generic_nested_source.v1"
-let nested_placeholder_attribute =
-  "hamlet.subtractor.generic_nested_placeholder.v1"
-
-let forward_extension = "hamlet.forward.auto"
+let nested_specialized_attribute =
+  "hamlet.subtractor.generic_nested_specialized.v2"
 
 type refusal_reason =
   | Invalid_annotation_payload
@@ -143,7 +141,7 @@ let is_linkage_attribute attribute =
       nested_call_attribute;
       nested_callee_attribute;
       nested_source_attribute;
-      nested_placeholder_attribute;
+      nested_specialized_attribute;
     ]
 
 let strip_linkage_attributes structure =
@@ -257,34 +255,10 @@ let candidate expression =
   | Pexp_apply (callee, arguments) -> direct_candidate callee arguments
   | _ -> None
 
-let is_forward_extension expression =
-  match expression.pexp_desc with
-  | Pexp_extension ({ txt; _ }, PStr []) -> String.equal txt forward_extension
-  | _ -> false
-
-let contains_forward_extension expression =
-  let found = ref false in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression expression =
-        if is_forward_extension expression then found := true
-        else super#expression expression
-    end
-  in
-  iterator#expression expression;
-  !found
-
 let location_key loc =
   (loc.loc_start.pos_fname, loc.loc_start.pos_cnum, loc.loc_end.pos_cnum)
 
-type nested_call = {
-  id : string;
-  loc : Location.t;
-  source_loc : Location.t;
-  placeholder_loc : Location.t;
-}
+type nested_call = { id : string; loc : Location.t; source_loc : Location.t }
 
 let nested_call_id helper loc ordinal =
   let digest =
@@ -301,109 +275,62 @@ let nested_call_id helper loc ordinal =
   in
   Printf.sprintf "nested:%s:%d" digest ordinal
 
-let collect_nested_calls helper expression =
+let collect_nested_calls helper source expression =
   let calls = ref [] in
-  let claimed = Hashtbl.create 16 in
   let ordinal = ref 0 in
-  let claim placeholder =
-    Hashtbl.replace claimed (location_key placeholder.pexp_loc) ()
+  let contains_source expression =
+    let found = ref false in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression expression =
+          match expression.pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } when String.equal name source ->
+              found := true
+          | _ -> super#expression expression
+      end
+    in
+    iterator#expression expression;
+    !found
   in
   let iterator =
     object
       inherit Ast_traverse.iter as super
 
       method! expression expression =
+        super#expression expression;
         match expression.pexp_desc with
-        | Pexp_apply (pipe, [ (Nolabel, _); (Nolabel, right) ])
-          when is_pipe pipe && contains_forward_extension right ->
-            refuse ~loc:expression.pexp_loc
-              (Invalid_nested_call
-                 "pipeline application is ambiguous; call the helper directly")
         | Pexp_apply (callee, arguments)
-          when List.exists
-                 (fun (_, argument) -> is_forward_extension argument)
-                 arguments ->
-            let placeholders =
-              List.filter_map
-                (fun (label, argument) ->
-                  if is_forward_extension argument then Some (label, argument)
-                  else if contains_forward_extension argument then
-                    refuse ~loc:argument.pexp_loc
-                      (Invalid_nested_call
-                         "[%hamlet.forward.auto] must be the complete final \
-                          argument")
-                  else None)
-                arguments
-            in
-            begin match (List.rev arguments, placeholders) with
-            | (Nolabel, placeholder) :: reversed, [ (Nolabel, same) ]
-              when same == placeholder ->
-                let preceding = List.rev reversed in
-                let source =
-                  match
-                    preceding
-                    |> List.rev
-                    |> List.find_map (function
-                      | Nolabel, source -> Some source
-                      | (Labelled _ | Optional _), _ -> None)
-                  with
-                  | Some source -> source
-                  | None ->
-                      refuse ~loc:expression.pexp_loc
-                        (Invalid_nested_call
-                           "the call has no positional effect argument")
-                in
+          when Option.is_none (combinator_name callee) && not (is_pipe callee)
+          -> (
+            match
+              arguments
+              |> List.filter_map (function
+                | Nolabel, argument when contains_source argument ->
+                    Some argument
+                | (Nolabel | Labelled _ | Optional _), _ -> None)
+            with
+            | [ source_expression ] ->
                 let id = nested_call_id helper expression.pexp_loc !ordinal in
                 incr ordinal;
-                claim placeholder;
                 calls :=
                   {
                     id;
                     loc = expression.pexp_loc;
-                    source_loc = source.pexp_loc;
-                    placeholder_loc = placeholder.pexp_loc;
+                    source_loc = source_expression.pexp_loc;
                   }
-                  :: !calls;
-                super#expression callee;
-                List.iter
-                  (fun (_, argument) ->
-                    if not (is_forward_extension argument) then
-                      super#expression argument)
-                  preceding
-            | _, _ :: _ :: _ ->
+                  :: !calls
+            | [] -> ()
+            | _ :: _ :: _ ->
                 refuse ~loc:expression.pexp_loc
                   (Invalid_nested_call
-                     "the call contains more than one forwarding placeholder")
-            | ((Labelled _ | Optional _), _) :: _, _ ->
-                refuse ~loc:expression.pexp_loc
-                  (Invalid_nested_call
-                     "[%hamlet.forward.auto] must be an unlabelled final \
-                      argument")
-            | _, _ ->
-                refuse ~loc:expression.pexp_loc
-                  (Invalid_nested_call
-                     "[%hamlet.forward.auto] must be the final call argument")
-            end
-        | _ -> super#expression expression
+                     "the generic source flows through more than one call \
+                      argument"))
+        | _ -> ()
     end
   in
   iterator#expression expression;
-  let checker =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression expression =
-        if
-          is_forward_extension expression
-          && not (Hashtbl.mem claimed (location_key expression.pexp_loc))
-        then
-          refuse ~loc:expression.pexp_loc
-            (Invalid_nested_call
-               "[%hamlet.forward.auto] is not attached to a direct helper call")
-        else super#expression expression
-    end
-  in
-  checker#expression expression;
   List.rev !calls
 
 let attribute_value name expression =
@@ -422,7 +349,7 @@ let rewrite_nested_calls calls expression =
     (fun call -> Hashtbl.add by_location (location_key call.loc) call)
     calls;
   let mapper =
-    object
+    object (self)
       inherit Ast_traverse.map as super
 
       method! expression expression =
@@ -434,33 +361,23 @@ let rewrite_nested_calls calls expression =
             begin match expression.pexp_desc with
             | Pexp_apply (callee, arguments) ->
                 let callee =
-                  super#expression callee
+                  self#expression callee
                   |> mark_expression ~name:nested_callee_attribute
                        ~value:call.id
                 in
                 let arguments =
                   List.map
                     (fun (label, argument) ->
+                      let argument = self#expression argument in
                       if
-                        Location.compare argument.pexp_loc call.placeholder_loc
-                        = 0
+                        label = Nolabel
+                        && Location.compare argument.pexp_loc call.source_loc
+                           = 0
                       then
                         ( label,
-                          A.pexp_assert ~loc:argument.pexp_loc
-                            (A.ebool ~loc:argument.pexp_loc false)
-                          |> mark_expression ~name:nested_placeholder_attribute
-                               ~value:call.id )
-                      else
-                        let argument = super#expression argument in
-                        if
-                          label = Nolabel
-                          && Location.compare argument.pexp_loc call.source_loc
-                             = 0
-                        then
-                          ( label,
-                            mark_expression ~name:nested_source_attribute
-                              ~value:call.id argument )
-                        else (label, argument))
+                          mark_expression ~name:nested_source_attribute
+                            ~value:call.id argument )
+                      else (label, argument))
                     arguments
                 in
                 { expression with pexp_desc = Pexp_apply (callee, arguments) }
@@ -654,7 +571,16 @@ let rec supported_source_flow source expression =
                   supported_source_flow source effect_expression
               | [] | _ :: _ :: _ -> false
               end
-          | Some _ | None -> false
+          | Some _ -> false
+          | None -> (
+              arguments
+              |> List.filter_map (function
+                | Nolabel, argument when contains_identifier source argument ->
+                    Some argument
+                | (Nolabel | Labelled _ | Optional _), _ -> None)
+              |> function
+              | [ argument ] -> supported_source_flow source argument
+              | [] | _ :: _ :: _ -> false)
           end
       | _ -> false)
 
@@ -1028,7 +954,7 @@ let rewrite_binding binding =
             | _ ->
                 refuse ~loc:source_pattern.ppat_loc Unsupported_source_parameter
           in
-          let nested_calls = collect_nested_calls helper body in
+          let nested_calls = collect_nested_calls helper source body in
           let body = rewrite_nested_calls nested_calls body in
           let count = identifier_count source body in
           if count <> 1 then
@@ -1190,8 +1116,6 @@ type composition_finalization_error =
   | Invalid_definition_attachment of string
   | Invalid_helper_link
   | Missing_nested_slots of string
-  | Duplicate_nested_placeholder of string
-  | Missing_nested_placeholder of string
   | Invalid_generated_evidence_parameter of string
 
 let composition_finalization_error_message = function
@@ -1204,10 +1128,6 @@ let composition_finalization_error_message = function
   | Invalid_helper_link -> "invalid generic-helper definition linkage"
   | Missing_nested_slots id ->
       "composed contract has no evidence slots for nested call " ^ id
-  | Duplicate_nested_placeholder id ->
-      "nested call has more than one forwarding placeholder " ^ id
-  | Missing_nested_placeholder id ->
-      "nested call has no forwarding placeholder " ^ id
   | Invalid_generated_evidence_parameter helper ->
       "cannot replace the generated evidence parameter for helper " ^ helper
 
@@ -1281,7 +1201,6 @@ let projection_expression ~loc helper slots =
 let finalize_helper_composition ~helper ~contract expression =
   let module Generic_contract = Hamlet_subtractor_core.Generic_contract in
   let slots = Generic_contract.slots contract in
-  let placeholders = Hashtbl.create 16 in
   let nested_calls = ref [] in
   let iterator =
     object
@@ -1292,33 +1211,21 @@ let finalize_helper_composition ~helper ~contract expression =
         | Some id -> nested_calls := id :: !nested_calls
         | None -> ()
         end;
-        begin match attribute_value nested_placeholder_attribute expression with
-        | Some id ->
-            let count =
-              Hashtbl.find_opt placeholders id |> Option.value ~default:0
-            in
-            Hashtbl.replace placeholders id (count + 1)
-        | None -> ()
-        end;
         super#expression expression
     end
   in
   iterator#expression expression;
   let nested_calls = List.sort_uniq String.compare !nested_calls in
   let validate_nested id =
-    match Hashtbl.find_opt placeholders id with
-    | None -> Error (Missing_nested_placeholder id)
-    | Some count when count <> 1 -> Error (Duplicate_nested_placeholder id)
-    | Some _ ->
-        let nested_slots =
-          List.filter
-            (fun slot ->
-              Generic_contract.slot_id_value slot
-              |> Generic_contract.slot_id_to_string
-              |> starts_with_namespace id)
-            slots
-        in
-        if nested_slots = [] then Error (Missing_nested_slots id) else Ok ()
+    let nested_slots =
+      List.filter
+        (fun slot ->
+          Generic_contract.slot_id_value slot
+          |> Generic_contract.slot_id_to_string
+          |> starts_with_namespace id)
+        slots
+    in
+    if nested_slots = [] then Error (Missing_nested_slots id) else Ok ()
   in
   let rec validate = function
     | [] -> Ok ()
@@ -1335,7 +1242,7 @@ let finalize_helper_composition ~helper ~contract expression =
           inherit Ast_traverse.map as super
 
           method! expression expression =
-            match attribute_value nested_placeholder_attribute expression with
+            match attribute_value nested_call_attribute expression with
             | None -> super#expression expression
             | Some id ->
                 let nested_slots =
@@ -1346,8 +1253,20 @@ let finalize_helper_composition ~helper ~contract expression =
                       |> starts_with_namespace id)
                     slots
                 in
-                projection_expression ~loc:expression.pexp_loc helper
-                  nested_slots
+                let evidence =
+                  projection_expression ~loc:expression.pexp_loc helper
+                    nested_slots
+                in
+                let expression = super#expression expression in
+                begin match expression.pexp_desc with
+                | Pexp_apply (callee, arguments) ->
+                    {
+                      expression with
+                      pexp_desc =
+                        Pexp_apply (callee, arguments @ [ (Nolabel, evidence) ]);
+                    }
+                | _ -> expression
+                end
         end
       in
       let expression = mapper#expression expression in

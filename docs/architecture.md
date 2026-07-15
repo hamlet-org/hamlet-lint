@@ -137,9 +137,11 @@ flowchart LR
     Def[annotated helper definition] --> Rewrite[append evidence argument]
     Rewrite --> Contract[symbolic contract]
     Contract --> CMI[generated companion in .cmi]
-    CMI --> Call[direct call with forward.auto]
+    CMI --> Call[direct helper call]
     Concrete[caller's concrete effect] --> Call
-    Call --> Instantiate[instantiate every contract slot]
+    Call --> Classify{retained contract?}
+    Classify -->|no| Ordinary[leave call unchanged]
+    Classify -->|yes| Instantiate[instantiate every contract slot]
     Instantiate --> Bundle[generate evidence slot or tuple]
     Bundle --> TypedCall[ordinary fully applied OCaml call]
 ```
@@ -154,13 +156,17 @@ At the definition site:
 
 At the call site:
 
-1. `hamlet_subtractor_generic_call.ml` links the direct call, concrete source,
-   and final `[%hamlet.forward.auto]` argument.
-2. The resolver loads the callee's retained contract and proves the concrete
-   caller input.
-3. `hamlet_subtractor_generic_generator.ml` creates one exhaustive dispatcher
+1. `hamlet_subtractor_generic_call.ml` gives each plausible direct call a
+   stable probe identity. Users write an ordinary call with no extra syntax.
+2. In the isolated probe, the resolver uses compiler paths to distinguish a
+   generic helper from an ordinary function. Ordinary calls are ignored.
+3. For a generic helper, it loads the retained contract, selects the helper's
+   effect argument, and proves that concrete input.
+4. `hamlet_subtractor_generic_generator.ml` creates one exhaustive dispatcher
    per marker. Its two callbacks may return any common result type, so the same
    slot works for both error and requirement handlers.
+5. The PPX appends the generated slot or tuple to the final call. Only this
+   fully applied final call is seen by the compiler or Merlin.
 
 The helper body is compiled once. Callers receive its symbolic contract, not
 its source code.

@@ -1,27 +1,15 @@
 open Ppxlib
 module A = Ast_builder.Default
 
-let extension_name = "hamlet.forward.auto"
-let call_attribute = "hamlet.subtractor.generic_call.v1"
-let callee_attribute = "hamlet.subtractor.generic_callee.v1"
-let source_attribute = "hamlet.subtractor.generic_source.v1"
-let placeholder_attribute = "hamlet.subtractor.generic_placeholder.v1"
+let legacy_extension_name = "hamlet.forward.auto"
+let call_attribute = "hamlet.subtractor.generic_call.v2"
+let callee_attribute = "hamlet.subtractor.generic_callee.v2"
+let source_attribute = "hamlet.subtractor.generic_source.v2"
+let specialized_attribute = "hamlet.subtractor.generic_specialized.v2"
 
-type call = {
-  id : string;
-  loc : Location.t;
-  callee_loc : Location.t;
-  source_loc : Location.t;
-  placeholder_loc : Location.t;
-}
+type call = { id : string; loc : Location.t; callee_loc : Location.t }
 
-type refusal_reason =
-  | Not_a_final_argument
-  | Labelled_argument
-  | Missing_effect_argument
-  | Multiple_placeholders
-  | Pipeline_application
-
+type refusal_reason = Legacy_forward_extension
 type refusal = { loc : Location.t; reason : refusal_reason }
 
 type prepared = {
@@ -32,20 +20,10 @@ type prepared = {
 }
 
 let refusal_message = function
-  | Not_a_final_argument ->
-      "[%hamlet.forward.auto] must be the final argument of a direct helper \
-       call"
-  | Labelled_argument ->
-      "[%hamlet.forward.auto] must be an unlabelled final argument"
-  | Missing_effect_argument ->
-      "the generic helper call has no concrete effect argument before \
-       [%hamlet.forward.auto]"
-  | Multiple_placeholders ->
-      "one generic helper call accepts exactly one [%hamlet.forward.auto] \
-       argument"
-  | Pipeline_application ->
-      "generic helper specialization does not support ambiguous pipeline \
-       application; call the helper directly"
+  | Legacy_forward_extension ->
+      "[%hamlet.forward.auto] is no longer part of the public syntax; remove \
+       it because direct calls to [@hamlet.generic] functions are specialized \
+       automatically"
 
 let string_payload value =
   PStr
@@ -64,45 +42,27 @@ let add_attribute ~name ~value expression =
     pexp_attributes = attribute ~name ~value :: expression.pexp_attributes;
   }
 
-let extension = function
-  | { pexp_desc = Pexp_extension ({ txt; _ }, PStr []); _ }
-    when String.equal txt extension_name ->
-      true
+let has_attribute name expression =
+  List.exists
+    (fun attribute -> String.equal attribute.attr_name.txt name)
+    expression.pexp_attributes
+
+let legacy_extension = function
+  | { pexp_desc = Pexp_extension ({ txt; _ }, PStr []); _ } ->
+      String.equal txt legacy_extension_name
   | _ -> false
 
-let has_extension expression =
-  let found = ref false in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
+let ordinary_identifier name =
+  match name.[0] with 'A' .. 'Z' | '_' | 'a' .. 'z' -> true | _ -> false
 
-      method! expression expression =
-        if extension expression then found := true
-        else super#expression expression
-    end
-  in
-  iterator#expression expression;
-  !found
-
-let location_key loc =
-  (loc.loc_start.pos_fname, loc.loc_start.pos_cnum, loc.loc_end.pos_cnum)
-
-let claim_extensions claimed expression =
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression expression =
-        if extension expression then
-          Hashtbl.replace claimed (location_key expression.pexp_loc) ();
-        super#expression expression
-    end
-  in
-  iterator#expression expression
-
-let is_pipe = function
-  | { pexp_desc = Pexp_ident { txt = Lident "|>"; _ }; _ } -> true
+let direct_callee = function
+  | { pexp_desc = Pexp_ident { txt = Lident name; _ }; _ } ->
+      String.length name > 0 && ordinary_identifier name
+  | { pexp_desc = Pexp_ident { txt = Ldot _; _ }; _ } -> true
   | _ -> false
+
+let has_positional_argument arguments =
+  List.exists (fun (label, _) -> label = Nolabel) arguments
 
 let call_id ~structure_digest ~loc ~ordinal =
   let digest =
@@ -128,111 +88,43 @@ let prepare structure =
   let ordinal = ref 0 in
   let calls = ref [] in
   let refusals = ref [] in
-  let claimed = Hashtbl.create 16 in
   let mapper =
-    object (self)
+    object
       inherit Ast_traverse.map as super
 
-      method private reject expression reason =
-        claim_extensions claimed expression;
-        refusals := { loc = expression.pexp_loc; reason } :: !refusals;
-        expression
-
       method! expression expression =
-        match expression.pexp_desc with
-        | Pexp_apply (pipe, [ (Nolabel, _); (Nolabel, right) ])
-          when is_pipe pipe && has_extension right ->
-            self#reject expression Pipeline_application
-        | Pexp_apply (callee, arguments) -> (
-            let placeholder_count =
-              List.fold_left
-                (fun count (_, argument) ->
-                  if has_extension argument then count + 1 else count)
-                0 arguments
-            in
-            if placeholder_count = 0 then super#expression expression
-            else if placeholder_count > 1 then
-              self#reject expression Multiple_placeholders
-            else
-              match List.rev arguments with
-              | (label, placeholder) :: reversed_arguments
-                when extension placeholder -> (
-                  let arguments = List.rev reversed_arguments in
-                  if label <> Nolabel then
-                    self#reject placeholder Labelled_argument
-                  else
-                    match List.rev arguments with
-                    | (Nolabel, source) :: _ ->
-                        let id =
-                          call_id ~structure_digest ~loc:expression.pexp_loc
-                            ~ordinal:!ordinal
-                        in
-                        incr ordinal;
-                        Hashtbl.replace claimed
-                          (location_key placeholder.pexp_loc)
-                          ();
-                        let placeholder =
-                          A.pexp_assert ~loc:placeholder.pexp_loc
-                            (A.ebool ~loc:placeholder.pexp_loc false)
-                          |> add_attribute ~name:placeholder_attribute ~value:id
-                        in
-                        let callee =
-                          super#expression callee
-                          |> add_attribute ~name:callee_attribute ~value:id
-                        in
-                        let arguments =
-                          List.map
-                            (fun (argument_label, argument) ->
-                              let argument = super#expression argument in
-                              if
-                                argument_label = Nolabel
-                                && Location.compare argument.pexp_loc
-                                     source.pexp_loc
-                                   = 0
-                              then
-                                ( argument_label,
-                                  add_attribute ~name:source_attribute ~value:id
-                                    argument )
-                              else (argument_label, argument))
-                            arguments
-                        in
-                        calls :=
-                          {
-                            id;
-                            loc = expression.pexp_loc;
-                            callee_loc = callee.pexp_loc;
-                            source_loc = source.pexp_loc;
-                            placeholder_loc = placeholder.pexp_loc;
-                          }
-                          :: !calls;
-                        {
-                          expression with
-                          pexp_desc =
-                            Pexp_apply
-                              (callee, arguments @ [ (Nolabel, placeholder) ]);
-                        }
-                        |> add_attribute ~name:call_attribute ~value:id
-                    | _ -> self#reject expression Missing_effect_argument)
-              | _ -> self#reject expression Not_a_final_argument)
-        | _ -> super#expression expression
+        if legacy_extension expression then (
+          refusals :=
+            { loc = expression.pexp_loc; reason = Legacy_forward_extension }
+            :: !refusals;
+          expression)
+        else
+          let expression = super#expression expression in
+          match expression.pexp_desc with
+          | Pexp_apply (callee, arguments)
+            when direct_callee callee
+                 && has_positional_argument arguments
+                 && not
+                      (has_attribute
+                         Hamlet_subtractor_generic_definition
+                         .nested_call_attribute expression) ->
+              let id =
+                call_id ~structure_digest ~loc:expression.pexp_loc
+                  ~ordinal:!ordinal
+              in
+              incr ordinal;
+              calls :=
+                { id; loc = expression.pexp_loc; callee_loc = callee.pexp_loc }
+                :: !calls;
+              let callee =
+                add_attribute ~name:callee_attribute ~value:id callee
+              in
+              { expression with pexp_desc = Pexp_apply (callee, arguments) }
+              |> add_attribute ~name:call_attribute ~value:id
+          | _ -> expression
     end
   in
   let probe_structure = mapper#structure structure in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression expression =
-        (if extension expression then
-           let key = location_key expression.pexp_loc in
-           if not (Hashtbl.mem claimed key) then
-             refusals :=
-               { loc = expression.pexp_loc; reason = Not_a_final_argument }
-               :: !refusals);
-        super#expression expression
-    end
-  in
-  iterator#structure structure;
   {
     base_structure = structure;
     probe_structure;
@@ -260,20 +152,18 @@ type finalization_error =
   | Invalid_attachment of string
   | Contract_evaluation_failed of string
   | Generation_failed of Hamlet_subtractor_generator.error
-  | Missing_placeholder of string
-  | Duplicate_placeholder of string
+  | Missing_call of string
+  | Duplicate_call of string
 
 let finalization_error_message = function
-  | Missing_attachment id -> "missing generic call evidence for " ^ id
-  | Duplicate_attachment id -> "duplicate generic call evidence for " ^ id
-  | Invalid_attachment id -> "invalid generic call evidence for " ^ id
+  | Missing_attachment id -> "missing generic call classification for " ^ id
+  | Duplicate_attachment id -> "duplicate generic call classification for " ^ id
+  | Invalid_attachment id -> "invalid generic call classification for " ^ id
   | Contract_evaluation_failed id ->
       "generic helper contract cannot be instantiated for " ^ id
   | Generation_failed error -> Hamlet_subtractor_generator.error_message error
-  | Missing_placeholder id ->
-      "final AST no longer contains [%hamlet.forward.auto] for " ^ id
-  | Duplicate_placeholder id ->
-      "final AST contains duplicate [%hamlet.forward.auto] for " ^ id
+  | Missing_call id -> "final AST no longer contains generic call " ^ id
+  | Duplicate_call id -> "final AST contains duplicate generic call " ^ id
 
 let attachment_for_call attachments id =
   let module Protocol = Hamlet_subtractor_core.Protocol in
@@ -296,15 +186,17 @@ let expression_for_call ~catalogues ~loc attachments call =
           (Core.Protocol.generic_attachment_payload attachment)
       with
       | Error _ -> Error (Invalid_attachment call.id)
-      | Ok (contract, input) -> (
+      | Ok Core.Generic_resolution.Ignored -> Ok None
+      | Ok (Core.Generic_resolution.Resolved (contract, input)) -> (
           match Core.Generic_contract.instantiate_slots ~input contract with
           | Error _ -> Error (Contract_evaluation_failed call.id)
           | Ok instantiated ->
               let rec generate accumulated = function
                 | [] ->
                     Ok
-                      (Hamlet_subtractor_generic_generator.bundle ~loc
-                         (List.rev accumulated))
+                      (Some
+                         (Hamlet_subtractor_generic_generator.bundle ~loc
+                            (List.rev accumulated)))
                 | current :: rest ->
                     let slot =
                       Core.Generic_contract.instantiated_slot current
@@ -323,24 +215,52 @@ let expression_for_call ~catalogues ~loc attachments call =
               in
               generate [] instantiated))
 
-let same_location left right =
-  String.equal left.loc_start.pos_fname right.loc_start.pos_fname
-  && left.loc_start.pos_cnum = right.loc_start.pos_cnum
-  && left.loc_end.pos_cnum = right.loc_end.pos_cnum
-
 let finalize ~calls ~attachments ~catalogues structure =
-  let counts = Hashtbl.create (List.length calls) in
+  let classification_error = ref None in
+  let active_calls =
+    calls
+    |> List.filter (fun call ->
+        match attachment_for_call attachments call.id with
+        | Error error ->
+            classification_error := Some error;
+            false
+        | Ok attachment -> (
+            match
+              Hamlet_subtractor_core.Generic_resolution.decode_call
+                (Hamlet_subtractor_core.Protocol.generic_attachment_payload
+                   attachment)
+            with
+            | Ok Hamlet_subtractor_core.Generic_resolution.Ignored -> false
+            | Ok (Hamlet_subtractor_core.Generic_resolution.Resolved _) -> true
+            | Error _ ->
+                classification_error := Some (Invalid_attachment call.id);
+                false))
+  in
+  let counts = Hashtbl.create (List.length active_calls) in
   let error = ref None in
-  let call_at loc =
-    List.find_opt (fun call -> same_location call.placeholder_loc loc) calls
+  let same_location left right =
+    String.equal left.loc_start.pos_fname right.loc_start.pos_fname
+    && left.loc_start.pos_cnum = right.loc_start.pos_cnum
+    && left.loc_end.pos_cnum = right.loc_end.pos_cnum
+  in
+  let call_at expression =
+    match expression.pexp_desc with
+    | Pexp_apply (callee, _) ->
+        List.find_opt
+          (fun (call : call) ->
+            same_location call.loc expression.pexp_loc
+            && same_location call.callee_loc callee.pexp_loc)
+          active_calls
+    | _ -> None
   in
   let mapper =
     object
       inherit Ast_traverse.map as super
 
       method! expression expression =
-        match (extension expression, call_at expression.pexp_loc) with
-        | true, Some call ->
+        match call_at expression with
+        | None -> super#expression expression
+        | Some call ->
             let count =
               Option.value (Hashtbl.find_opt counts call.id) ~default:0
             in
@@ -349,29 +269,55 @@ let finalize ~calls ~attachments ~catalogues structure =
               expression_for_call ~catalogues ~loc:expression.pexp_loc
                 attachments call
             with
-            | Ok expression -> expression
             | Error finalization_error ->
                 error := Some finalization_error;
                 expression
+            | Ok None -> super#expression expression
+            | Ok (Some evidence) ->
+                let expression = super#expression expression in
+                begin match expression.pexp_desc with
+                | Pexp_apply (callee, arguments) ->
+                    {
+                      expression with
+                      pexp_desc =
+                        Pexp_apply (callee, arguments @ [ (Nolabel, evidence) ]);
+                    }
+                | _ -> expression
+                end
             end
-        | true, None -> super#expression expression
-        | false, _ -> super#expression expression
     end
   in
   let structure = mapper#structure structure in
-  match !error with
-  | Some error -> Error error
-  | None ->
-      let missing_or_duplicate =
-        List.find_map
-          (fun call ->
-            match Option.value (Hashtbl.find_opt counts call.id) ~default:0 with
-            | 0 -> Some (Missing_placeholder call.id)
-            | 1 -> None
-            | _ -> Some (Duplicate_placeholder call.id))
-          calls
+  let strip =
+    object
+      inherit Ast_traverse.map as super
+
+      method! attributes attributes =
+        attributes
+        |> List.filter (fun attribute ->
+            not
+              (List.exists
+                 (String.equal attribute.attr_name.txt)
+                 [
+                   call_attribute;
+                   callee_attribute;
+                   source_attribute;
+                   specialized_attribute;
+                 ]))
+        |> super#attributes
+    end
+  in
+  let structure = strip#structure structure in
+  match (!classification_error, !error) with
+  | Some error, _ -> Error error
+  | None, Some error -> Error error
+  | None, None ->
+      let rec validate = function
+        | [] -> Ok structure
+        | call :: rest -> (
+            match Hashtbl.find_opt counts call.id with
+            | None -> Error (Missing_call call.id)
+            | Some 1 -> validate rest
+            | Some _ -> Error (Duplicate_call call.id))
       in
-      begin match missing_or_duplicate with
-      | Some error -> Error error
-      | None -> Ok structure
-      end
+      validate active_calls
