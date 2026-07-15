@@ -274,7 +274,7 @@ let test_grouped_leaf_partial_refusal () =
       Alcotest.(check int) "one matched group member" 1 (List.length matched)
   | _ -> Alcotest.fail "expected grouped leaf refusal"
 
-let test_linter_observation_stays_incomplete () =
+let test_partial_observation_stays_incomplete () =
   let declared = Observation.of_tags ~kind:Kind.Error [ "A"; "B"; "B" ] in
   let upstream = Observation.of_tags ~kind:Kind.Error [ "A" ] in
   let candidate =
@@ -933,8 +933,8 @@ let () =
             test_requirement_forwarding;
           Alcotest.test_case "grouped partial refusal" `Quick
             test_grouped_leaf_partial_refusal;
-          Alcotest.test_case "linter observation is incomplete" `Quick
-            test_linter_observation_stays_incomplete;
+          Alcotest.test_case "partial observation is incomplete" `Quick
+            test_partial_observation_stays_incomplete;
           Alcotest.test_case "catch recovery requirements" `Quick
             test_catch_certificate_unions_recovery_requirements;
           Alcotest.test_case "chain unions both channels" `Quick

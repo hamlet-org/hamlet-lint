@@ -100,17 +100,22 @@ When the guard is false, the generated dispatcher forwards `` `Missing ``.
 
 ## Closed inferred row
 
-A normal closed value needs no Hamlet-specific annotation.
+A normal closed value needs no effect-row annotation.
 
 ```ocaml
-let source : (unit, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t =
-  make_source ()
+let source =
+  if retry_allowed () then Hamlet.Combinators.fail `Missing
+  else Hamlet.Combinators.fail `Timeout
 
 let result =
   Hamlet.Combinators.catch source ~handler:(function
     | `Missing -> Hamlet.Combinators.return ()
     | [%hamlet.propagate_e.auto] -> .)
 ```
+
+An ordinary OCaml type annotation is still useful when an API deliberately
+exposes a wider row than its implementation constructs. That is an API choice,
+not a requirement imposed by the subtractor.
 
 ## Independently generalized builder
 

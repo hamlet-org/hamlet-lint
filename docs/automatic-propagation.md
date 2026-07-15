@@ -119,7 +119,10 @@ let recovered = recover_missing concrete_source [%hamlet.forward.auto]
 ```
 
 No row annotation is needed when `concrete_source` already has an exact
-inferred type. The two annotations have different jobs:
+inferred type. A type annotation is needed only when ordinary OCaml inference
+cannot express the intended public row, for example when an API deliberately
+widens a computation that currently constructs one error. The two PPX
+annotations have different jobs:
 
 - `[@hamlet.generic]` intentionally changes the exported function ABI by
   appending one generated evidence argument;
