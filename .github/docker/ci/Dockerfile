@@ -50,7 +50,7 @@ RUN test -n "${HAMLET_GIT_COMMIT}" \
     && opam pin add -y --no-action hamlet /opt/hamlet-source \
     && opam pin add -y --no-action ppx_hamlet /opt/hamlet-source \
     && opam install --switch=ci -y hamlet ppx_hamlet \
-    && opam install --switch=ci -y . --deps-only --with-test --with-doc --with-dev-setup \
+    && opam install --switch=ci -y --ignore-pin-depends . --deps-only --with-test --with-doc --with-dev-setup \
     && opam clean --all
 
 ENV OPAMSWITCH=ci

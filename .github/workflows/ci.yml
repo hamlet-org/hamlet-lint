@@ -243,7 +243,7 @@ jobs:
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
-          opam install -y . --deps-only --with-test --with-doc --with-dev-setup
+          opam install -y --ignore-pin-depends . --deps-only --with-test --with-doc --with-dev-setup
 
       - run: make all
 
@@ -279,11 +279,11 @@ jobs:
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
-          opam install -y . --deps-only --with-test --with-doc --with-dev-setup
+          opam install -y --ignore-pin-depends . --deps-only --with-test --with-dev-setup
 
       - run: test "$(opam exec -- dune --version)" = "${{ env.MINIMUM_DUNE }}"
 
-      - run: opam exec -- make all
+      - run: opam exec -- make build test fmt opam
 
   build-macos:
     name: build (macos-latest, 5.5.0)
@@ -315,7 +315,7 @@ jobs:
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
-          opam install -y . --deps-only --with-test --with-doc --with-dev-setup
+          opam install -y --ignore-pin-depends . --deps-only --with-test --with-doc --with-dev-setup
           opam exec -- make all
 
   quality:
@@ -353,6 +353,6 @@ jobs:
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam pin add -y --no-action ppx_hamlet "$GITHUB_WORKSPACE/hamlet-source"
           opam install -y hamlet ppx_hamlet
-          opam install -y . --deps-only --with-test --with-doc --with-dev-setup
+          opam install -y --ignore-pin-depends . --deps-only --with-test --with-doc --with-dev-setup
 
       - run: make fmt doc opam
