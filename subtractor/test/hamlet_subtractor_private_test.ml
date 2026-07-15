@@ -621,6 +621,26 @@ let resolve_exact
   | Ok engine -> engine
   | Error refusal -> Alcotest.fail (fail_refusal refusal)
 
+let resolve_hamlet_ppx
+    ?(tool_name = "ocamlopt")
+    ?(source_file = "hamlet_ppx_probe.ml")
+    source =
+  let structure = parse ~source_file source in
+  let transformed =
+    Ppx_hamlet.subtractor_phase := Ppx_hamlet.Probe;
+    Fun.protect
+      ~finally:(fun () -> Ppx_hamlet.subtractor_phase := Ppx_hamlet.Normal)
+      (fun () -> Ppx_hamlet.impl structure)
+  in
+  let prepared = Hamlet_subtractor_probe.prepare transformed in
+  with_include_directory (find_hamlet_cmi_directory ()) @@ fun () ->
+  match
+    Hamlet_subtractor_compiler_compat.resolve_prepared ~tool_name ~source_file
+      prepared
+  with
+  | Ok engine -> engine
+  | Error refusal -> Alcotest.fail (fail_refusal refusal)
+
 let only_outcome engine =
   match Hamlet_subtractor_engine.outcomes engine with
   | [ outcome ] -> outcome
@@ -1052,6 +1072,42 @@ let provided =
     "principal local builder retains Clock" [ "Clock" ]
     (Hamlet_subtractor_core.Residual.residual residual |> leaf_labels)
 
+let test_principal_service_module_builder_is_exact () =
+  let engine =
+    resolve_hamlet_ppx
+      {|
+open Hamlet
+
+[%%hamlet.service
+module type Logger = sig
+  val log : string -> (unit, 'e, 'r) t
+end]
+
+[%%hamlet.service
+module type Clock = sig
+  val now : unit -> (int, 'e, 'r) t
+end]
+
+let source () =
+  let open Combinators in
+  let* (module Logger) = Logger.Tag.summon in
+  let* () = Logger.log "ciao" in
+  let* (module Clock) = Clock.Tag.summon in
+  let* now = Clock.now () in
+  return (Printf.sprintf "ready at %d" now)
+
+let provided =
+  Combinators.provide (source ()) ~handler:(fun requirement ->
+    match requirement with
+    | #Logger.Tag.r as witness -> Logger.Tag.give witness (assert false)
+    | [%hamlet.propagate_s.auto] -> .)
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "principal service module builder retains Clock" [ "Clock" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_labels)
+
 let test_parameter_dependent_builder_is_refused () =
   let engine =
     resolve_exact
@@ -1426,6 +1482,8 @@ let () =
             test_principal_chain_is_exact;
           Alcotest.test_case "principal local builder is exact" `Quick
             test_principal_local_builder_is_exact;
+          Alcotest.test_case "principal service module builder is exact" `Quick
+            test_principal_service_module_builder_is_exact;
           Alcotest.test_case "parameter-dependent builder is refused" `Quick
             test_parameter_dependent_builder_is_refused;
           Alcotest.test_case "parameter aliases are refused" `Quick

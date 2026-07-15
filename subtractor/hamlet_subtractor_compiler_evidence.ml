@@ -1192,15 +1192,128 @@ let generated_tag_summon expression =
       | Some _ | None -> false)
   | _ -> false
 
+let canonical_tag_value env tag_module name path description =
+  let expected_path = Path.Pdot (tag_module, name) in
+  match try Some (Env.find_value expected_path env) with _ -> None with
+  | Some expected ->
+      String.equal (Path.last path) name
+      && Shape.Uid.equal description.Types.val_uid expected.Types.val_uid
+  | None -> false
+
+let service_key_matches_tag env tag_module type_expression =
+  let rec unwrap type_expression =
+    match Types.get_desc type_expression with
+    | Tpoly (body, _) | Tlink body | Tsubst (body, _) -> unwrap body
+    | Tconstr (path, [ service ], _) ->
+        let declaration = type_declaration env path in
+        let canonical_service =
+          match Types.get_desc service with
+          | Tconstr (service_path, [], _) ->
+              canonical_type_path env service_path
+          | _ -> refuse Unresolved_row
+        in
+        let expected_service =
+          canonical_type_path env (Path.Pdot (tag_module, "t"))
+        in
+        hamlet_owned_uid declaration.Types.type_uid
+        && String.equal (Path.last path) "t"
+        && Option.exists
+             (fun parent -> String.equal (Path.last parent) "Service_key")
+             (parent_path path)
+        && Path.same canonical_service expected_service
+    | _ -> false
+  in
+  unwrap type_expression
+
+let generated_summon_call expression =
+  match expression.exp_desc with
+  | Texp_apply (callee, arguments) -> (
+      match (callee.exp_desc, positional_arguments arguments) with
+      | Texp_ident (path, _, description), [ key; tag ]
+        when canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc
+               ~module_name:"Combinators" ~value_name:"summon" path description
+        -> (
+          match (key.exp_desc, tag.exp_desc) with
+          | ( Texp_ident (key_path, _, key_description),
+              Texp_ident (tag_path, _, tag_description) ) -> (
+              match parent_path key_path with
+              | Some tag_module ->
+                  String.equal (Path.last tag_module) "Tag"
+                  && canonical_tag_value key.exp_env tag_module "key" key_path
+                       key_description
+                  && canonical_tag_value tag.exp_env tag_module "tag" tag_path
+                       tag_description
+                  && service_key_matches_tag key.exp_env tag_module key.exp_type
+              | None -> false)
+          | _ -> false)
+      | _ -> false)
+  | _ -> false
+
+let generated_service_summon expression =
+  generated_tag_summon expression || generated_summon_call expression
+
+let unpacked_module_identifier pattern =
+  let has_package_annotation =
+    List.exists
+      (function
+        | Tpat_unpack (Some _), _, _ -> true
+        | (Tpat_unpack None | _), _, _ -> false)
+      pattern.pat_extra
+  in
+  match (has_package_annotation, pattern.pat_desc) with
+  | true, Tpat_var (identifier, _, _) -> Some identifier
+  | false, Tpat_var _
+  | _, Tpat_any
+  | _, Tpat_alias _
+  | _, Tpat_constant _
+  | _, Tpat_tuple _
+  | _, Tpat_construct _
+  | _, Tpat_variant _
+  | _, Tpat_record _
+  | _, Tpat_array _
+  | _, Tpat_lazy _
+  | _, Tpat_or _ ->
+      None
+
+let service_module_identifier ~source pattern =
+  if generated_service_summon source then unpacked_module_identifier pattern
+  else None
+
+let service_modules_from_parameters ~source parameters =
+  List.filter_map
+    (fun (parameter : function_param) ->
+      match parameter.fp_kind with
+      | Tparam_pat pattern | Tparam_optional_default (pattern, _) ->
+          service_module_identifier ~source pattern)
+    parameters
+
+let service_module_method service_modules expression =
+  match expression.exp_desc with
+  | Texp_apply
+      ( { exp_desc = Texp_ident (Path.Pdot (Path.Pident module_, _), _, _); _ },
+        _ ) -> (
+      List.exists (Ident.same module_) service_modules
+      &&
+        try
+          let _ = hamlet_channels expression in
+          true
+        with Refuse _ -> false)
+  | _ -> false
+
 let canonical_binding_operator expression operator expected_name =
   canonical_hamlet_value expression.exp_env ~loc:operator.bop_loc
     ~module_name:"Combinators" ~value_name:expected_name operator.bop_op_path
     operator.bop_op_val
 
-let rec expression_has_independent_origin bindings seen expression =
+let rec expression_has_independent_origin
+    bindings
+    seen
+    service_modules
+    expression =
   if attribute_values owner_attribute expression.exp_attributes <> [] then true
   else if canonical_simple_producer expression then true
-  else if generated_tag_summon expression then true
+  else if generated_service_summon expression then true
+  else if service_module_method service_modules expression then true
   else
     match expression.exp_desc with
     | Texp_ident (path, _, description) -> (
@@ -1213,7 +1326,8 @@ let rec expression_has_independent_origin bindings seen expression =
           | _ -> (
               match find_value_binding bindings path uid with
               | Some rhs ->
-                  expression_has_independent_origin bindings (uid :: seen) rhs
+                  expression_has_independent_origin bindings (uid :: seen)
+                    service_modules rhs
               | None -> false))
     | Texp_apply (callee, arguments) -> (
         if
@@ -1231,71 +1345,102 @@ let rec expression_has_independent_origin bindings seen expression =
               with
               | source :: _, Some handler, _ | source :: _, None, Some handler
                 ->
-                  expression_has_independent_origin bindings seen source
+                  expression_has_independent_origin bindings seen
+                    service_modules source
                   && function_result_has_independent_origin bindings seen
-                       handler
+                       service_modules ~source handler
               | _ -> false
               end
           | Some "both" -> (
               match positional_arguments arguments with
               | [ left; right ] ->
-                  expression_has_independent_origin bindings seen left
-                  && expression_has_independent_origin bindings seen right
+                  expression_has_independent_origin bindings seen
+                    service_modules left
+                  && expression_has_independent_origin bindings seen
+                       service_modules right
               | _ -> false)
           | Some ("map" | "map_fail" | "or_die" | "thaw") -> (
               match positional_arguments arguments with
               | source :: _ ->
-                  expression_has_independent_origin bindings seen source
+                  expression_has_independent_origin bindings seen
+                    service_modules source
               | [] -> false)
           | Some _ -> false
           | None -> false)
     | Texp_let (_, _, body) ->
-        expression_has_independent_origin bindings seen body
+        expression_has_independent_origin bindings seen service_modules body
     | Texp_struct_item (_, body) ->
-        expression_has_independent_origin bindings seen body
+        expression_has_independent_origin bindings seen service_modules body
     | Texp_match (_, cases, _, _) ->
         List.for_all
           (fun (case : computation case) ->
-            expression_has_independent_origin bindings seen case.c_rhs)
+            expression_has_independent_origin bindings seen service_modules
+              case.c_rhs)
           cases
     | Texp_ifthenelse (_, if_true, Some if_false) ->
-        expression_has_independent_origin bindings seen if_true
-        && expression_has_independent_origin bindings seen if_false
+        expression_has_independent_origin bindings seen service_modules if_true
+        && expression_has_independent_origin bindings seen service_modules
+             if_false
     | Texp_sequence (_, last) ->
-        expression_has_independent_origin bindings seen last
+        expression_has_independent_origin bindings seen service_modules last
     | Texp_letop { let_; ands; body; _ }
       when canonical_binding_operator expression let_ "let*"
            && List.for_all
                 (fun operator ->
                   canonical_binding_operator expression operator "and*")
                 ands ->
-        expression_has_independent_origin bindings seen let_.bop_exp
+        expression_has_independent_origin bindings seen service_modules
+          let_.bop_exp
         && List.for_all
              (fun operator ->
-               expression_has_independent_origin bindings seen operator.bop_exp)
+               expression_has_independent_origin bindings seen service_modules
+                 operator.bop_exp)
              ands
-        && expression_has_independent_origin bindings seen body.c_rhs
+        &&
+        let service_modules =
+          match service_module_identifier ~source:let_.bop_exp body.c_lhs with
+          | Some identifier -> identifier :: service_modules
+          | None -> service_modules
+        in
+        expression_has_independent_origin bindings seen service_modules
+          body.c_rhs
     | Texp_letop { let_; ands; _ }
       when canonical_binding_operator expression let_ "let+"
            && List.for_all
                 (fun operator ->
                   canonical_binding_operator expression operator "and*")
                 ands ->
-        expression_has_independent_origin bindings seen let_.bop_exp
+        expression_has_independent_origin bindings seen service_modules
+          let_.bop_exp
         && List.for_all
              (fun operator ->
-               expression_has_independent_origin bindings seen operator.bop_exp)
+               expression_has_independent_origin bindings seen service_modules
+                 operator.bop_exp)
              ands
     | _ -> false
 
-and function_result_has_independent_origin bindings seen expression =
+and function_result_has_independent_origin
+    bindings
+    seen
+    service_modules
+    ~source
+    expression =
   match expression.exp_desc with
-  | Texp_function (_, Tfunction_body body) ->
-      expression_has_independent_origin bindings seen body
+  | Texp_function (parameters, Tfunction_body body) ->
+      let service_modules =
+        service_modules_from_parameters ~source parameters @ service_modules
+      in
+      expression_has_independent_origin bindings seen service_modules body
   | Texp_function (_, Tfunction_cases { cases; _ }) ->
       List.for_all
         (fun (case : value case) ->
-          expression_has_independent_origin bindings seen case.c_rhs)
+          let service_modules =
+            match service_module_identifier ~source case.c_lhs with
+            | Some identifier -> identifier :: service_modules
+            | None -> service_modules
+          in
+          expression_has_independent_origin bindings seen service_modules
+            case.c_rhs)
         cases
   | _ -> false
 
@@ -1308,7 +1453,8 @@ and local_function_application_has_independent_origin bindings seen callee =
         Option.value
           (find_value_binding bindings path uid
           |> Option.map
-               (function_result_has_independent_origin bindings (uid :: seen)))
+               (function_result_has_independent_origin bindings (uid :: seen) []
+                  ~source:callee))
           ~default:false
   | _ -> false
 
@@ -1318,7 +1464,7 @@ let value_is_independent bindings path description =
   | Some owner, Some current when not (String.equal owner current) -> true
   | _ -> (
       match find_value_binding bindings path uid with
-      | Some rhs -> expression_has_independent_origin bindings [ uid ] rhs
+      | Some rhs -> expression_has_independent_origin bindings [ uid ] [] rhs
       | None -> false)
 
 let has_explicit_type_boundary expression =
@@ -1849,44 +1995,6 @@ let generated_summon_certificate ~context_digest expression path description =
         | _ -> None
         end
   | Some _ | None -> None
-
-let positional_arguments arguments =
-  List.filter_map
-    (function Asttypes.Nolabel, Arg expression -> Some expression | _ -> None)
-    arguments
-
-let canonical_tag_value env tag_module name path description =
-  let expected_path = Path.Pdot (tag_module, name) in
-  match try Some (Env.find_value expected_path env) with _ -> None with
-  | Some expected ->
-      String.equal (Path.last path) name
-      && Shape.Uid.equal description.Types.val_uid expected.Types.val_uid
-  | None -> false
-
-let service_key_matches_tag env tag_module type_expression =
-  let rec unwrap type_expression =
-    match Types.get_desc type_expression with
-    | Tpoly (body, _) | Tlink body | Tsubst (body, _) -> unwrap body
-    | Tconstr (path, [ service ], _) ->
-        let declaration = type_declaration env path in
-        let canonical_service =
-          match Types.get_desc service with
-          | Tconstr (service_path, [], _) ->
-              canonical_type_path env service_path
-          | _ -> refuse Unresolved_row
-        in
-        let expected_service =
-          canonical_type_path env (Path.Pdot (tag_module, "t"))
-        in
-        hamlet_owned_uid declaration.Types.type_uid
-        && String.equal (Path.last path) "t"
-        && Option.exists
-             (fun parent -> String.equal (Path.last parent) "Service_key")
-             (parent_path path)
-        && Path.same canonical_service expected_service
-    | _ -> false
-  in
-  unwrap type_expression
 
 let generated_summon_call_certificate ~context_digest expression arguments =
   match positional_arguments arguments with

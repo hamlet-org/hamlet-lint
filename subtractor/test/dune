@@ -22,6 +22,7 @@
   hamlet_subtractor_core
   hamlet_subtractor_engine
   hamlet_subtractor_private
+  ppx_hamlet
   ppxlib
   unix))
 
