@@ -278,6 +278,9 @@ let slot ~loc ~catalogues ~input ~claimed =
              (A.ppat_var ~loc { txt = "handled"; loc })
         |> A.pexp_fun ~loc Nolabel None (A.ppat_var ~loc { txt = value; loc })
       in
+      let body =
+        { body with pexp_attributes = [ warning_attribute ~loc "-27" ] }
+      in
       Ok
         (A.pexp_record ~loc
            [

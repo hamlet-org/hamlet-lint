@@ -345,37 +345,50 @@ let nested_generic_helper_forwards_residual_error () =
   | Ok () -> Alcotest.fail "residual error disappeared"
 
 module Generic_logger_live =
-Hamlet_subtractor_generic_definition_fixture.Logger.Make (struct
+Hamlet_subtractor_generic_helper_producer.Logger.Make (struct
   let log _ = Hamlet.Combinators.return ()
 end)
 
 module Generic_clock_live =
-Hamlet_subtractor_generic_definition_fixture.Clock.Make (struct
+Hamlet_subtractor_generic_helper_producer.Clock.Make (struct
   let now () = Hamlet.Combinators.return 42
 end)
 
 let generic_helper_provides_requirement () =
+  let source =
+    let open Hamlet.Combinators in
+    let* _logger =
+      Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon
+    in
+    return ()
+  in
   let specialized =
-    Hamlet_subtractor_generic_definition_fixture.provide_logger
+    Hamlet_subtractor_generic_helper_producer.provide_logger
       (module Generic_logger_live)
-      Hamlet_subtractor_generic_definition_fixture.logger_requirement
-      [%hamlet.forward.auto]
+      source [%hamlet.forward.auto]
   in
   Alcotest.(check (result unit reject))
     "generic helper provides Logger" (Ok ())
     (Hamlet.Interpreter.run specialized)
 
 let generic_helper_forwards_residual_requirement () =
+  let source =
+    let open Hamlet.Combinators in
+    let* _logger =
+      Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon
+    in
+    let* _clock = Hamlet_subtractor_generic_helper_producer.Clock.Tag.summon in
+    return ()
+  in
   let specialized =
-    Hamlet_subtractor_generic_definition_fixture.provide_logger
+    Hamlet_subtractor_generic_helper_producer.provide_logger
       (module Generic_logger_live)
-      Hamlet_subtractor_generic_definition_fixture.requirements
-      [%hamlet.forward.auto]
+      source [%hamlet.forward.auto]
   in
   specialized
   |> Combinators.provide ~handler:(function
-      | #Hamlet_subtractor_generic_definition_fixture.Clock.Tag.r as witness ->
-      Hamlet_subtractor_generic_definition_fixture.Clock.Tag.give witness
+      | #Hamlet_subtractor_generic_helper_producer.Clock.Tag.r as witness ->
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.give witness
         (module Generic_clock_live))
   |> Hamlet.Interpreter.run
   |> Alcotest.(check (result unit reject))
