@@ -238,6 +238,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE/hamlet-source"
 
       - name: Ensure exact Hamlet source dependencies
+        shell: bash
         run: |
           set -euo pipefail
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
@@ -274,6 +275,7 @@ jobs:
       - run: opam pin add -y dune ${{ env.MINIMUM_DUNE }}
 
       - name: Ensure exact Hamlet source dependencies
+        shell: bash
         run: |
           set -euo pipefail
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
@@ -313,6 +315,7 @@ jobs:
           ocaml-compiler: ${{ env.OCAML_COMPILER }}
 
       - name: Ensure exact Hamlet source dependencies
+        shell: bash
         run: |
           set -euo pipefail
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
@@ -351,6 +354,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE/hamlet-source"
 
       - name: Ensure exact Hamlet source dependencies
+        shell: bash
         run: |
           set -euo pipefail
           opam pin add -y --no-action hamlet "$GITHUB_WORKSPACE/hamlet-source"
