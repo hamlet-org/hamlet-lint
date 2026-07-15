@@ -36,8 +36,10 @@
    (= 5.5.0))
   (dune
    (>= 3.18))
-  hamlet
-  ppx_hamlet
+  (hamlet
+   (= 0.1.0))
+  (ppx_hamlet
+   (= 0.1.0))
   (ppxlib
    (>= 0.38.0))
   dune-site

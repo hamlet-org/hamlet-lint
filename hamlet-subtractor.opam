@@ -11,8 +11,8 @@ bug-reports: "https://github.com/hamlet-org/hamlet-subtractor/issues"
 depends: [
   "ocaml" {= "5.5.0"}
   "dune" {>= "3.18" & >= "3.18"}
-  "hamlet"
-  "ppx_hamlet"
+  "hamlet" {= "0.1.0"}
+  "ppx_hamlet" {= "0.1.0"}
   "ppxlib" {>= "0.38.0"}
   "dune-site"
   "yojson" {>= "2.0.0"}

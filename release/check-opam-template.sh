@@ -36,3 +36,9 @@ if [ "$(grep -Fxc "$hamlet_dependency" "$temporary")" -ne 1 ] \
   echo "release template must constrain Hamlet and ppx_hamlet to one exact version" >&2
   exit 1
 fi
+
+if [ "$(grep -Fxc "$hamlet_dependency" "$root/hamlet-subtractor.opam")" -ne 1 ] \
+  || [ "$(grep -Fxc "$ppx_hamlet_dependency" "$root/hamlet-subtractor.opam")" -ne 1 ]; then
+  echo "generated root metadata must constrain Hamlet and ppx_hamlet to one exact version" >&2
+  exit 1
+fi
