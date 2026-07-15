@@ -401,6 +401,226 @@ let test_unknown_tool_is_refused_at_marker () =
     "error propagation" true
     (contains message "%hamlet.propagate_e")
 
+module Generic_definition = Hamlet_subtractor_ppx.Generic_definition
+
+let render_structure structure =
+  Selected_ast.to_ocaml Selected_ast.Type.Structure structure
+  |> Format.asprintf "%a" Compiler_pprintast.structure
+
+let generic_transform source =
+  source |> parse |> probe_transform |> Generic_definition.rewrite_exn
+
+let check_rendered label fragment rendered =
+  Alcotest.(check bool) label true (contains rendered fragment)
+
+let test_generic_one_error_slot () =
+  let transformed =
+    generic_transform
+      "let[@hamlet.generic] recover source =\n\
+       Hamlet.Combinators.catch source ~handler:(function\n\
+       | `Missing -> Hamlet.Combinators.success ()\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+  in
+  let rendered = render_structure transformed in
+  check_rendered "evidence parameter"
+    "recover source _hamlet_subtractor_recover_slot_0" rendered;
+  check_rendered "dispatch" "Hamlet_subtractor.Evidence.dispatch" rendered;
+  check_rendered "forward callback" "Hamlet.Combinators.fail" rendered;
+  check_rendered "companion" "Hamlet_subtractor_contract__recover" rendered;
+  Alcotest.(check bool)
+    "source annotation removed" false
+    (contains rendered "hamlet.generic");
+  Alcotest.(check bool)
+    "auto marker removed" false
+    (contains rendered "hamlet.subtractor.marker.v1");
+  Alcotest.(check int)
+    "generic marker does not reach the ordinary probe" 0
+    (List.length (Hamlet_subtractor_probe.prepare transformed).markers)
+
+let test_generic_requirement_pipeline () =
+  let rendered =
+    generic_transform
+      "let[@hamlet.generic] provide_logger logger source =\n\
+       source\n\
+       |> Hamlet.Combinators.provide ~handler:(function\n\
+       | #Logger.Tag.r as witness -> Logger.Tag.give witness logger\n\
+       | [%hamlet.propagate_s.auto] -> .)"
+    |> render_structure
+  in
+  check_rendered "pipeline retained" "|>" rendered;
+  check_rendered "need callback" "Hamlet.Dispatch.need" rendered;
+  List.iter
+    (fun attribute -> check_rendered attribute attribute rendered)
+    [
+      Generic_definition.owner_attribute;
+      Generic_definition.callee_attribute;
+      Generic_definition.upstream_attribute;
+      Generic_definition.handler_attribute;
+      Generic_definition.slot_attribute;
+    ]
+
+let test_generic_two_alternating_slots () =
+  let rendered =
+    generic_transform
+      "let[@hamlet.generic] handle logger source =\n\
+       Hamlet.Combinators.provide\n\
+       (Hamlet.Combinators.catch source ~handler:(function\n\
+       | `Missing -> Hamlet.Combinators.fail `Recovery\n\
+       | [%hamlet.propagate_e.auto] -> .))\n\
+       ~handler:(function\n\
+       | #Logger.Tag.r as witness -> Logger.Tag.give witness logger\n\
+       | [%hamlet.propagate_s.auto] -> .)"
+    |> render_structure
+  in
+  check_rendered "tuple evidence"
+    "(_hamlet_subtractor_handle_slot_0, _hamlet_subtractor_handle_slot_1)"
+    rendered;
+  check_rendered "recovery preserved" "`Recovery" rendered
+
+let test_generic_pipeline_two_error_slots () =
+  let rendered =
+    generic_transform
+      "let[@hamlet.generic] handle source =\n\
+       source\n\
+       |> Hamlet.Combinators.catch ~handler:(function\n\
+       | `First -> Hamlet.Combinators.success ()\n\
+       | [%hamlet.propagate_e.auto] -> .)\n\
+       |> Hamlet.Combinators.catch ~handler:(function\n\
+       | `Second -> Hamlet.Combinators.success ()\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+    |> render_structure
+  in
+  check_rendered "first slot" "handle_slot_0" rendered;
+  check_rendered "second slot" "handle_slot_1" rendered
+
+let test_generic_guard_forwards_when_false () =
+  let rendered =
+    generic_transform
+      "let[@hamlet.generic] guarded enabled source =\n\
+       Hamlet.Combinators.catch source ~handler:(function\n\
+       | `Missing when enabled -> Hamlet.Combinators.success ()\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+    |> render_structure
+  in
+  check_rendered "guard retained" "when enabled" rendered;
+  check_rendered "guard fallback" "_hamlet_subtractor_guarded_value" rendered;
+  check_rendered "guard metadata" "guarded" rendered
+
+let test_generic_fun_match_handler () =
+  let rendered =
+    generic_transform
+      "let[@hamlet.generic] recover source =\n\
+       Hamlet.Combinators.catch source ~handler:(fun error ->\n\
+       match error with\n\
+       | `Missing -> Hamlet.Combinators.success ()\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+    |> render_structure
+  in
+  check_rendered "match handler dispatch" "Evidence.dispatch" rendered;
+  check_rendered "match scrutinee" "error" rendered;
+  Alcotest.(check bool)
+    "marker removed" false
+    (contains rendered "hamlet.subtractor.marker.v1")
+
+let expect_generic_refusal label source expected =
+  let transformed = source |> parse |> probe_transform in
+  match Generic_definition.rewrite transformed with
+  | Ok _ -> Alcotest.failf "%s unexpectedly succeeded" label
+  | Error refusal -> Alcotest.(check bool) label true (expected refusal.reason)
+
+let test_generic_refusals () =
+  let invalid_payload =
+    let structure = parse "let[@hamlet.generic] helper source = source" in
+    let mapper =
+      object
+        inherit Ast_traverse.map as super
+
+        method! attribute attribute =
+          if String.equal attribute.attr_name.txt "hamlet.generic" then
+            {
+              attribute with
+              attr_payload =
+                PStr
+                  [
+                    Ast_builder.Default.pstr_eval ~loc:attribute.attr_loc
+                      (Ast_builder.Default.eint ~loc:attribute.attr_loc 1)
+                      [];
+                  ];
+            }
+          else super#attribute attribute
+      end
+    in
+    mapper#structure structure
+  in
+  begin match Generic_definition.rewrite invalid_payload with
+  | Error { reason = Generic_definition.Invalid_annotation_payload; _ } -> ()
+  | Error _ | Ok _ -> Alcotest.fail "invalid annotation payload was accepted"
+  end;
+  expect_generic_refusal "recursion"
+    "let[@hamlet.generic] rec helper source =\n\
+     Hamlet.Combinators.catch source ~handler:(function\n\
+     | [%hamlet.propagate_e.auto] -> .)" (function
+    | Generic_definition.Recursive_binding -> true
+    | _ -> false);
+  expect_generic_refusal "non-function" "let[@hamlet.generic] helper = 1"
+    (function
+    | Generic_definition.Not_a_function -> true
+    | _ -> false);
+  expect_generic_refusal "no marker"
+    "let[@hamlet.generic] helper source = source" (function
+    | Generic_definition.No_automatic_markers -> true
+    | _ -> false);
+  expect_generic_refusal "source used twice"
+    "let[@hamlet.generic] helper source =\n\
+     Hamlet.Combinators.catch\n\
+     (Hamlet.Combinators.both source source)\n\
+     ~handler:(function | [%hamlet.propagate_e.auto] -> .)" (function
+    | Generic_definition.Source_not_linear 2 -> true
+    | _ -> false);
+  expect_generic_refusal "opaque source flow"
+    "let[@hamlet.generic] helper source =\n\
+     Hamlet.Combinators.catch (opaque source)\n\
+     ~handler:(function | [%hamlet.propagate_e.auto] -> .)" (function
+    | Generic_definition.Unsupported_source_flow -> true
+    | _ -> false);
+  expect_generic_refusal "multiple symbolic inputs"
+    "let[@hamlet.generic] helper left source =\n\
+     Hamlet.Combinators.catch\n\
+     (Hamlet.Combinators.both left source)\n\
+     ~handler:(function | [%hamlet.propagate_e.auto] -> .)" (function
+    | Generic_definition.Multiple_symbolic_inputs [ "left" ] -> true
+    | _ -> false);
+  expect_generic_refusal "marker owner"
+    "let[@hamlet.generic] helper source =\n\
+     match source with | [%hamlet.propagate_e.auto] -> ." (function
+    | Generic_definition.Marker_without_supported_owner -> true
+    | _ -> false)
+
+let test_generic_linkage_stripping () =
+  let structure =
+    generic_transform
+      "let[@hamlet.generic] recover source =\n\
+       Hamlet.Combinators.catch source ~handler:(function\n\
+       | `Missing -> Hamlet.Combinators.success ()\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+  in
+  let rendered =
+    Generic_definition.strip_linkage_attributes structure |> render_structure
+  in
+  List.iter
+    (fun attribute ->
+      Alcotest.(check bool) attribute false (contains rendered attribute))
+    [
+      Generic_definition.helper_attribute;
+      Generic_definition.owner_attribute;
+      Generic_definition.callee_attribute;
+      Generic_definition.upstream_attribute;
+      Generic_definition.handler_attribute;
+      Generic_definition.slot_attribute;
+    ];
+  check_rendered "contract remains"
+    Hamlet_subtractor_ppx.Generic_contract.attribute_name rendered
+
 let () =
   Alcotest.run "hamlet elaboration PPX bundle"
     [
@@ -422,5 +642,22 @@ let () =
             test_wrong_channel_diagnostic;
           Alcotest.test_case "unknown PPX tool is rejected" `Quick
             test_unknown_tool_is_refused_at_marker;
+        ] );
+      ( "generic definitions",
+        [
+          Alcotest.test_case "one error slot" `Quick test_generic_one_error_slot;
+          Alcotest.test_case "requirement pipeline" `Quick
+            test_generic_requirement_pipeline;
+          Alcotest.test_case "alternating slots" `Quick
+            test_generic_two_alternating_slots;
+          Alcotest.test_case "two pipeline slots" `Quick
+            test_generic_pipeline_two_error_slots;
+          Alcotest.test_case "guard fallback" `Quick
+            test_generic_guard_forwards_when_false;
+          Alcotest.test_case "fun match handler" `Quick
+            test_generic_fun_match_handler;
+          Alcotest.test_case "stable refusals" `Quick test_generic_refusals;
+          Alcotest.test_case "linkage stripping" `Quick
+            test_generic_linkage_stripping;
         ] );
     ]

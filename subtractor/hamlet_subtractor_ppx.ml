@@ -1,6 +1,9 @@
 open Ppxlib
 open Hamlet_subtractor_core
 
+module Generic_contract = Hamlet_subtractor_generic_contract
+module Generic_definition = Hamlet_subtractor_generic_definition
+
 let activate_probe_phase () = Ppx_hamlet.subtractor_phase := Ppx_hamlet.Probe
 
 let reset_phase () = Ppx_hamlet.subtractor_phase := Ppx_hamlet.Normal
@@ -236,6 +239,7 @@ let resolver_error_loc prepared = function
       first_marker_loc prepared
 
 let resolve ~context structure =
+  let structure = Hamlet_subtractor_generic_definition.rewrite_exn structure in
   let tool_name = Expansion_context.Base.tool_name context in
   if tool_mode tool_name = Dependency_scan then
     Hamlet_subtractor_replace.strip_probe_attributes structure
