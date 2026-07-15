@@ -1136,7 +1136,16 @@ let canonical_simple_producer expression =
         (fun value_name ->
           canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc
             ~module_name:"Combinators" ~value_name path description)
-        [ "success"; "return"; "fail"; "summon" ]
+        [
+          "success";
+          "return";
+          "fail";
+          "summon";
+          "defect";
+          "defect_with_bt";
+          "defect_die";
+          "thunk";
+        ]
   | _ -> false
 
 let canonical_combinator_name expression =
@@ -1147,7 +1156,21 @@ let canonical_combinator_name expression =
         "both";
         "map";
         "catch";
+        "catch_cause";
+        "catch_filter";
+        "catch_cause_filter";
         "catch_defect";
+        "ensuring";
+        "suspend";
+        "scoped";
+        "scoped_with";
+        "add_finalizer";
+        "add_finalizer_exit";
+        "acquire_release";
+        "acquire_use_release";
+        "sandbox";
+        "sandbox_cause";
+        "provide";
         "map_fail";
         "or_die";
         "thaw";
@@ -1330,14 +1353,19 @@ let rec expression_has_independent_origin
                     service_modules rhs
               | None -> false))
     | Texp_apply (callee, arguments) -> (
+        let callee, arguments =
+          match Hamlet_subtractor_upstream.unstage_apply expression with
+          | Some application -> application
+          | None -> (callee, arguments)
+        in
         if
           local_function_application_has_independent_origin bindings seen callee
         then true
         else
           match canonical_combinator_name callee with
           | Some
-              ( "chain" | "catch" | "catch_defect" | "tap" | "tap_fail"
-              | "tap_defect" | "tap_cause" ) ->
+              ( "chain" | "catch" | "catch_cause" | "catch_defect" | "tap"
+              | "tap_fail" | "tap_defect" | "tap_cause" ) ->
               begin match
                 ( positional_arguments arguments,
                   labelled_argument "handler" arguments,
@@ -1349,6 +1377,54 @@ let rec expression_has_independent_origin
                     service_modules source
                   && function_result_has_independent_origin bindings seen
                        service_modules ~source handler
+              | _ -> false
+              end
+          | Some ("catch_filter" | "catch_cause_filter") ->
+              begin match
+                ( positional_arguments arguments,
+                  labelled_argument "handler" arguments,
+                  labelled_argument "on_no_match" arguments )
+              with
+              | source :: _, Some handler, Some on_no_match ->
+                  expression_has_independent_origin bindings seen
+                    service_modules source
+                  && function_result_has_independent_origin bindings seen
+                       service_modules ~source handler
+                  && function_result_has_independent_origin bindings seen
+                       service_modules ~source on_no_match
+              | _ -> false
+              end
+          | Some "ensuring" ->
+              begin match
+                (positional_arguments arguments, labelled_argument "f" arguments)
+              with
+              | source :: _, Some finalizer ->
+                  expression_has_independent_origin bindings seen
+                    service_modules source
+                  && expression_has_independent_origin bindings seen
+                       service_modules finalizer
+              | _ -> false
+              end
+          | Some "suspend" ->
+              begin match positional_arguments arguments with
+              | callback :: _ ->
+                  function_result_has_independent_origin bindings seen
+                    service_modules ~source:callback callback
+              | [] -> false
+              end
+          | Some "acquire_use_release" ->
+              begin match
+                ( positional_arguments arguments,
+                  labelled_argument "use" arguments,
+                  labelled_argument "release" arguments )
+              with
+              | acquire :: _, Some use, Some release ->
+                  expression_has_independent_origin bindings seen
+                    service_modules acquire
+                  && function_result_has_independent_origin bindings seen
+                       service_modules ~source:acquire use
+                  && function_result_has_independent_origin bindings seen
+                       service_modules ~source:acquire release
               | _ -> false
               end
           | Some "both" -> (
@@ -2101,6 +2177,17 @@ let intrinsic_certificate ~context_digest expression =
                 ~requirements:(empty_proof Kind.Requirement Proof.Return),
               [] )
       | Texp_ident (path, _, description)
+        when List.exists
+               (fun value_name ->
+                 canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc
+                   ~module_name:"Combinators" ~value_name path description)
+               [ "defect"; "defect_with_bt"; "defect_die"; "thunk" ] ->
+          Some
+            ( exact_certificate
+                ~errors:(empty_proof Kind.Error Proof.Return)
+                ~requirements:(empty_proof Kind.Requirement Proof.Return),
+              [] )
+      | Texp_ident (path, _, description)
         when canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc
                ~module_name:"Combinators" ~value_name:"fail" path description ->
           let argument =
@@ -2161,6 +2248,18 @@ type source_plan =
   | Known_source of Effect_certificate.t
   | Dependency_source of string
   | Chained_source of source_plan list
+  | Recovered_source of { source : source_plan; recoveries : source_plan list }
+  | Errors_from_output of {
+      source : source_plan;
+      output : Effect_certificate.t;
+    }
+  | Requirements_from_output of {
+      source : source_plan;
+      output : Effect_certificate.t;
+    }
+  | Cleared_errors of source_plan
+  | Cleared_requirements of source_plan
+  | Opaque_errors of source_plan
 
 let rec source_plan_dependencies = function
   | Known_source _ -> []
@@ -2169,6 +2268,16 @@ let rec source_plan_dependencies = function
       plans
       |> List.concat_map source_plan_dependencies
       |> List.sort_uniq String.compare
+  | Recovered_source { source; recoveries } ->
+      source :: recoveries
+      |> List.concat_map source_plan_dependencies
+      |> List.sort_uniq String.compare
+  | Errors_from_output { source; _ }
+  | Requirements_from_output { source; _ }
+  | Cleared_errors source
+  | Cleared_requirements source
+  | Opaque_errors source ->
+      source_plan_dependencies source
 
 let chain_source_plans = function
   | [ plan ] -> plan
@@ -2197,6 +2306,13 @@ let rec source_plan_for_expression
             expression
         in
         (Known_source certificate, catalogues)
+      in
+      let output_channel output_kind output_expression =
+        let _, certificate, catalogues =
+          certificate_for_input ~context_digest ~bindings:nodes.bindings
+            ~kind:output_kind output_expression
+        in
+        (certificate, catalogues)
       in
       begin match intrinsic_certificate ~context_digest expression with
       | Some (certificate, catalogues) -> (Known_source certificate, catalogues)
@@ -2232,6 +2348,14 @@ let rec source_plan_for_expression
               source_plans_for_expressions ~context_digest ~nodes ~marker_id
                 ~kind ~seen expressions
           | Texp_apply (callee, arguments) ->
+              let callee, arguments =
+                match Hamlet_subtractor_upstream.unstage_apply expression with
+                | Some application -> application
+                | None -> (callee, arguments)
+              in
+              let application =
+                { expression with exp_desc = Texp_apply (callee, arguments) }
+              in
               begin match canonical_combinator_name callee with
               | Some "chain" ->
                   begin match
@@ -2253,6 +2377,56 @@ let rec source_plan_for_expression
                         source_catalogues @ handler_catalogues )
                   | _ -> refuse Higher_order_flow
                   end
+              | Some ("catch" | "catch_cause") ->
+                  begin match
+                    ( positional_arguments arguments,
+                      labelled_argument "handler" arguments )
+                  with
+                  | source :: _, Some handler ->
+                      let source_plan, source_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      let handler_plan, handler_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen handler
+                      in
+                      ( Recovered_source
+                          {
+                            source = source_plan;
+                            recoveries = [ handler_plan ];
+                          },
+                        source_catalogues @ handler_catalogues )
+                  | _ -> refuse Higher_order_flow
+                  end
+              | Some ("catch_filter" | "catch_cause_filter") ->
+                  begin match
+                    ( positional_arguments arguments,
+                      labelled_argument "handler" arguments,
+                      labelled_argument "on_no_match" arguments )
+                  with
+                  | source :: _, Some handler, Some on_no_match ->
+                      let source_plan, source_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      let handler_plan, handler_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen handler
+                      in
+                      let no_match_plan, no_match_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen on_no_match
+                      in
+                      ( Recovered_source
+                          {
+                            source = source_plan;
+                            recoveries = [ handler_plan; no_match_plan ];
+                          },
+                        source_catalogues @ handler_catalogues
+                        @ no_match_catalogues )
+                  | _ -> refuse Higher_order_flow
+                  end
               | Some "both" ->
                   begin match positional_arguments arguments with
                   | [ left; right ] ->
@@ -2266,6 +2440,178 @@ let rec source_plan_for_expression
                       source_plan_for_expression ~context_digest ~nodes
                         ~marker_id ~kind ~seen source
                   | [] -> refuse Higher_order_flow
+                  end
+              | Some "suspend" ->
+                  begin match positional_arguments arguments with
+                  | callback :: _ ->
+                      source_plan_for_function_result ~context_digest ~nodes
+                        ~marker_id ~kind ~seen callback
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some ("or_die" | "thaw" | "sandbox") ->
+                  begin match positional_arguments arguments with
+                  | source :: _ ->
+                      let source_plan, catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      (Cleared_errors source_plan, catalogues)
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some "map_fail" ->
+                  begin match positional_arguments arguments with
+                  | source :: _ ->
+                      let source_plan, source_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      let output, output_catalogues =
+                        output_channel Kind.Error application
+                      in
+                      ( Errors_from_output { source = source_plan; output },
+                        source_catalogues @ output_catalogues )
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some "sandbox_cause" ->
+                  begin match positional_arguments arguments with
+                  | source :: _ ->
+                      let source_plan, catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      (Opaque_errors source_plan, catalogues)
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some "scoped" ->
+                  begin match positional_arguments arguments with
+                  | source :: _ ->
+                      let source_plan, catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      (Cleared_requirements source_plan, catalogues)
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some ("provide" | "scoped_with") ->
+                  begin match positional_arguments arguments with
+                  | source :: _ ->
+                      let source_plan, source_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      let output, output_catalogues =
+                        output_channel Kind.Requirement application
+                      in
+                      ( Requirements_from_output { source = source_plan; output },
+                        source_catalogues @ output_catalogues )
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some ("add_finalizer" | "add_finalizer_exit") ->
+                  begin match positional_arguments arguments with
+                  | finalizer :: _ ->
+                      let finalizer_plan, finalizer_catalogues =
+                        if
+                          Option.equal String.equal
+                            (canonical_combinator_name callee)
+                            (Some "add_finalizer_exit")
+                        then
+                          source_plan_for_function_result ~context_digest ~nodes
+                            ~marker_id ~kind ~seen finalizer
+                        else
+                          source_plan_for_expression ~context_digest ~nodes
+                            ~marker_id ~kind ~seen finalizer
+                      in
+                      let output, output_catalogues =
+                        output_channel Kind.Requirement application
+                      in
+                      ( Requirements_from_output
+                          { source = finalizer_plan; output },
+                        finalizer_catalogues @ output_catalogues )
+                  | [] -> refuse Higher_order_flow
+                  end
+              | Some "acquire_release" ->
+                  begin match
+                    ( positional_arguments arguments,
+                      labelled_argument "release" arguments )
+                  with
+                  | acquire :: _, Some release ->
+                      let acquire_plan, acquire_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen acquire
+                      in
+                      let release_plan, release_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen release
+                      in
+                      let output, output_catalogues =
+                        output_channel Kind.Requirement application
+                      in
+                      ( Requirements_from_output
+                          {
+                            source =
+                              chain_source_plans [ acquire_plan; release_plan ];
+                            output;
+                          },
+                        acquire_catalogues @ release_catalogues
+                        @ output_catalogues )
+                  | _ -> refuse Higher_order_flow
+                  end
+              | Some "acquire_use_release" ->
+                  begin match
+                    ( positional_arguments arguments,
+                      labelled_argument "use" arguments,
+                      labelled_argument "release" arguments )
+                  with
+                  | acquire :: _, Some use, Some release ->
+                      let acquire_plan, acquire_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen acquire
+                      in
+                      let use_plan, use_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen use
+                      in
+                      let release_plan, release_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen release
+                      in
+                      ( chain_source_plans
+                          [ acquire_plan; use_plan; release_plan ],
+                        acquire_catalogues @ use_catalogues @ release_catalogues
+                      )
+                  | _ -> refuse Higher_order_flow
+                  end
+              | Some
+                  ( "catch_defect" | "tap" | "tap_fail" | "tap_defect"
+                  | "tap_cause" ) ->
+                  begin match
+                    ( positional_arguments arguments,
+                      labelled_argument "handler" arguments,
+                      labelled_argument "f" arguments )
+                  with
+                  | source :: _, Some handler, _
+                  | source :: _, None, Some handler ->
+                      let source_plan, source_catalogues =
+                        source_plan_for_expression ~context_digest ~nodes
+                          ~marker_id ~kind ~seen source
+                      in
+                      let handler_plan, handler_catalogues =
+                        source_plan_for_function_result ~context_digest ~nodes
+                          ~marker_id ~kind ~seen handler
+                      in
+                      ( chain_source_plans [ source_plan; handler_plan ],
+                        source_catalogues @ handler_catalogues )
+                  | _ -> refuse Higher_order_flow
+                  end
+              | Some "ensuring" ->
+                  begin match
+                    ( positional_arguments arguments,
+                      labelled_argument "f" arguments )
+                  with
+                  | source :: _, Some finalizer ->
+                      source_plans_for_expressions ~context_digest ~nodes
+                        ~marker_id ~kind ~seen [ source; finalizer ]
+                  | _ -> refuse Higher_order_flow
                   end
               | Some _ | None ->
                   if dependencies = [] then known_source ()
@@ -2347,15 +2693,8 @@ let extract_node ~context_digest nodes marker_id marker_expression =
   verify_owner_callee kind callee;
   let dependencies = marker_dependencies nodes marker_id upstream in
   let source_plan, source_catalogues =
-    if dependencies = [] then
-      let _, certificate, catalogues =
-        certificate_for_input ~context_digest ~bindings:nodes.bindings ~kind
-          upstream
-      in
-      (Known_source certificate, catalogues)
-    else
-      source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
-        ~seen:[] upstream
+    source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind ~seen:[]
+      upstream
   in
   if source_plan_dependencies source_plan <> dependencies then
     refuse Higher_order_flow;
@@ -2576,6 +2915,82 @@ let rec resolve_source_plan dependencies = function
         | Ok certificate -> certificate
         | Error _ ->
             refuse (Core_validation_failed "effect chain composition failed")
+      in
+      (certificate, inputs)
+  | Recovered_source { source; recoveries } ->
+      let source, source_inputs = resolve_source_plan dependencies source in
+      let recoveries, recovery_inputs =
+        recoveries |> List.map (resolve_source_plan dependencies) |> List.split
+      in
+      let inputs =
+        source_inputs :: recovery_inputs
+        |> List.concat
+        |> List.sort_uniq Core.Marker.compare_id
+      in
+      let certificate =
+        Effect_certificate.recover ~inputs ~source ~recoveries |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "effect recovery composition failed")
+      in
+      (certificate, inputs)
+  | Errors_from_output { source; output } ->
+      let source, inputs = resolve_source_plan dependencies source in
+      let certificate =
+        Effect_certificate.with_errors ~source
+          ~errors:(Effect_certificate.errors output)
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "invalid output error evidence")
+      in
+      (certificate, inputs)
+  | Requirements_from_output { source; output } ->
+      let source, inputs = resolve_source_plan dependencies source in
+      let certificate =
+        Effect_certificate.with_requirements ~source
+          ~requirements:(Effect_certificate.requirements output)
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse
+              (Core_validation_failed "invalid output requirement evidence")
+      in
+      (certificate, inputs)
+  | Cleared_errors source ->
+      let source, inputs = resolve_source_plan dependencies source in
+      let certificate =
+        Effect_certificate.with_errors ~source
+          ~errors:
+            (Effect_certificate.exact (empty_proof Kind.Error Proof.Return))
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "cannot clear typed-error evidence")
+      in
+      (certificate, inputs)
+  | Cleared_requirements source ->
+      let source, inputs = resolve_source_plan dependencies source in
+      let certificate =
+        Effect_certificate.with_requirements ~source
+          ~requirements:
+            (Effect_certificate.exact
+               (empty_proof Kind.Requirement Proof.Return))
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "cannot clear requirement evidence")
+      in
+      (certificate, inputs)
+  | Opaque_errors source ->
+      let source, inputs = resolve_source_plan dependencies source in
+      let certificate =
+        Effect_certificate.with_errors ~source
+          ~errors:(Effect_certificate.opaque Unproven_origin)
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "cannot hide typed-error evidence")
       in
       (certificate, inputs)
 

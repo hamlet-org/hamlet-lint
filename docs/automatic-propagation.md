@@ -102,18 +102,22 @@ computation remain present after `provide`.
 
 ## Chaining automatic markers
 
-A linear sequence of automatic handlers is supported. The output proof from
-one marker becomes the input proof for the next:
+A single automatic marker works on its own. Two or more markers may also form
+a linear sequence: the exact output of one marker becomes the input of the
+next.
 
 ```text
 source -> automatic catch -> let* -> automatic catch -> automatic provide
 ```
 
-At each step the resolver combines two facts:
+The second marker is the first one that has a marker dependency. Every later
+marker follows the same rule, so there is no special two-marker or three-marker
+threshold.
+
+At each step the resolver combines:
 
 1. the exact output of the previous marker;
-2. any new effects introduced by a supported `let*`, `chain`, `both`, or
-   verified `Tag.summon` construction around that output.
+2. any exact effects introduced by supported composition around that output.
 
 A later marker may therefore handle an older leaf that survived previous
 steps, or a leaf introduced after an earlier marker. There is no fixed limit on
@@ -126,6 +130,39 @@ point.
 
 See [Supported patterns](./supported-patterns.md#linear-marker-chains) for
 complete error and requirement examples.
+
+### Composition between markers
+
+The resolver models each Hamlet primitive according to its type-level effect
+on the two rows:
+
+| Effect on rows | Supported primitives | What must be proven |
+| --- | --- | --- |
+| Preserve both rows | `chain`/`let*`, `both`/`and*`, `map`/`let+`, `catch_defect`, `tap`, `tap_fail`, `tap_defect`, `tap_cause`, `ensuring`, `acquire_use_release` | Every effectful argument or inline callback |
+| Replace typed errors | `catch`, `catch_cause`, `catch_filter`, `catch_cause_filter` | Every recovery path; filters themselves are pure |
+| Remove typed errors | `or_die`, `thaw`, `sandbox` | The wrapped source; later errors must come from a new exact computation |
+| Map typed errors | `map_fail` | The exact output error row, usually from a closed annotation |
+| Change requirements | `provide`, `scoped_with` | The exact output requirement row |
+| Remove the scope requirement | `scoped` | The wrapped source |
+| Delay construction | `suspend` | An inline callback whose returned computation is exact |
+
+For row-preserving primitives, the source and effectful callbacks contribute
+to the same certificate. For `catch`-family primitives, source errors are
+discarded and replaced by the errors produced by the recovery branches;
+requirements from the source and recoveries are retained.
+
+`catch_filter` has two effectful outcomes: `handler` and `on_no_match`. Both
+must be exact because either may run. `catch_cause_filter` follows the same
+rule. Hamlet currently has no `catch_clause` combinator; `catch_cause` is the
+primitive that handles a complete `Cause.t`.
+
+An arbitrary named callback, indirect combinator alias, or output row selected
+by user code is not reconstructed from syntax. Add a closed type annotation or
+an explicit `%hamlet.te`/`%hamlet.ts` boundary at that point.
+
+`sandbox_cause` produces a `Cause.t`, not a polymorphic-variant leaf universe,
+so an automatic error marker cannot subtract it. A requirement marker may
+still cross it because the requirement row is unchanged.
 
 ## Where exact input rows come from
 

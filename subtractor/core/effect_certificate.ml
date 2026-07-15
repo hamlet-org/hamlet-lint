@@ -88,6 +88,26 @@ let chain ~inputs certificates =
   | Ok errors, Ok requirements -> create ~errors ~requirements
   | (Error _ as error), _ | _, (Error _ as error) -> error
 
+let recover ~inputs ~source ~recoveries =
+  let errors =
+    recoveries
+    |> List.map errors
+    |> union_evidence ~kind:Kind.Error ~operation:Proof.Catch ~inputs
+  in
+  let requirements =
+    source.requirements :: List.map requirements recoveries
+    |> union_evidence ~kind:Kind.Requirement ~operation:Proof.Catch ~inputs
+  in
+  match (errors, requirements) with
+  | Ok errors, Ok requirements -> create ~errors ~requirements
+  | (Error _ as error), _ | _, (Error _ as error) -> error
+
+let with_errors ~source ~errors =
+  create ~errors ~requirements:source.requirements
+
+let with_requirements ~source ~requirements =
+  create ~errors:source.errors ~requirements
+
 let proof_from_result ~operation ~inputs result =
   Proof.create ~kind:(Residual.kind result)
     ~origin:(Proof.Composition { operation; inputs })

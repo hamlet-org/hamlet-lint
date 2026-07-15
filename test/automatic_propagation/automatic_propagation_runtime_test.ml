@@ -157,6 +157,64 @@ let dependent_error_markers () =
     | `Storage_corrupt _ -> Hamlet.Combinators.return "corrupt")
   |> expect_ok "dependent error markers" "corrupt"
 
+module Alternating_errors = struct
+  type a = [ `Alternating_a ]
+  type b = [ `Alternating_b ]
+  type c = [ `Alternating_c ]
+  type source = [ a | b | c ]
+  type replacement_a = [ `Replacement_a ]
+end
+
+let alternating_chain_and_catch choose_c =
+  let source : (string, Alternating_errors.source, Hamlet.never) Hamlet.t =
+    if choose_c then Combinators.fail `Alternating_c
+    else Combinators.fail `Alternating_b
+  in
+  source
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Alternating_errors.a -> Combinators.return "a"
+      | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.chain ~handler:(fun value -> Combinators.return value)
+  |> Combinators.catch ~handler:(function
+    | `Alternating_b -> Combinators.fail `Replacement_a
+    | `Alternating_c -> Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Alternating_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.catch ~handler:(function `Replacement_b ->
+      Combinators.return "replacement-b")
+
+let chain_then_catch_handles_first_replacement () =
+  alternating_chain_and_catch false
+  |> expect_ok "chain then catch first branch" "replacement-a"
+
+let chain_then_catch_forwards_second_replacement () =
+  alternating_chain_and_catch true
+  |> expect_ok "chain then catch second branch" "replacement-b"
+
+let catch_filter_between_markers () =
+  let source : (string, Alternating_errors.source, Hamlet.never) Hamlet.t =
+    Combinators.fail `Alternating_b
+  in
+  source
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Alternating_errors.a -> Combinators.return "a"
+      | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.catch_filter
+       ~filter:(function `Alternating_b -> Some () | `Alternating_c -> None)
+       ~handler:(fun () -> Combinators.fail `Replacement_a)
+       ~on_no_match:(fun _cause -> Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Alternating_errors.replacement_a -> Combinators.return "matched"
+      | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.catch ~handler:(function `Replacement_b ->
+      Combinators.return "not-matched")
+  |> expect_ok "catch filter between markers" "matched"
+
 module Chain_errors = struct
   type old_a = [ `Chain_old_a ]
   type old_b = [ `Chain_old_b ]
@@ -224,6 +282,12 @@ let () =
           Alcotest.test_case "recovery adds error" `Quick
             recovery_error_is_preserved;
           Alcotest.test_case "dependent markers" `Quick dependent_error_markers;
+          Alcotest.test_case "chain then catch handles replacement" `Quick
+            chain_then_catch_handles_first_replacement;
+          Alcotest.test_case "chain then catch forwards replacement" `Quick
+            chain_then_catch_forwards_second_replacement;
+          Alcotest.test_case "catch filter between markers" `Quick
+            catch_filter_between_markers;
           Alcotest.test_case "chain adds an error" `Quick
             chain_handles_effect_added_by_let;
           Alcotest.test_case "recovery adds a later error" `Quick

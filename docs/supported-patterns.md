@@ -236,78 +236,124 @@ separately.
 
 ## Linear marker chains
 
-There is no two-marker limit. A later marker can handle old leaves and leaves
-introduced between markers.
-
-The following example starts with `Old_a | Old_b | Old_c`:
-
-```ocaml
-module Chain_errors = struct
-  type old_a = [ `Old_a ]
-  type old_b = [ `Old_b ]
-  type old_c = [ `Old_c ]
-  type old = [ old_a | old_b | old_c ]
-  type new_one = [ `New_one ]
-  type new_two = [ `New_two ]
-  type after_first = [ old_b | old_c | new_one ]
-  type after_second = [ old_c | new_one | new_two ]
-end
-```
-
-The first marker handles `Old_a`:
+One marker, exactly two markers, and longer linear sequences use the same rule.
+Here two automatic catches run in sequence:
 
 ```ocaml
 let first =
   source
   |> Hamlet.Combinators.catch ~handler:(function
-       | #Chain_errors.old_a -> Hamlet.Combinators.return "old A"
+       | #Errors.missing -> Hamlet.Combinators.return "missing"
        | [%hamlet.propagate_e.auto] -> .)
-```
 
-Hamlet's `chain` uses one shared error-row type for both computations. The
-explicit upcast below declares the intended combined row before `let*` adds
-`New_one`:
-
-```ocaml
-let with_new_one =
-  let first =
-    (first :>
-      (string, Chain_errors.after_first, Hamlet.never) Hamlet.t)
-  in
-  let open Hamlet.Combinators in
-  let* _ = first in
-  (fail (`New_one : Chain_errors.new_one) :>
-    (string, Chain_errors.after_first, Hamlet.never) Hamlet.t)
-```
-
-The next marker handles the old `Old_b` leaf and its recovery adds `New_two`:
-
-```ocaml
 let second =
-  with_new_one
+  first
   |> Hamlet.Combinators.catch ~handler:(function
-       | #Chain_errors.old_b ->
-           (Hamlet.Combinators.fail
-              (`New_two : Chain_errors.new_two)
-             :>
-             ( string,
-               Chain_errors.after_second,
-               Hamlet.never )
-             Hamlet.t)
+       | #Errors.timeout -> Hamlet.Combinators.return "timeout"
        | [%hamlet.propagate_e.auto] -> .)
 ```
 
-A third marker may now handle `New_one`:
+`first` removes `missing`; `second` receives the exact remainder and removes
+`timeout`. It leaves only `unavailable`.
+
+`chain` may appear before, after, or between those catches:
 
 ```ocaml
-let third =
-  second
+let result =
+  source
+  |> Hamlet.Combinators.chain ~handler:(fun value ->
+       Hamlet.Combinators.return value)
   |> Hamlet.Combinators.catch ~handler:(function
-       | #Chain_errors.new_one -> Hamlet.Combinators.return "new one"
+       | #Errors.missing -> Hamlet.Combinators.return "missing"
+       | [%hamlet.propagate_e.auto] -> .)
+  |> Hamlet.Combinators.chain ~handler:(fun value ->
+       Hamlet.Combinators.return value)
+  |> Hamlet.Combinators.catch ~handler:(function
+       | #Errors.timeout -> Hamlet.Combinators.return "timeout"
        | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The final error row is exactly `Old_c | New_two`.
+Pipeline and direct-call forms are equivalent. `let*` is the operator form of
+`chain` and follows the same rule.
+
+## Ordinary catch between automatic markers
+
+An ordinary `catch` replaces the source error row. The resolver therefore
+uses only the recovery branches as the next error universe:
+
+```ocaml
+module Replacement_errors = struct
+  type retry_failed = [ `Retry_failed ]
+  type offline = [ `Offline ]
+end
+
+let replaced =
+  first
+  |> Hamlet.Combinators.catch ~handler:(function
+       | `Timeout -> Hamlet.Combinators.fail `Retry_failed
+       | `Unavailable -> Hamlet.Combinators.fail `Offline)
+
+let result =
+  replaced
+  |> Hamlet.Combinators.catch ~handler:(function
+       | #Replacement_errors.retry_failed ->
+           Hamlet.Combinators.return "retry failed"
+       | [%hamlet.propagate_e.auto] -> .)
+```
+
+The final marker sees `Retry_failed | Offline`, not the old `Timeout |
+Unavailable` row.
+
+The same replacement rule applies to `catch_cause`. For `catch_filter` and
+`catch_cause_filter`, both `handler` and `on_no_match` must return exact Hamlet
+computations:
+
+```ocaml
+let filtered =
+  first
+  |> Hamlet.Combinators.catch_filter
+       ~filter:(function `Timeout -> Some () | `Unavailable -> None)
+       ~handler:(fun () -> Hamlet.Combinators.fail `Retry_failed)
+       ~on_no_match:(fun _cause -> Hamlet.Combinators.fail `Offline)
+```
+
+Here the output errors are again exactly `Retry_failed | Offline`.
+
+## Other composition between markers
+
+Row-preserving primitives keep the previous certificate and include every
+effectful argument. This includes `both`, `map`, `catch_defect`, `tap*`,
+`ensuring`, and `acquire_use_release` when their callbacks are inline and
+exact.
+
+An inline `suspend` callback is also traceable:
+
+```ocaml
+let delayed = Hamlet.Combinators.suspend (fun () -> first)
+```
+
+`or_die`, `thaw`, and `sandbox` remove the previous typed errors. A later error
+marker may still handle an exact error introduced after that wrapper:
+
+```ocaml
+module New_errors = struct
+  type error = [ `New_error of string ]
+end
+
+let result =
+  first
+  |> Hamlet.Combinators.or_die
+  |> Hamlet.Combinators.chain ~handler:(fun value ->
+       Hamlet.Combinators.fail (`New_error value))
+  |> Hamlet.Combinators.catch ~handler:(function
+       | #New_errors.error -> Hamlet.Combinators.return "new error"
+       | [%hamlet.propagate_e.auto] -> .)
+```
+
+`map_fail`, ordinary `provide`, and `scoped_with` change a row according to
+user code. They are supported when their output row is closed at the call,
+for example with an expression type annotation. `scoped` is simpler: it
+removes the scope requirement and preserves errors.
 
 The same rule applies to requirements. For example: provide `Logger`, use
 `let*` with a verified `Metrics.Tag.summon`, provide the older `Clock`, then

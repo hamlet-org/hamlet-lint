@@ -340,6 +340,47 @@ let test_chain_certificate_unions_both_channels () =
     "chain requirements" 2
     (output |> Effect_certificate.requirements |> exact_leaves |> List.length)
 
+let test_recover_certificate_replaces_errors_and_unions_requirements () =
+  let source_error_id = identity [ "Source"; "Errors" ] "source" in
+  let recovery_error_id = identity [ "Recovery"; "Errors" ] "recovery" in
+  let logger_id = identity [ "Logger"; "Tag" ] "r" in
+  let clock_id = identity [ "Clock"; "Tag" ] "r" in
+  let source =
+    certificate
+      (proof Kind.Error
+         [
+           error_leaf source_error_id
+             [ error_atom ~declaration:source_error_id "Source_error" ];
+         ])
+      (proof Kind.Requirement
+         [
+           requirement_leaf logger_id
+             (requirement_atom ~declaration:logger_id "Logger");
+         ])
+  in
+  let recovery =
+    certificate
+      (proof Kind.Error
+         [
+           error_leaf recovery_error_id
+             [ error_atom ~declaration:recovery_error_id "Recovery_error" ];
+         ])
+      (proof Kind.Requirement
+         [
+           requirement_leaf clock_id
+             (requirement_atom ~declaration:clock_id "Clock");
+         ])
+  in
+  let output =
+    Effect_certificate.recover ~inputs:[] ~source ~recoveries:[ recovery ]
+    |> get_ok "recover certificate"
+  in
+  check_string_list "recover replaces source errors" [ "recovery" ]
+    (output |> Effect_certificate.errors |> exact_leaves |> leaf_names);
+  Alcotest.(check int)
+    "recover unions requirements" 2
+    (output |> Effect_certificate.requirements |> exact_leaves |> List.length)
+
 let test_catch_certificate_unions_recovery_requirements () =
   let source_error_id = identity [ "Source"; "Errors" ] "source" in
   let recovery_error_id = identity [ "Recovery"; "Errors" ] "recovery" in
@@ -898,6 +939,8 @@ let () =
             test_catch_certificate_unions_recovery_requirements;
           Alcotest.test_case "chain unions both channels" `Quick
             test_chain_certificate_unions_both_channels;
+          Alcotest.test_case "recover replaces errors" `Quick
+            test_recover_certificate_replaces_errors_and_unions_requirements;
           Alcotest.test_case "provide handler errors" `Quick
             test_provide_certificate_unions_handler_errors;
           Alcotest.test_case "opaque recovery blocks proof" `Quick

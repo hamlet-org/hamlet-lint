@@ -59,6 +59,9 @@ may run before those interfaces have been built. The
 - `[%hamlet.propagate_e.auto]` forwards unhandled errors from `catch`.
 - `[%hamlet.propagate_s.auto]` forwards unsupplied services from `provide`.
 
+One marker may be used alone. Multiple markers may form a linear sequence,
+including alternating `catch`, `provide`, and supported Hamlet composition.
+
 If the subtractor cannot prove the complete input row, compilation stops at
 the marker. Add an explicit universe and use the non-automatic marker:
 
@@ -72,7 +75,7 @@ This refusal prevents the PPX from silently dropping a possible effect.
 ## Documentation
 
 - [Automatic Propagation](docs/automatic-propagation.md): setup, supported
-  behavior, chaining, and fallbacks.
+  behavior, primitive composition, and fallbacks.
 - [Supported Patterns](docs/supported-patterns.md) and
   [Refused Patterns](docs/refused-patterns.md): small examples with the reason
   each form is accepted or rejected.

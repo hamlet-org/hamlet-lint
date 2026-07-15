@@ -21,7 +21,8 @@ This is the complete feature gate. It checks:
 - invalidation after a dependency interface changes;
 - expected refusals and explicit fallbacks;
 - arbitrarily long linear marker chains, including effects introduced between
-  markers, plus refusal of a two-predecessor marker merge;
+  markers, alternating `chain` and `catch`, the catch-filter family, and
+  refusal of a two-predecessor marker merge;
 - linear generation for cross-module `Errors.Cases` catalogues.
 
 The same gate is available as
@@ -58,6 +59,8 @@ runtime result, exact Merlin hovers, and the installed resolver path. Its
 generated `main.ml` includes:
 
 - three automatic catches that handle old and newly introduced errors;
+- alternating automatic catches, direct `chain`, and an ordinary error-row
+  replacing `catch`;
 - a requirement chain that introduces `Metrics` after providing `Logger`, then
   proves that providing `Clock` leaves only `Metrics`.
 

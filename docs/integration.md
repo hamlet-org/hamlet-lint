@@ -36,8 +36,8 @@ After Dune builds those interfaces, it invokes the staged PPX from `ocamlc`,
 `ocamlopt`, or Merlin. That invocation has enough type information to resolve
 every marker and return the final expansion.
 
-This is the reason for `staged_pps`. The public guide gives a concrete
-[comparison with `pps`](./automatic-propagation.md#why-staged_pps-is-required).
+This is the reason for `staged_pps`. The public guide shows the required
+[Dune setup](./automatic-propagation.md#dune-setup).
 
 ## Compiler context
 

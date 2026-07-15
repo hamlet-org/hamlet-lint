@@ -302,6 +302,27 @@ let chained_error_done : (string, never, never) t =
     | `Old_c -> Combinators.return "handled old C"
     | `Introduced_two -> Combinators.return "handled introduced error 2")
 
+let alternating_error_source : (string, Chain_errors.old, never) t =
+  Combinators.fail (`Old_b : Chain_errors.old)
+
+let alternating_error_effect =
+  alternating_error_source
+  |> Combinators.catch ~handler:(function
+       | #Chain_errors.old_a -> Combinators.return "handled old A"
+       | [%hamlet.propagate_e.auto] -> .)
+  |> Combinators.chain ~handler:(fun value -> Combinators.return value)
+  |> Combinators.catch ~handler:(function
+       | `Old_b -> Combinators.fail `Introduced_one
+       | `Old_c -> Combinators.fail `Introduced_two)
+  |> Combinators.catch ~handler:(function
+       | #Chain_errors.introduced_one ->
+           Combinators.return "handled alternating error"
+       | [%hamlet.propagate_e.auto] -> .)
+
+let alternating_error_done : (string, never, never) t =
+  Combinators.catch alternating_error_effect ~handler:(function
+    | `Introduced_two -> Combinators.return "handled alternating error 2")
+
 let requirement_source () =
   let open Combinators in
   let* (module Logger) = Logger.Tag.summon in
@@ -340,6 +361,7 @@ let requirement_done : (string, never, never) t =
 let error_hover = error_effect
 let requirement_hover = requirement_effect
 let chained_error_hover = chained_error_effect
+let alternating_error_hover = alternating_error_effect
 let chained_requirement_hover = requirement_after_clock
 
 let check expected = function
@@ -350,6 +372,7 @@ let check expected = function
 let () =
   check "recovered" (Interpreter.run error_effect);
   check "handled introduced error" (Interpreter.run chained_error_done);
+  check "handled alternating error" (Interpreter.run alternating_error_done);
   check "ready at 42" (Interpreter.run requirement_done)
 EOF
 
@@ -379,6 +402,9 @@ requirement_position=$(awk '/^let requirement_hover = requirement_effect$/ {
 chained_error_position=$(awk '/^let chained_error_hover = chained_error_effect$/ {
   print NR ":" (index($0, "chained_error_effect") - 1)
 }' "$consumer/main.ml")
+alternating_error_position=$(awk '/^let alternating_error_hover = alternating_error_effect$/ {
+  print NR ":" (index($0, "alternating_error_effect") - 1)
+}' "$consumer/main.ml")
 chained_requirement_position=$(awk '/^let chained_requirement_hover = requirement_after_clock$/ {
   print NR ":" (index($0, "requirement_after_clock") - 1)
 }' "$consumer/main.ml")
@@ -386,6 +412,8 @@ chained_requirement_position=$(awk '/^let chained_requirement_hover = requiremen
 test -n "$error_position" || fail "error hover position was not found"
 test -n "$requirement_position" || fail "requirement hover position was not found"
 test -n "$chained_error_position" || fail "chained error hover position was not found"
+test -n "$alternating_error_position" ||
+  fail "alternating error hover position was not found"
 test -n "$chained_requirement_position" ||
   fail "chained requirement hover position was not found"
 
@@ -406,6 +434,12 @@ chained_error_hover=$(
     -position "$chained_error_position" -index 0 -verbosity 0 \
     -filename main.ml < main.ml
 )
+alternating_error_hover=$(
+  cd "$consumer"
+  "$launcher" ocamlmerlin single type-enclosing \
+    -position "$alternating_error_position" -index 0 -verbosity 0 \
+    -filename main.ml < main.ml
+)
 chained_requirement_hover=$(
   cd "$consumer"
   "$launcher" ocamlmerlin single type-enclosing \
@@ -416,10 +450,12 @@ chained_requirement_hover=$(
 error_hover_compact=$(printf '%s' "$error_hover" | tr -d '[:space:]')
 requirement_hover_compact=$(printf '%s' "$requirement_hover" | tr -d '[:space:]')
 chained_error_hover_compact=$(printf '%s' "$chained_error_hover" | tr -d '[:space:]')
+alternating_error_hover_compact=$(printf '%s' "$alternating_error_hover" | tr -d '[:space:]')
 chained_requirement_hover_compact=$(printf '%s' "$chained_requirement_hover" | tr -d '[:space:]')
 require_text "$error_hover_compact" '"class":"return"'
 require_text "$requirement_hover_compact" '"class":"return"'
 require_text "$chained_error_hover_compact" '"class":"return"'
+require_text "$alternating_error_hover_compact" '"class":"return"'
 require_text "$chained_requirement_hover_compact" '"class":"return"'
 require_one_of "$error_hover" "Timeout" "Storage.Errors.timeout"
 reject_text "$error_hover" "Missing"
@@ -429,6 +465,8 @@ reject_text "$requirement_hover" "Logger"
 require_text "$chained_error_hover" "Old_c"
 require_text "$chained_error_hover" "Introduced_two"
 reject_text "$chained_error_hover" "Introduced_one"
+require_text "$alternating_error_hover" "Introduced_two"
+reject_text "$alternating_error_hover" "Introduced_one"
 require_text "$chained_requirement_hover" "Metrics"
 reject_text "$chained_requirement_hover" "Clock"
 reject_text "$chained_requirement_hover" "Logger"
@@ -445,6 +483,7 @@ printf '%s\n' "installed resolver: ok"
 printf '%s\n' "raw Merlin error hover: narrow"
 printf '%s\n' "raw Merlin requirement hover: narrow"
 printf '%s\n' "raw Merlin chained error hover: narrow"
+printf '%s\n' "raw Merlin alternating error hover: narrow"
 printf '%s\n' "raw Merlin chained requirement hover: narrow"
 
 if [ "$keep_work" = 1 ]; then

@@ -27,6 +27,17 @@ val requirements : t -> evidence
 
 val chain : inputs:Marker.id list -> t list -> (t, validation_error) result
 
+val recover :
+  inputs:Marker.id list ->
+  source:t ->
+  recoveries:t list ->
+  (t, validation_error) result
+
+val with_errors : source:t -> errors:evidence -> (t, validation_error) result
+
+val with_requirements :
+  source:t -> requirements:evidence -> (t, validation_error) result
+
 val catch :
   inputs:Marker.id list ->
   source:t ->

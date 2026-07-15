@@ -144,9 +144,12 @@ result would also restrict the caller's `error` argument.
 The resolver can trace a deliberately small set of real Hamlet expressions:
 
 - direct `success`, `return`, `fail`, and generated `Tag.summon` calls;
-- supported direct combinators such as `chain`, `both`, `map`, `catch`,
-  `map_fail`, `tap`, and their audited variants when every contributing
-  expression is independently proven;
+- row-preserving composition such as `chain`, `both`, `map`, `catch_defect`,
+  `tap*`, `ensuring`, and `acquire_use_release`;
+- error-replacing composition through `catch`, `catch_cause`, `catch_filter`,
+  and `catch_cause_filter` when every recovery path is exact;
+- row-clearing or row-transforming wrappers such as `or_die`, `sandbox`,
+  `scoped`, and explicitly closed `map_fail` or `provide` calls;
 - Hamlet `let*`, `and*`, and `let+` composition;
 - ordinary immutable `let` wrappers, the final expression of a sequence, and
   control-flow branches when every possible result is proven;
@@ -183,11 +186,19 @@ A resolved automatic `catch` or `provide` produces a complete two-channel
 certificate. A later marker may use that certificate when Typedtree value
 identity proves that it consumes the earlier result.
 
-If supported `let*`, `chain`, `both`, `map`, or verified summon expressions
-surround that result, the resolver builds a source plan. At engine time it
-combines the previous marker certificate with the exact certificates of those
-new expressions. This is how an effect introduced between two markers remains
-visible to the later marker.
+If supported composition surrounds that result, the resolver builds a source
+plan. Each node records the primitive's real row equation:
+
+- preserve and union exact contributors for `chain`-like composition;
+- replace source errors with exact recovery errors for `catch`-like
+  composition;
+- clear a channel for `or_die`, `sandbox`, or `scoped`;
+- use an explicitly proven output channel for `map_fail`, `provide`, or
+  `scoped_with`.
+
+The engine substitutes the earlier marker certificate into that plan before
+resolving the later marker. This keeps effects introduced between markers and
+also prevents handled errors from incorrectly surviving an ordinary `catch`.
 
 ## Generated catalogues
 
@@ -324,11 +335,11 @@ The engine resolves `first` before `second` and uses `first`'s output
 certificate as `second`'s input evidence. It follows typed value UIDs, not just
 AST nesting.
 
-The supported dependency graph is a deterministic chain with at most one
-proven marker predecessor for each marker. The chain may be arbitrarily long,
-and each step may add exact effects through supported composition. Cycles,
-opaque edges, and a merge of two independently marked predecessors receive
-explicit diagnostics.
+The first marker has no marker predecessor. Starting with the second, each
+marker may have at most one proven predecessor. The chain may be arbitrarily
+long, and `chain`, `catch`, and supported wrappers may alternate in any order.
+Cycles, opaque edges, and a merge of two independently marked predecessors
+receive explicit diagnostics.
 
 ## Refusal boundary
 

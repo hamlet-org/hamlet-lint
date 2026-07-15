@@ -103,6 +103,204 @@ match __input with
 | `Chain_old_c as error -> Hamlet.Combinators.fail error
 | _ -> .
 
+case_two_direct_chains_before_marker match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_chain_between_two_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_chain_between_two_markers match-2:
+match __input with
+| #Composition_errors.b -> ((Combinators.return "b")[@merlin.loc ])
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_plain_catch_between_two_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_plain_catch_between_two_markers match-2:
+match __input with
+| `Composition_b -> ((Combinators.fail `Replacement_a)[@merlin.loc ])
+| `Composition_c -> ((Combinators.fail `Replacement_b)[@merlin.loc ])
+
+case_plain_catch_between_two_markers match-3:
+match __input with
+| #Composition_errors.replacement_a -> ((Combinators.return "replacement-a")
+    [@merlin.loc ])
+| `Replacement_b as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_catch_cause_between_two_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_catch_cause_between_two_markers match-2:
+match __input with
+| #Composition_errors.replacement_a -> ((Combinators.return "replacement-a")
+    [@merlin.loc ])
+| `Replacement_b as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_catch_filter_between_two_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_catch_filter_between_two_markers match-2:
+match __input with
+| `Composition_b -> ((Some ())[@merlin.loc ])
+| `Composition_c -> ((None)[@merlin.loc ])
+
+case_catch_filter_between_two_markers match-3:
+match __input with
+| #Composition_errors.replacement_a -> ((Combinators.return "replacement-a")
+    [@merlin.loc ])
+| `Replacement_b as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_catch_cause_filter_between_two_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_catch_cause_filter_between_two_markers match-2:
+match __input with
+| #Composition_errors.replacement_a -> ((Combinators.return "replacement-a")
+    [@merlin.loc ])
+| `Replacement_b as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_row_preserving_wrappers_between_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_row_preserving_wrappers_between_markers match-2:
+match __input with
+| #Composition_errors.b -> ((Combinators.return "b")[@merlin.loc ])
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_suspend_between_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_suspend_between_markers match-2:
+match __input with
+| #Composition_errors.b -> ((Combinators.return "b")[@merlin.loc ])
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_clearing_wrapper_then_new_error match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_error_clearing_wrapper_then_new_error match-2:
+match __input with
+| #Composition_errors.replacement_a -> ((Combinators.return "replacement-a")
+    [@merlin.loc ])
+| `Replacement_b as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_map_fail_between_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_map_fail_between_markers match-2:
+match __input with
+| `Composition_b -> ((`Replacement_a)[@merlin.loc ])
+| `Composition_c -> ((`Replacement_b)[@merlin.loc ])
+
+case_map_fail_between_markers match-3:
+match __input with
+| #Composition_errors.replacement_a -> ((Combinators.return "replacement-a")
+    [@merlin.loc ])
+| `Replacement_b as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_sandbox_between_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_sandbox_between_markers match-2:
+match __input with
+| #Composition_errors.replacement_a -> ((Combinators.return "replacement-a")
+    [@merlin.loc ])
+| `Replacement_b as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_scoped_between_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_scoped_between_markers match-2:
+match __input with
+| #Composition_errors.b -> ((Combinators.return "b")[@merlin.loc ])
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_acquire_use_release_between_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_acquire_use_release_between_markers match-2:
+match __input with
+| #Composition_errors.b -> ((Combinators.return "b")[@merlin.loc ])
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_both_between_markers match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
+case_both_between_markers match-2:
+match __input with
+| #Composition_errors.b -> ((Combinators.return ("b", ()))[@merlin.loc ])
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
 case_requirement_local_direct match-1:
 match __input with
 | #Local_logger.Tag.r as witness ->
@@ -156,6 +354,32 @@ match __input with
 | #Local_clock.Tag.r as witness ->
     ((Local_clock.Tag.give witness (module Local_clock_live))[@merlin.loc ])
 | #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_plain_provide_between_markers match-1:
+match __input with
+| #Local_logger.Tag.r as witness ->
+    ((Local_logger.Tag.give witness (module Local_logger_live))
+    [@merlin.loc ])
+| #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Local_clock.Tag.r as witness -> Hamlet.Dispatch.need witness
+| #Local_metrics.Tag.r as witness -> Hamlet.Dispatch.need witness
+| _ -> .
+
+case_plain_provide_between_markers match-2:
+match __input with
+| #Local_clock.Tag.r as witness ->
+    ((Local_clock.Tag.give witness (module Local_clock_live))[@merlin.loc ])
+| #Local_audit.Tag.r as witness -> ((Hamlet.Dispatch.need witness)
+    [@merlin.loc ])
+| #Local_metrics.Tag.r as witness -> ((Hamlet.Dispatch.need witness)
+    [@merlin.loc ])
+
+case_plain_provide_between_markers match-3:
+match __input with
+| #Local_audit.Tag.r as witness ->
+    ((Local_audit.Tag.give witness (module Local_audit_live))[@merlin.loc ])
+| #Local_metrics.Tag.r as witness -> Hamlet.Dispatch.need witness
 | _ -> .
 
 case_requirement_chain_composition match-1:

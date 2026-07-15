@@ -205,8 +205,13 @@ if grep -E 'propagate_[es]\.auto' "$tmp_dir/automatic_propagation_expansion.actu
   printf '%s\n' 'saved buffer retained an auto marker' >&2
   exit 1
 fi
-diff -u test/automatic_propagation/automatic_propagation_expansion.expected \
-  "$tmp_dir/automatic_propagation_expansion.actual"
+if [ "${PROMOTE:-0}" = 1 ]; then
+  cp "$tmp_dir/automatic_propagation_expansion.actual" \
+    test/automatic_propagation/automatic_propagation_expansion.expected
+else
+  diff -u test/automatic_propagation/automatic_propagation_expansion.expected \
+    "$tmp_dir/automatic_propagation_expansion.actual"
+fi
 dump_typedtree test/automatic_propagation/automatic_propagation_positive.ml \
   test/automatic_propagation/automatic_propagation_positive.ml "$tmp_dir/saved.typedtree"
 assert_typed_subset_forwarder "$tmp_dir/saved.typedtree" storage_timeout saved

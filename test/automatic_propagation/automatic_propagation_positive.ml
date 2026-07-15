@@ -73,6 +73,16 @@ module Chain_errors = struct
   type after_second = [ old_c | introduced_one | introduced_two ]
 end
 
+module Composition_errors = struct
+  type a = [ `Composition_a ]
+  type b = [ `Composition_b ]
+  type c = [ `Composition_c ]
+  type source = [ a | b | c ]
+  type replacement_a = [ `Replacement_a ]
+  type replacement_b = [ `Replacement_b ]
+  type replacement = [ replacement_a | replacement_b ]
+end
+
 let local_error_source :
     (string, Local_io.Errors.error, Local_io.Tag.r) Hamlet.t =
   Hamlet.Combinators.fail (`Local_corrupt "bad" : Local_io.Errors.error)
@@ -103,6 +113,14 @@ let mixed_source :
 
 let chain_source : (string, Chain_errors.old, Hamlet.never) Hamlet.t =
   Hamlet.Combinators.fail (`Chain_old_a : Chain_errors.old)
+
+let composition_source :
+    (string, Composition_errors.source, Hamlet.never) Hamlet.t =
+  Hamlet.Combinators.fail (`Composition_a : Composition_errors.source)
+
+let scoped_composition_source :
+    (string, Composition_errors.source, Hamlet.Scope.Tag.r) Hamlet.t =
+  Hamlet.Combinators.fail (`Composition_a : Composition_errors.source)
 
 let case_error_local_direct =
   Combinators.catch local_error_source ~handler:(fun error ->
@@ -194,6 +212,236 @@ let case_error_chain_composition =
       | #Chain_errors.introduced_one -> Hamlet.Combinators.return "introduced"
       | [%hamlet.propagate_e.auto] -> .)
 
+let case_two_direct_chains_before_marker =
+  composition_source
+  |> Combinators.chain ~handler:(fun value -> Combinators.return value)
+  |> Combinators.chain ~handler:(fun value -> Combinators.return value)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.a -> Combinators.return "a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_chain_between_two_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.chain ~handler:(fun value -> Combinators.return value)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.b -> Combinators.return "b"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_plain_catch_between_two_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.catch ~handler:(function
+    | `Composition_b -> Combinators.fail `Replacement_a
+    | `Composition_c -> Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_catch_cause_between_two_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.catch_cause ~handler:(fun _cause ->
+      if Sys.opaque_identity true then Combinators.fail `Replacement_a
+      else Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_catch_filter_between_two_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.catch_filter
+       ~filter:(function `Composition_b -> Some () | `Composition_c -> None)
+       ~handler:(fun () -> Combinators.fail `Replacement_a)
+       ~on_no_match:(fun _cause -> Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_catch_cause_filter_between_two_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.catch_cause_filter
+       ~filter:(fun _cause -> Some ())
+       ~handler:(fun () _cause -> Combinators.fail `Replacement_a)
+       ~on_no_match:(fun _cause -> Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_row_preserving_wrappers_between_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.map ~f:Fun.id
+  |> Combinators.tap ~f:(fun _ -> Combinators.return ())
+  |> Combinators.tap_fail ~f:(fun _ -> Combinators.return ())
+  |> Combinators.tap_defect ~f:(fun _ -> Combinators.return ())
+  |> Combinators.tap_cause ~f:(fun _ -> Combinators.return ())
+  |> Combinators.catch_defect ~handler:(fun _ -> Combinators.return "defect")
+  |> Combinators.ensuring ~f:(Combinators.return ())
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.b -> Combinators.return "b"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_suspend_between_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  Combinators.suspend (fun () -> after_first)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.b -> Combinators.return "b"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_error_clearing_wrapper_then_new_error =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.or_die
+  |> Combinators.chain ~handler:(fun _value ->
+      if Sys.opaque_identity true then Combinators.fail `Replacement_a
+      else Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_map_fail_between_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  let mapped : (string, Composition_errors.replacement, Hamlet.never) Hamlet.t =
+    after_first
+    |> Combinators.map_fail ~f:(function
+      | `Composition_b -> `Replacement_a
+      | `Composition_c -> `Replacement_b)
+  in
+  mapped
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_sandbox_between_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.sandbox
+  |> Combinators.chain ~handler:(fun _exit ->
+      if Sys.opaque_identity true then Combinators.fail `Replacement_a
+      else Combinators.fail `Replacement_b)
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.replacement_a -> Combinators.return "replacement-a"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_scoped_between_markers =
+  let after_first =
+    scoped_composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  after_first
+  |> Combinators.scoped
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.b -> Combinators.return "b"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_acquire_use_release_between_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  Combinators.acquire_use_release after_first
+    ~use:(fun value -> Combinators.return value)
+    ~release:(fun _value _exit -> Combinators.return ())
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.b -> Combinators.return "b"
+      | [%hamlet.propagate_e.auto] -> .)
+
+let case_both_between_markers =
+  let after_first =
+    composition_source
+    |> Combinators.catch ~handler:(fun error ->
+        match error with
+        | #Composition_errors.a -> Combinators.return "a"
+        | [%hamlet.propagate_e.auto] -> .)
+  in
+  Combinators.both after_first (Combinators.return ())
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.b -> Combinators.return ("b", ())
+      | [%hamlet.propagate_e.auto] -> .)
+
 let case_requirement_local_direct =
   Combinators.provide
     ~handler:(fun requirement ->
@@ -246,6 +494,43 @@ let case_requirement_dependent =
       match requirement with
       | #Local_clock.Tag.r as witness ->
           Local_clock.Tag.give witness (module Local_clock_live)
+      | [%hamlet.propagate_s.auto] -> .)
+
+let four_requirement_source :
+    ( string,
+      Hamlet.never,
+      [ Local_logger.Tag.r
+      | Local_clock.Tag.r
+      | Local_audit.Tag.r
+      | Local_metrics.Tag.r ] )
+    Hamlet.t =
+  Hamlet.Combinators.return "ready"
+
+let case_plain_provide_between_markers =
+  let after_first =
+    four_requirement_source
+    |> Combinators.provide ~handler:(fun requirement ->
+        match requirement with
+        | #Local_logger.Tag.r as witness ->
+            Local_logger.Tag.give witness (module Local_logger_live)
+        | [%hamlet.propagate_s.auto] -> .)
+  in
+  let after_plain_provide =
+    (Combinators.provide after_first ~handler:(function
+       | #Local_clock.Tag.r as witness ->
+           Local_clock.Tag.give witness (module Local_clock_live)
+       | #Local_audit.Tag.r as witness -> Hamlet.Dispatch.need witness
+       | #Local_metrics.Tag.r as witness -> Hamlet.Dispatch.need witness)
+      : ( string,
+          Hamlet.never,
+          [ Local_audit.Tag.r | Local_metrics.Tag.r ] )
+        Hamlet.t)
+  in
+  after_plain_provide
+  |> Combinators.provide ~handler:(fun requirement ->
+      match requirement with
+      | #Local_audit.Tag.r as witness ->
+          Local_audit.Tag.give witness (module Local_audit_live)
       | [%hamlet.propagate_s.auto] -> .)
 
 type requirement_chain =

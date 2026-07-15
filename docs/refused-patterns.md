@@ -138,6 +138,43 @@ Call `Hamlet.Combinators.fail` directly or state the row explicitly. This small
 recognized language keeps proof construction independent of arbitrary
 higher-order OCaml behavior.
 
+## Combinators with opaque output rows
+
+Some primitives accept user code that decides the output row. The resolver
+does not guess what that code returns.
+
+For example, this `map_fail` result is not automatically exact when `remap`
+is an unknown function:
+
+```ocaml
+let mapped = Hamlet.Combinators.map_fail source ~f:remap
+```
+
+Close the output row at the expression when it is known:
+
+```ocaml
+let mapped =
+  (Hamlet.Combinators.map_fail source ~f:remap
+    : (string, [ `Mapped ], Hamlet.never) Hamlet.t)
+```
+
+The same boundary may be needed after ordinary `provide` or `scoped_with`,
+because their handlers choose the output requirement row.
+
+Runtime construction is accepted only when the returned computation is
+visible in an inline callback:
+
+```ocaml
+Hamlet.Combinators.suspend (fun () -> known_source)  (* supported *)
+Hamlet.Combinators.suspend callback                 (* refused if opaque *)
+```
+
+Lifecycle helpers such as `add_finalizer*` and `acquire_release` are followed
+only when every effectful callback and resulting requirement row are exact.
+Otherwise, put a closed annotation after the helper. `sandbox_cause` produces
+`Cause.t`, not a polymorphic-variant error universe, so it is not an input to
+automatic error subtraction.
+
 ## Named handlers
 
 The handler must be inline:

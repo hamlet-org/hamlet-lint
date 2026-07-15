@@ -201,15 +201,40 @@ let with_new_effect =
   operation_that_adds_a_known_effect value
 ```
 
-The evidence layer builds a small source plan: “certificate from `first`,
-chained with the exact certificate of `operation_that_adds_a_known_effect`.”
-The engine fills in `first` only after resolving it, unions both channels, and
-uses that combined certificate as the next marker's input.
+The evidence layer builds a small source plan instead of flattening every
+primitive into a union:
 
-Each marker may have at most one earlier marker predecessor, but a linear chain
-may contain any number of markers and exact new contributions. Cycles, opaque
-links, and merges of two independently marked values receive deterministic
-errors.
+```mermaid
+flowchart LR
+  Previous["Earlier marker certificate"]
+  Exact["Exact new computation"]
+  Preserve["Preserve rows<br/>chain, both, tap, ensuring"]
+  Replace["Replace errors<br/>catch and catch filters"]
+  Clear["Clear one row<br/>or_die, sandbox, scoped"]
+  Next["Exact input of next marker"]
+
+  Previous --> Preserve
+  Exact --> Preserve
+  Previous --> Replace
+  Exact --> Replace
+  Previous --> Clear
+  Preserve --> Next
+  Replace --> Next
+  Clear --> Next
+```
+
+For a preserving primitive, the plan unions exact contributors. For an
+ordinary `catch`, it discards source errors, uses recovery errors, and retains
+requirements from both sides. Clearing wrappers remove only the channel their
+API eliminates. Primitives controlled by user code, such as `map_fail` or a
+plain `provide`, use the call's output row only when that row is independently
+exact.
+
+The first marker has no predecessor. The second and every later marker may
+have at most one earlier predecessor, so a linear chain may contain any number
+of markers and exact new contributions. `chain`, `catch`, and supported
+wrappers may alternate. Cycles, opaque links, and merges of two independently
+marked values receive deterministic errors.
 
 ## Generated code
 
