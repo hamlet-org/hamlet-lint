@@ -358,27 +358,40 @@ let resolve ~context structure =
                             "generic automatic propagation finalization \
                              failed: %s"
                             message
-                      | Ok structure ->
-                          let structure =
+                      | Ok structure -> (
+                          match
                             Hamlet_subtractor_generic_definition
-                            .strip_linkage_attributes structure
-                          in
-                          begin match
-                            Hamlet_subtractor_generic_call.finalize
-                              ~calls:generic_calls.calls
+                            .finalize_composition
                               ~attachments:resolution.generic_attachments
-                              ~catalogues:
-                                (Hamlet_subtractor_engine.catalogues engine)
                               structure
                           with
-                          | Ok structure -> structure
                           | Error error ->
                               Location.raise_errorf
-                                "generic automatic propagation call \
+                                "generic automatic propagation composition \
                                  finalization failed: %s"
-                                (Hamlet_subtractor_generic_call
-                                 .finalization_error_message error)
-                          end)
+                                (Hamlet_subtractor_generic_definition
+                                 .composition_finalization_error_message error)
+                          | Ok structure ->
+                              let structure =
+                                Hamlet_subtractor_generic_definition
+                                .strip_linkage_attributes structure
+                              in
+                              begin match
+                                Hamlet_subtractor_generic_call.finalize
+                                  ~calls:generic_calls.calls
+                                  ~attachments:resolution.generic_attachments
+                                  ~catalogues:
+                                    (Hamlet_subtractor_engine.catalogues engine)
+                                  structure
+                              with
+                              | Ok structure -> structure
+                              | Error error ->
+                                  Location.raise_errorf
+                                    "generic automatic propagation call \
+                                     finalization failed: %s"
+                                    (Hamlet_subtractor_generic_call
+                                     .finalization_error_message error)
+                              end))
                   | Error error ->
                       Location.raise_errorf
                         ~loc:(replacement_loc prepared error)

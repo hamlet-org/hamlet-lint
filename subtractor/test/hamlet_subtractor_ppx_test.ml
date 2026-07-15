@@ -522,6 +522,138 @@ let test_generic_fun_match_handler () =
     "marker removed" false
     (contains rendered "hamlet.subtractor.marker.v1")
 
+let test_generic_nested_helper_call () =
+  let rendered =
+    generic_transform
+      "let[@hamlet.generic] outer config source =\n\
+       inner config source [%hamlet.forward.auto]"
+    |> render_structure
+  in
+  check_rendered "temporary evidence parameter" "outer config source _" rendered;
+  check_rendered "nested call linkage" Generic_definition.nested_call_attribute
+    rendered;
+  check_rendered "nested callee linkage"
+    Generic_definition.nested_callee_attribute rendered;
+  check_rendered "nested source linkage"
+    Generic_definition.nested_source_attribute rendered;
+  check_rendered "nested placeholder linkage"
+    Generic_definition.nested_placeholder_attribute rendered;
+  Alcotest.(check bool)
+    "nested placeholder consumed" false
+    (contains rendered "hamlet.forward.auto")
+
+let test_generic_nested_helper_then_local_marker () =
+  let rendered =
+    generic_transform
+      "let[@hamlet.generic] outer config source =\n\
+       Hamlet.Combinators.catch\n\
+       (inner config source [%hamlet.forward.auto])\n\
+       ~handler:(function\n\
+       | `Missing -> Hamlet.Combinators.success ()\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+    |> render_structure
+  in
+  check_rendered "nested source feeds local marker"
+    Generic_definition.nested_call_attribute rendered;
+  check_rendered "local slot remains" "outer_slot_0" rendered;
+  check_rendered "local dispatch remains" "Evidence.dispatch" rendered
+
+let test_generic_nested_composition_finalization () =
+  let module Exact_contract = Hamlet_subtractor_core.Generic_contract in
+  let get_ok label = function
+    | Ok value -> value
+    | Error _ -> Alcotest.fail ("cannot construct " ^ label)
+  in
+  let make_slot ordinal inner_id =
+    let id =
+      Exact_contract.slot_id inner_id |> get_ok "composed slot identity"
+    in
+    Exact_contract.slot ~id ~ordinal ~kind:Kind.Error
+      ~input:(Exact_contract.input Kind.Error)
+      ~claimed:[] ~handled:[] ~explicitly_forwarded:[]
+      ~recovery:(Exact_contract.clear Kind.Error)
+    |> get_ok "composed slot"
+  in
+  let transformed =
+    generic_transform
+      "let[@hamlet.generic] outer config source =\n\
+       inner config source [%hamlet.forward.auto]"
+  in
+  let nested_id =
+    let values = ref [] in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression expression =
+          expression.pexp_attributes
+          |> List.iter (fun attribute ->
+              if
+                String.equal attribute.attr_name.txt
+                  Generic_definition.nested_call_attribute
+              then
+                match attribute.attr_payload with
+                | PStr
+                    [
+                      {
+                        pstr_desc =
+                          Pstr_eval
+                            ( {
+                                pexp_desc =
+                                  Pexp_constant (Pconst_string (value, _, _));
+                                _;
+                              },
+                              _ );
+                        _;
+                      };
+                    ] ->
+                    values := value :: !values
+                | _ -> ());
+          super#expression expression
+      end
+    in
+    iterator#structure transformed;
+    match !values with
+    | [ id ] -> id
+    | _ -> Alcotest.fail "expected one nested call identity"
+  in
+  let slots =
+    [
+      make_slot 0 (nested_id ^ "/inner-error");
+      make_slot 1 (nested_id ^ "/inner-requirement");
+    ]
+  in
+  let contract =
+    Exact_contract.create ~helper_fingerprint:"outer-test" ~effect_parameter:1
+      ~slots ~output:Exact_contract.input_certificate
+    |> get_ok "composed contract"
+  in
+  let payload =
+    Hamlet_subtractor_core.Generic_resolution.encode_definition contract
+    |> get_ok "definition attachment"
+  in
+  let attachment =
+    Hamlet_subtractor_core.Protocol.generic_attachment ~id:"definition:outer"
+      ~kind:Hamlet_subtractor_core.Protocol.Definition ~payload
+    |> get_ok "protocol attachment"
+  in
+  let rendered =
+    Generic_definition.finalize_composition ~attachments:[ attachment ]
+      transformed
+    |> get_ok "composition finalization"
+    |> render_structure
+  in
+  check_rendered "flattened outer evidence tuple"
+    "(_hamlet_subtractor_outer_slot_0, _hamlet_subtractor_outer_slot_1)"
+    rendered;
+  check_rendered "nested projection uses first slot"
+    "_hamlet_subtractor_outer_slot_0" rendered;
+  check_rendered "nested projection uses second slot"
+    "_hamlet_subtractor_outer_slot_1" rendered;
+  Alcotest.(check bool)
+    "temporary bottom removed" false
+    (contains rendered "assert false")
+
 let expect_generic_refusal label source expected =
   let transformed = source |> parse |> probe_transform in
   match Generic_definition.rewrite transformed with
@@ -594,6 +726,11 @@ let test_generic_refusals () =
     "let[@hamlet.generic] helper source =\n\
      match source with | [%hamlet.propagate_e.auto] -> ." (function
     | Generic_definition.Marker_without_supported_owner -> true
+    | _ -> false);
+  expect_generic_refusal "nested pipeline"
+    "let[@hamlet.generic] helper source =\n\
+     source |> inner [%hamlet.forward.auto]" (function
+    | Generic_definition.Invalid_nested_call _ -> true
     | _ -> false)
 
 let test_generic_linkage_stripping () =
@@ -617,6 +754,10 @@ let test_generic_linkage_stripping () =
       Generic_definition.upstream_attribute;
       Generic_definition.handler_attribute;
       Generic_definition.slot_attribute;
+      Generic_definition.nested_call_attribute;
+      Generic_definition.nested_callee_attribute;
+      Generic_definition.nested_source_attribute;
+      Generic_definition.nested_placeholder_attribute;
     ];
   check_rendered "contract remains"
     Hamlet_subtractor_ppx.Generic_contract.attribute_name rendered
@@ -656,6 +797,12 @@ let () =
             test_generic_guard_forwards_when_false;
           Alcotest.test_case "fun match handler" `Quick
             test_generic_fun_match_handler;
+          Alcotest.test_case "nested helper call" `Quick
+            test_generic_nested_helper_call;
+          Alcotest.test_case "nested helper then local marker" `Quick
+            test_generic_nested_helper_then_local_marker;
+          Alcotest.test_case "nested composition finalization" `Quick
+            test_generic_nested_composition_finalization;
           Alcotest.test_case "stable refusals" `Quick test_generic_refusals;
           Alcotest.test_case "linkage stripping" `Quick
             test_generic_linkage_stripping;

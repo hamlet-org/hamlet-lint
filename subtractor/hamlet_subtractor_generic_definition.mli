@@ -13,6 +13,7 @@ type refusal_reason =
   | Wrong_marker_channel
   | Unsupported_handler
   | Multiple_symbolic_inputs of string list
+  | Invalid_nested_call of string
   | Duplicate_helper of string
   | Companion_collision of string
   | Contract_encoding_failed of string
@@ -27,6 +28,10 @@ val callee_attribute : string
 val upstream_attribute : string
 val handler_attribute : string
 val slot_attribute : string
+val nested_call_attribute : string
+val nested_callee_attribute : string
+val nested_source_attribute : string
+val nested_placeholder_attribute : string
 
 val strip_linkage_attributes :
   Ppxlib.Parsetree.structure -> Ppxlib.Parsetree.structure
@@ -35,3 +40,21 @@ val rewrite :
   Ppxlib.Parsetree.structure -> (Ppxlib.Parsetree.structure, refusal) result
 
 val rewrite_exn : Ppxlib.Parsetree.structure -> Ppxlib.Parsetree.structure
+
+type composition_finalization_error =
+  | Missing_definition_attachment of string
+  | Duplicate_definition_attachment of string
+  | Invalid_definition_attachment of string
+  | Invalid_helper_link
+  | Missing_nested_slots of string
+  | Duplicate_nested_placeholder of string
+  | Missing_nested_placeholder of string
+  | Invalid_generated_evidence_parameter of string
+
+val composition_finalization_error_message :
+  composition_finalization_error -> string
+
+val finalize_composition :
+  attachments:Hamlet_subtractor_core.Protocol.generic_attachment list ->
+  Ppxlib.Parsetree.structure ->
+  (Ppxlib.Parsetree.structure, composition_finalization_error) result
