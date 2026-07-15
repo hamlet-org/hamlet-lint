@@ -272,6 +272,32 @@ let chain_handles_recovery_added_later () =
   chained_error_markers true
   |> expect_ok "chain handles recovery effect" "introduced-two"
 
+let generic_helper_handles_claimed_error () =
+  let source : (unit, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t =
+    Hamlet.Combinators.fail `Missing
+  in
+  let specialized =
+    Hamlet_subtractor_generic_helper_producer.recover_missing source
+      [%hamlet.forward.auto]
+  in
+  match Hamlet.Interpreter.run specialized with
+  | Error `Recovery -> ()
+  | Error `Timeout -> Alcotest.fail "claimed error was forwarded"
+  | Ok () -> Alcotest.fail "claimed error disappeared"
+
+let generic_helper_forwards_residual_error () =
+  let source : (unit, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t =
+    Hamlet.Combinators.fail `Timeout
+  in
+  let specialized =
+    Hamlet_subtractor_generic_helper_producer.recover_missing source
+      [%hamlet.forward.auto]
+  in
+  match Hamlet.Interpreter.run specialized with
+  | Error `Timeout -> ()
+  | Error `Recovery -> Alcotest.fail "residual error used the handled callback"
+  | Ok () -> Alcotest.fail "residual error disappeared"
+
 let () =
   Alcotest.run "automatic propagation"
     [
@@ -294,6 +320,10 @@ let () =
             chain_handles_recovery_added_later;
           Alcotest.test_case "provision error crosses provide" `Quick
             provision_error_crosses_provide;
+          Alcotest.test_case "generic helper handles claimed error" `Quick
+            generic_helper_handles_claimed_error;
+          Alcotest.test_case "generic helper forwards residual error" `Quick
+            generic_helper_forwards_residual_error;
         ] );
       ( "requirements",
         [

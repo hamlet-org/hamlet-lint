@@ -76,7 +76,11 @@
 (test
  (name automatic_propagation_runtime_test)
  (modules automatic_propagation_runtime_test)
- (libraries hamlet automatic_propagation_external alcotest)
+ (libraries
+  hamlet
+  automatic_propagation_external
+  hamlet_subtractor_generic_helper_producer
+  alcotest)
  (preprocess
   (staged_pps hamlet-subtractor.ppx)))
 

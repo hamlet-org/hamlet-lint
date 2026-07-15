@@ -12,3 +12,8 @@ let case_generic_first =
 let case_generic_second =
   Hamlet_subtractor_generic_helper_producer.recover_missing second_source
     [%hamlet.forward.auto]
+
+let generic_first_handled =
+  Hamlet.Combinators.catch case_generic_first ~handler:(function
+    | `Recovery -> Hamlet.Combinators.return ()
+    | `Timeout -> Hamlet.Combinators.return ())

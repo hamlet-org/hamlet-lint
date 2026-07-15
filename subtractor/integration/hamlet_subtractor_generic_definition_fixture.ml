@@ -38,3 +38,8 @@ let second_source : (unit, second_errors, Hamlet.never) Hamlet.t = assert false
 let first_specialization = recover_missing first_source [%hamlet.forward.auto]
 
 let second_specialization = recover_missing second_source [%hamlet.forward.auto]
+
+let first_handled =
+  Hamlet.Combinators.catch first_specialization ~handler:(function
+    | `Recovery -> Hamlet.Combinators.return ()
+    | `Timeout -> Hamlet.Combinators.return ())
