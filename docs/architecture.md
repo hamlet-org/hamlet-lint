@@ -158,8 +158,9 @@ At the call site:
    and final `[%hamlet.forward.auto]` argument.
 2. The resolver loads the callee's retained contract and proves the concrete
    caller input.
-3. `hamlet_subtractor_generic_generator.ml` creates one exhaustive rank-2
-   dispatcher per marker and bundles them into the final argument.
+3. `hamlet_subtractor_generic_generator.ml` creates one exhaustive dispatcher
+   per marker. Its two callbacks may return any common result type, so the same
+   slot works for both error and requirement handlers.
 
 The helper body is compiled once. Callers receive its symbolic contract, not
 its source code.
@@ -169,8 +170,8 @@ its source code.
 An annotated helper may directly call an earlier generic helper. The outer
 contract substitutes its symbolic source into the inner contract, namespaces
 the inner slot IDs, and incorporates the inner output before resolving later
-markers. The final outer ABI still has one evidence argument; nested and local
-slots are flattened into that bundle.
+markers. The exported outer function still has one evidence argument; nested
+and local slots are flattened into that bundle.
 
 No body inlining occurs. Cross-module nesting uses the companion contract from
 the dependency `.cmi`, while same-module nesting uses the already resolved
@@ -195,7 +196,7 @@ earlier definition. Recursive contracts are refused.
 - `subtractor/hamlet_subtractor_ppx.ml` coordinates the complete lifecycle and
   returns the final AST.
 - `subtractor/hamlet_subtractor_resolver.ml` is the resolver executable entry
-  point; its server types one prepared probe and returns the normalized result.
+  point; its server types one prepared probe and returns immutable proof data.
 
 For the exact value model and refusal rules, continue with
 [Proof Model](./proof-model.md).

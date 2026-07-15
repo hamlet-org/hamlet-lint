@@ -361,6 +361,39 @@ must be acyclic. Recursive or mutually recursive helper contracts are refused.
 Fix: break the cycle with a concrete exact operation or move the recursive
 portion outside automatic generic propagation.
 
+## `sandbox_cause` as a generic error source
+
+`sandbox_cause` changes an arbitrary caller error type `'e` into
+`'e Hamlet.Cause.t`:
+
+```ocaml
+let[@hamlet.generic] inspect source =
+  Hamlet.Combinators.catch
+    (Hamlet.Combinators.sandbox_cause source)
+    ~handler:(function
+      | [%hamlet.propagate_e.auto] -> .)
+```
+
+The current symbolic contract can preserve its requirements but cannot express
+that type-level error mapping exactly, so this generic error flow is refused.
+
+Fix: use `sandbox` when the whole cause should become a success value, or place
+an explicit error universe after `sandbox_cause`.
+
+## Manual scope carriers
+
+`Hamlet.Scope.use` and `Hamlet.Scope.use_with` are manual lifecycle operations,
+not `Hamlet.Combinators` source transformations, so a generic source cannot
+flow through them automatically:
+
+```ocaml
+let[@hamlet.generic] use_existing scope source =
+  Hamlet.Scope.use scope source
+```
+
+Fix: use `Combinators.scoped` or `scoped_with` when their lifetime fits, or put
+an explicit row boundary after the manual scope operation.
+
 ## Unsupported compiler mode
 
 The resolver can reproduce only compiler settings reported through the PPX

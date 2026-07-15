@@ -77,15 +77,16 @@ Consider:
 let build () = Hamlet.Combinators.fail `Missing
 ```
 
-The exported or locally generalized type of `build` owns fresh variables. For
-the occurrence `build ()`, the resolver takes a fresh copy of that type and
-asks whether the row tail can be closed to the visible leaves.
+The type of `build` is polymorphic, so each call gets its own fresh instance.
+For `build ()`, the resolver tests only that instance: can `` `Missing `` be
+treated as the complete error row without also deciding the type of some
+argument or surrounding value? Here the answer is yes, because the error is
+created inside `build`.
 
-“Without changing variables outside the copy” means closing the row must not
-force a choice for a type variable shared with an argument, callback, object,
-mutable cell, or surrounding binding. If another value would observe the
-choice, the row belongs to the environment rather than to `build`, so the
-resolver refuses it.
+The test is refused if closing the row would also constrain an argument,
+callback, object, mutable cell, or surrounding binding. In that case the
+environment, rather than `build`, chooses the errors, so the resolver cannot
+claim a complete list locally.
 
 For example, this row is controlled by the caller and cannot be closed locally:
 
@@ -221,7 +222,7 @@ The resolver proof is not a replacement type checker. After generation:
 - the compiler or Merlin types the final AST normally;
 - generated patterns must be valid for the inferred input type;
 - generated forwarding expressions must have the inferred output type;
-- the helper's evidence ABI must agree across `.cmi` boundaries.
+- the helper's exported evidence argument must agree across `.cmi` boundaries.
 
 Any uncertainty before generation is a refusal. A type error after successful
 generation is an implementation bug.

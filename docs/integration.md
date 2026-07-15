@@ -50,7 +50,8 @@ Merlin then types the final generated program normally, so the proof cannot
 replace the ordinary OCaml type check.
 
 Generic helpers use the same round trip. A definition exports a small symbolic
-contract in a generated companion module. A call containing
+contract in a hidden generated module declaration that survives in its `.cmi`.
+A call containing
 `[%hamlet.forward.auto]` loads that contract from the callee's `.cmi`, applies
 it to the caller's concrete rows, and generates exhaustive evidence records.
 
@@ -64,9 +65,9 @@ never return to the PPX.
 
 The request carries the probe AST, source locations, supported compiler flags,
 include paths, marker and contract expectations, and version fingerprints. The
-response carries exact proof values or a structured refusal. Both directions
-are bounded and correlated: missing results, duplicates, timeouts, crashes,
-oversized payloads, and version mismatches are errors.
+response carries exact proof values or a structured refusal. Each response
+must match the request ID and expected markers. Missing results, duplicates,
+timeouts, crashes, oversized payloads, and version mismatches are errors.
 
 ### How the PPX finds it
 
@@ -126,7 +127,7 @@ A refusal means one of three things:
 
 - the Dune target used the wrong PPX phase;
 - the effect row, handler, generic contract, or dependency flow was not exact;
-- the resolver could not run or correlate its response.
+- the resolver could not run or its response did not match the request.
 
 The diagnostic names the failed condition and the available explicit boundary.
 A final compiler error after successful generation is a subtractor bug, because

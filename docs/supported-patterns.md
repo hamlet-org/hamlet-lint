@@ -268,7 +268,8 @@ operations preserve the source effects and add exact callback effects.
 
 ## Scope and resource primitives
 
-Direct visible uses of scope and resource combinators are traced:
+Direct visible uses of scope and resource combinators are traced. A bounded
+resource lifetime combines the effects of acquire, use, and release:
 
 ```ocaml
 Hamlet.Combinators.acquire_use_release acquire
@@ -276,10 +277,21 @@ Hamlet.Combinators.acquire_use_release acquire
   ~release:(fun resource exit -> release resource exit)
 ```
 
-The combined effects of `acquire`, `use`, and `release` are included. Supported
-related forms include `ensuring`, `add_finalizer`, `add_finalizer_exit`, and
-`acquire_release`. `scoped`, `scoped_with`, `or_die`, `thaw`, `sandbox`, and
-`sandbox_cause` apply their verified channel transformation.
+Registering cleanup adds the generated `Scope` requirement as well as the
+cleanup computation's own requirements:
+
+```ocaml
+Hamlet.Combinators.add_finalizer cleanup
+```
+
+The same rule applies to `add_finalizer_exit` and `acquire_release`. `ensuring`
+combines the source and finalizer effects. `scoped` removes the `Scope`
+requirement, while `scoped_with` subtracts whichever requirement arms its
+inline handler supplies.
+
+`or_die` and `sandbox` clear the typed-error channel; `thaw` widens a proven
+empty error channel. `sandbox_cause` is deliberately more limited because it
+changes each arbitrary error type to `Cause.t`; see the refused guide.
 
 ## Generic error helper
 

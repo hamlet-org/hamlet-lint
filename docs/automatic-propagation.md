@@ -94,7 +94,9 @@ include:
   `acquire_use_release` where their effect-producing callbacks are visible.
 
 This is a tracing boundary, not a claim that every possible higher-order use of
-those functions is accepted. See the small examples in
+those functions is accepted. In particular, `sandbox_cause` cannot carry a
+generic error row because it maps `'e` to `'e Cause.t`, and manual
+`Hamlet.Scope.use` flows require an explicit boundary. See the small examples in
 [Supported Patterns](./supported-patterns.md) and
 [Refused Patterns](./refused-patterns.md).
 
@@ -124,8 +126,8 @@ cannot express the intended public row, for example when an API deliberately
 widens a computation that currently constructs one error. The two PPX
 annotations have different jobs:
 
-- `[@hamlet.generic]` intentionally changes the exported function ABI by
-  appending one generated evidence argument;
+- `[@hamlet.generic]` changes the exported function type: compiled callers pass
+  one final generated evidence argument;
 - `[%hamlet.forward.auto]` asks the caller's PPX to build that argument from
   the concrete source row.
 
