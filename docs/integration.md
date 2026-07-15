@@ -24,7 +24,7 @@ uninstalled raw-Merlin fixture so Dune builds the local resolver before the
 editor query. Installed consumers deliberately omit that source-tree edge.
 
 For application-level usage, see
-[Automatic Propagation](../../docs/automatic-propagation.md). This document
+[Automatic Propagation](./automatic-propagation.md). This document
 explains what happens inside the preprocessing process and how the compiler and
 editor paths stay equivalent.
 
@@ -114,10 +114,17 @@ and type variables cannot leak into the caller.
 Automatic propagation can prove an unannotated local source when its typed
 construction is in the audited provenance domain. The resolver follows real
 Hamlet UIDs through direct primitives, generated `Tag.summon`, selected direct
-combinators, binding operators, and all possible results of supported local
-control flow. It then applies the normal fresh principal-scheme closing check.
-It never treats the printed visible tags of an arbitrary expression as a closed
-universe.
+combinators, binding operators, package-typed modules unpacked from verified
+generated summons, and all possible results of supported local control flow.
+It then applies the normal fresh principal-scheme closing check. It never treats
+the printed visible tags of an arbitrary expression as a closed universe.
+
+When `ppx_hamlet` lowers `Service.Tag.summon`, it preserves the package type on
+the `(module Service)` callback pattern. The resolver verifies the lowered
+`Combinators.summon` key/tag pair before recording that local module identifier,
+and accepts only Hamlet effects invoked through that identifier. This covers a
+concrete builder that summons `Logger`, calls `Logger.log`, summons `Clock`, and
+calls `Clock.now`; it does not authorize arbitrary first-class module escapes.
 
 The same rule covers a directly applied local builder. The builder must be a
 locally bound, independently generalized function whose body traces
@@ -294,11 +301,8 @@ exact OCaml patch for each package release. Compatibility begins at OCaml
 versions are checked exactly. Installing independently versioned Hamlet and
 subtractor packages is unsupported.
 
-The former `hamlet-lint` package lineage is not part of the automatic
-propagation workflow. Its old releases and commands are historical, and this
-project installs no `hamlet-lint` or `hamlet-lint-extract` executable. The
-subtractor runs through the normal project PPX and returns the exact AST that
-the compiler and editor type.
+The subtractor runs through the normal project PPX and returns the exact AST
+that the compiler and editor type. It installs no separate analysis executable.
 
 ## Test layers
 

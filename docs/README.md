@@ -16,7 +16,7 @@ Read them in this order:
    diagnostics, packaging, and the acceptance harness.
 
 For normal application usage, start with
-[Automatic Propagation](../../docs/automatic-propagation.md) instead.
+[Automatic Propagation](./automatic-propagation.md) instead.
 
 ## Reading the code
 
@@ -41,7 +41,6 @@ This repository's uninstalled source-tree fixture uses a same-context lookup
 derived from the running `.ppx` executable, with an explicit build dependency
 that is not needed by consuming repositories. Neither mode searches `PATH`.
 
-The historical `hamlet-lint` repository provided the Typedtree-analysis basis
-for this package. Its old packages and commands are historical. This project
-installs no lint CLI: automatic propagation is delivered only through the PPX
-and its installation-relative resolver.
+Automatic propagation is delivered only through the PPX and its
+installation-relative resolver; consuming projects do not invoke a separate
+analysis command.

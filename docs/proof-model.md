@@ -150,7 +150,7 @@ only under a narrower principal-scheme proof:
 4. a fresh instance can be closed to the visible fields without constraining
    anything in the surrounding lexical environment;
 5. typed UID provenance does not lead to a parameter, mutable cell, object
-   field, first-class module escape, or opaque higher-order input.
+   field, unverified first-class module escape, or opaque higher-order input.
 
 The fresh closing check is performed on a copy. The user's scheme is never
 mutated.
@@ -173,6 +173,10 @@ The traced domain is intentionally small:
 
 - direct canonical `success`, `return`, `fail`, and `summon` calls;
 - generated `Tag.summon` calls whose declaration has the service-tag metadata;
+- Hamlet-effect applications through a local module identifier only when that
+  identifier was package-typed by the PPX and unpacked from a verified generated
+  summon; the lowered `Combinators.summon` key/tag pair must identify the same
+  generated service;
 - direct canonical `Combinators.chain`, `both`, `map`, `catch`,
   `catch_defect`, `map_fail`, `or_die`, `thaw`, `tap`, `tap_fail`,
   `tap_defect`, and `tap_cause` calls when every contributing source and
@@ -197,9 +201,9 @@ on its argument.
 
 The opposite channel is still independently exact or opaque. Exactness for one
 channel never fabricates an exact proof for the other. Higher-order callbacks,
-mutable or object sources, first-class module escapes, indirect combinator
-aliases, unsupported branches, recursive builders, labelled or optional local
-builder applications, and any unrecognized composition refuse.
+mutable or object sources, unverified first-class module escapes, indirect
+combinator aliases, unsupported branches, recursive builders, labelled or
+optional local builder applications, and any unrecognized composition refuse.
 
 ### Certified computation
 
@@ -432,7 +436,8 @@ Automatic elaboration refuses when exact evidence is unavailable, including:
 
 - abstract, hidden, private, fixed, or genuinely open rows;
 - parameter-rooted or unresolved row variables;
-- unsupported higher-order, mutable, object, or first-class module flows;
+- unsupported higher-order, mutable, object, or unverified first-class module
+  flows;
 - ambiguous structural-to-nominal catalogue mapping;
 - partial grouped leaves;
 - unsupported patterns or requirement helper calls;

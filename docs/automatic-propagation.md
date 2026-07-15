@@ -37,11 +37,9 @@ This gives the feature three important properties:
    and asks for an explicit `%hamlet.te` or `%hamlet.ts` annotation. Hamlet does
    not guess or silently widen the result.
 
-There is no runtime reflection, editor plugin, linter command, or
-linter-and-rewrite step. The generated code uses the existing typed
-`Hamlet.Combinators.fail`, `Hamlet.Dispatch.need`, and `Errors.Cases` APIs.
-The historical `hamlet-lint` project supplied the original Typedtree analysis;
-its packages and commands are historical and are not part of this workflow.
+There is no runtime reflection, editor plugin, or external rewrite command.
+The generated code uses the existing typed `Hamlet.Combinators.fail`,
+`Hamlet.Dispatch.need`, and `Errors.Cases` APIs.
 
 ## Project setup
 
@@ -93,10 +91,28 @@ The PPX then derives the resolver beside its own `.ppx` build directory in the
 same Dune build context. Installed projects use the resolver from the
 `hamlet-subtractor` Dune site and must not copy this source-tree stanza.
 
-The ordinary `(pps hamlet-subtractor.ppx)` form is intentionally unsupported for
-automatic markers. It can run before dependency interfaces exist and therefore
-cannot prove cross-module rows. Hamlet reports this configuration at the
-marker instead of producing an imprecise fallback.
+### Why `staged_pps` is required
+
+`pps` is Dune's ordinary early preprocessing form. It is appropriate for
+syntax rewriting, but it can run before the CMI files for the target's
+dependencies are available to the PPX. Automatic propagation needs those
+interfaces: the resolver types a temporary probe against the live compilation
+context to prove the exact input row, including values and service tags defined
+in another compilation unit.
+
+`staged_pps` runs the same PPX bundle during Dune's compiler stage, after those
+dependency interfaces exist. The resolver can therefore type the probe, replace
+the marker with the exact forwarding AST, and let both the compiler and editor
+type that final result. `(pps hamlet-subtractor.ppx)` is intentionally rejected
+for automatic markers rather than producing an imprecise fallback.
+
+A dependency interface is the compiled `.cmi` description of another module:
+it records exported values, types, service tags, and the identities used by the
+resolver to distinguish real Hamlet operations from lookalikes. The current
+file can be an unsaved editor buffer because the PPX receives its live AST, but
+an unsaved dependency is represented only by its last Dune-built `.cmi` until
+that dependency is rebuilt. This is the same compilation boundary Dune uses for
+ordinary OCaml type checking.
 
 Modules that only declare services and never use an automatic marker may keep
 using the regular rewriter:
@@ -112,9 +128,12 @@ unsaved edit in the active module is visible immediately. An unsaved edit in a
 different module is represented by that module's last built interface until
 Dune rebuilds it.
 
-Do not enable Merlin's optional external PPX result cache. It does not include
-dependency interfaces in its cache key and can therefore skip required
-elaboration. Standard Dune-generated configuration leaves this cache disabled.
+Keep Merlin's optional external PPX result cache disabled. Its cache key does
+not include the dependency `.cmi` files used by the resolver. If an upstream
+module changes, Merlin could reuse an expansion proved against the old
+interface instead of rerunning staged elaboration against the new one. Standard
+Dune-generated Merlin configuration leaves this cache disabled, so it receives
+the same dependency-aware expansion as a normal build.
 
 If a target combines Hamlet with another whole-file PPX that rewrites the
 upstream effect or handler, that transform must run before Hamlet elaboration.
@@ -286,6 +305,13 @@ let with_logger =
       | [%hamlet.propagate_s.auto] -> .)
 ```
 
+`ppx_hamlet` supplies the package type for each `(module Service)` pattern.
+After lowering `Service.Tag.summon` to the primitive summon call, the resolver
+verifies the generated key/tag pair and follows only Hamlet effects called
+through that locally unpacked module. It can therefore prove the `Logger.log`
+and `Clock.now` calls above without treating an arbitrary first-class module
+as an independent source.
+
 This is deliberately a proof of a concrete source, not a general row-difference
 operator. The resolver accepts only recognized direct Hamlet calls and binding
 operators, and every relevant builder branch must itself have an independent
@@ -298,10 +324,10 @@ with any applied argument. A unit builder is the usual case.
 This does not make a parameterized helper automatically polymorphic in its
 caller's row. In particular, a function whose effect row depends on a parameter,
 or whose source comes through a higher-order callback, mutable state, object,
-first-class module, indirect combinator alias, or unrecognized composition
-still requires the explicit `%hamlet.te` or `%hamlet.ts` boundary. A marker in a
-generic helper body is elaborated when that body is compiled, not again for each
-caller or downstream compilation unit.
+unverified first-class module escape, indirect combinator alias, or unrecognized
+composition still requires the explicit `%hamlet.te` or `%hamlet.ts` boundary.
+A marker in a generic helper body is elaborated when that body is compiled, not
+again for each caller or downstream compilation unit.
 
 Transparent public type aliases may be expanded. Abstract, private, or hidden
 aliases are not treated as evidence. Aliases of combinator functions and
@@ -498,5 +524,5 @@ repository.
   explains service declarations, tags, and implementations.
 - [Hamlet Error Propagation](https://github.com/hamlet-org/hamlet/blob/main/docs/error-propagation.md)
   explains the generated linear catalogue used at cross-unit boundaries.
-- [Subtractor Internals](../subtractor/docs/README.md) explains the probe,
+- [Subtractor Internals](./README.md) explains the probe,
   proof model, compiler integration, and final AST generation for maintainers.

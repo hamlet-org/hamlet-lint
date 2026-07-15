@@ -1,10 +1,10 @@
 # hamlet-subtractor
 
 `hamlet-subtractor` gives Hamlet exact automatic propagation for errors and
-service requirements. It is a staged PPX package, not a command-line linter:
-it replaces an automatic marker with ordinary, type-safe OCaml before Dune,
-Merlin, or OCaml-LSP type-check the module. Consequently, hover shows the
-same precise residual effect type that a build sees.
+service requirements. It is a staged PPX package: it replaces an automatic
+marker with ordinary, type-safe OCaml before Dune, Merlin, or OCaml-LSP
+type-check the module. Consequently, hover shows the same precise residual
+effect type that a build sees.
 
 ```ocaml
 Hamlet.Combinators.catch source ~handler:(fun error ->
@@ -53,9 +53,11 @@ that target. No editor plugin, daemon, source rewrite, or resolver command is
 needed. Merlin and OCaml-LSP receive the same final PPX AST as Dune, including
 for unsaved text in the active buffer.
 
-The ordinary `(pps hamlet-subtractor.ppx)` form is deliberately unsupported
-for automatic markers. Use `staged_pps`: it gives the resolver the dependency
-interfaces required to prove a cross-compilation-unit row.
+Use `staged_pps` for every target with `propagate_e.auto` or
+`propagate_s.auto`; ordinary `(pps hamlet-subtractor.ppx)` is rejected for
+those markers. Targets that only need Hamlet declarations can continue to use
+`(pps ppx_hamlet)`. [Automatic Propagation](docs/automatic-propagation.md)
+explains why the staged form is required.
 
 When a finite exact input row cannot be demonstrated, compilation points to
 the marker and asks for the established explicit boundary:
@@ -69,31 +71,12 @@ This is a soundness boundary, not a wider automatic fallback. See
 [Automatic Propagation](docs/automatic-propagation.md) for supported forms,
 examples, diagnostics, and the explicit fallback.
 
-## Compatibility and releases
+## Compatibility
 
-The resolver reads OCaml compiler Typedtree APIs. Each package targets one
-exact OCaml patch and pins `hamlet` with `ppx_hamlet` from one immutable
-GitHub commit. Development uses the current branch, but the release dispatcher
-resolves that branch once and rejects any non-commit release input before it
-generates opam metadata. Compatibility starts at OCaml 5.5.0. The current
-matrix contains OCaml 5.5.0; support for later compiler patches is added with
-an explicit compatibility layer and matching CI image.
-
-Maintainer release runs need read access to the private companion repository.
-Set the optional `HAMLET_READ_TOKEN` GitHub Actions secret with repository
-contents read access, or grant the subtractor workflow token the same access.
-The credential is used only for the CI Git transport and never appears in the
-generated opam metadata.
-
-There is one forward-moving source tree. While Hamlet is installed from Git,
-the paired pins ensure the resolver is never combined with an unrelated Hamlet
-PPX or compiler version. When Hamlet is published in opam, the pins can become
-ordinary exact package constraints without changing the Dune setup.
-
-`hamlet-lint` is the repository and package lineage from which the Typedtree
-analysis was migrated. Its old packages and releases remain historical. This
-repository does not install, document, or expose `hamlet-lint` or
-`hamlet-lint-extract` commands.
+The resolver uses OCaml compiler Typedtree APIs, so each release targets one
+exact OCaml patch and a matching Hamlet/`ppx_hamlet` pair. The current target is
+OCaml 5.5.0. See [Automatic Propagation](docs/automatic-propagation.md) for the
+full compatibility and staged-elaboration model.
 
 ## Repository development
 
@@ -112,7 +95,7 @@ make all
 prints its location for manual editor inspection. The normal target removes
 that temporary project after the test.
 
-Maintainers should start with [Subtractor Internals](subtractor/docs/README.md).
+Maintainers should start with [Subtractor Internals](docs/README.md).
 It explains the probe, compiler evidence, proof model, resolver protocol,
 generation, integration, and test layers.
 

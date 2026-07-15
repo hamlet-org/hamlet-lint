@@ -1,9 +1,8 @@
-# Historical hamlet-lint changelog
+# Historical development changelog
 
-This archive records the former lint project that supplied the Typedtree
-analysis now used privately by `hamlet-subtractor`. It does not describe
-commands shipped by this project. Current behavior, releases, and supported
-compiler pairs are documented in the README and `docs/`.
+This archive records development that predates the current package. It does not
+describe commands shipped by this project. Current behavior, releases, and
+supported compiler pairs are documented in the README and `docs/`.
 
 Entries that affect only a specific OCaml target are tagged
 `[5.4 only]`, `[5.5 only]`, etc. Unlabeled entries affect every
@@ -172,7 +171,7 @@ callee's canonical name moved by one suffix.
 - `ensuring`'s handler returns `(unit, 'e, 'r) h` — same `'e`/`'r`
   as input, no narrowing.
 
-**Cause/Die rename**: hamlet-lint never referenced `Cause.t` or
+**Cause/Die rename**: the prior extractor never referenced `Cause.t` or
 `Die.t` in source/tests/docs (only in prose CHANGELOG entries
 documenting prior uptakes, which stay as historical record).
 
@@ -239,7 +238,7 @@ silently aliasing at the row level.
 **Linter impact: none.** `extract/tags.ml`'s row enumeration is
 set-based on label *strings* and explicitly ignores payloads
 (`Rpresent _` / `Reither _` patterns discard the payload). The
-PPX-emitted handler shapes hamlet-lint matches against — pure-
+PPX-emitted handler shapes the prior extractor matched against — pure-
 propagate `failure(alias)`, `Tag.give(alias) impl`,
 `Dispatch.need(alias)` — are structurally unchanged: only the
 *type* of `alias` changed (now an opaque payload-carrying value),
@@ -335,8 +334,8 @@ the repo is cppo-aware.
 
 ## 2026-04-15: repo split and simplifications
 
-hamlet-lint moved to its own repository (`hamlet-org/hamlet-lint`);
-the previous `lint/` subtree in `hamlet-org/hamlet` was abandoned
+The earlier implementation moved to a separate repository; the previous
+subtree in `hamlet-org/hamlet` was abandoned
 without merging. Layout flattened to top-level libraries: `schema/`,
 `config/`, `analyzer/`, `extract/`, `test/`.
 
@@ -582,7 +581,7 @@ First working walker + analyzer.
 
 **Architecture:**
 
-- Two binaries, `hamlet-lint-extract` and `hamlet-lint`, connected via a
+- Two binaries, an extractor and a reporter, connected via a
   streamable ND-JSON contract with an explicit `schema_version: 1` header
 - `extract/compat.ml` isolates every call that touches `compiler-libs`,
   verified experimentally against real Hamlet `.cmt` files on OCaml 5.4
