@@ -251,9 +251,11 @@ recognized `Tag.summon` and `let*` composition:
 ```ocaml
 let requirement_source =
   let open Hamlet.Combinators in
-  let* (_ : Logger.Tag.t) = Logger.Tag.summon in
-  let* (_ : Clock.Tag.t) = Clock.Tag.summon in
-  return "ready"
+  let* (module Logger) = Logger.Tag.summon in
+  let* () = Logger.log "ciao" in
+  let* (module Clock) = Clock.Tag.summon in
+  let* now = Clock.now () in
+  return (Printf.sprintf "ready at %d" now)
 
 let with_logger =
   Hamlet.Combinators.provide requirement_source
@@ -270,9 +272,11 @@ the same basis:
 ```ocaml
 let build_requirement_source () =
   let open Hamlet.Combinators in
-  let* (_ : Logger.Tag.t) = Logger.Tag.summon in
-  let* (_ : Clock.Tag.t) = Clock.Tag.summon in
-  return "ready"
+  let* (module Logger) = Logger.Tag.summon in
+  let* () = Logger.log "ciao" in
+  let* (module Clock) = Clock.Tag.summon in
+  let* now = Clock.now () in
+  return (Printf.sprintf "ready at %d" now)
 
 let with_logger =
   Hamlet.Combinators.provide (build_requirement_source ())

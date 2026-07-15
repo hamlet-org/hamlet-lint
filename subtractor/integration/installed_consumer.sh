@@ -249,9 +249,11 @@ let error_effect =
 
 let requirement_source () =
   let open Combinators in
-  let* (_ : Logger.Tag.t) = Logger.Tag.summon in
-  let* (_ : Clock.Tag.t) = Clock.Tag.summon in
-  return "ready"
+  let* (module Logger) = Logger.Tag.summon in
+  let* () = Logger.log "ciao" in
+  let* (module Clock) = Clock.Tag.summon in
+  let* now = Clock.now () in
+  return (Printf.sprintf "ready at %d" now)
 
 let requirement_effect =
   Combinators.provide (requirement_source ()) ~handler:(fun requirement ->
@@ -274,11 +276,13 @@ let check expected = function
 
 let () =
   check "recovered" (Interpreter.run error_effect);
-  check "ready" (Interpreter.run requirement_done)
+  check "ready at 42" (Interpreter.run requirement_done)
 EOF
 
 reject_file_text "$consumer/main.ml" "let error_source :"
 reject_file_text "$consumer/main.ml" "let requirement_source () :"
+reject_file_text "$consumer/main.ml" ": Logger.Tag.t"
+reject_file_text "$consumer/main.ml" ": Clock.Tag.t"
 
 export HAMLET_SUBTRACTOR_RESOLVER_TRACE="$trace"
 unset DUNE_DIR_LOCATIONS DUNE_SOURCEROOT
