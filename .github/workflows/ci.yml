@@ -19,6 +19,9 @@ permissions:
 env:
   OCAML_COMPILER: "5.5.0"
   MINIMUM_DUNE: "3.18.2"
+  # ci pins the private companion source explicitly. public pin-depends are
+  # for normal consumer installation and must not override that checkout.
+  OPAMIGNOREPINDEPENDS: "true"
   # development CI follows the companion Hamlet main branch. releases use
   # exact published pairs.
   HAMLET_GIT_REF: main
@@ -286,9 +289,9 @@ jobs:
       - run: test "$(opam exec -- dune --version)" = "${{ env.MINIMUM_DUNE }}"
 
       # test dependencies include OCaml-LSP, whose current Dune dependency is
-      # newer than this compatibility floor. the modern-Dune job runs the full
-      # behavioral contract.
-      - run: opam exec -- make build
+      # newer than this compatibility floor. @install excludes test stanzas;
+      # the modern-Dune job runs the full behavioral contract.
+      - run: opam exec -- dune build @install
 
   build-macos:
     name: build (macos-latest, 5.5.0)
