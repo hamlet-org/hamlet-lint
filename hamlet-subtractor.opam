@@ -41,12 +41,3 @@ build: [
 ]
 dev-repo: "git+https://github.com/hamlet-org/hamlet-subtractor.git"
 x-maintenance-intent: ["(latest)"]
-# Hamlet is not published in opam yet. Pin both packages from the same source
-# so an `opam install` of Hamlet Subtractor has the complete effect-system
-# dependency graph without a separately managed local checkout.
-pin-depends: [
-  [ "hamlet.dev"
-    "git+https://github.com/hamlet-org/hamlet.git#main" ]
-  [ "ppx_hamlet.dev"
-    "git+https://github.com/hamlet-org/hamlet.git#main" ]
-]

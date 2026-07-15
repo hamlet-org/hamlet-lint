@@ -7,14 +7,13 @@
 #
 # %%VERSION%%         e.g. 0.1.0~5.5.0
 # %%OCAML_TARGET%%    the exact OCaml patch for this compatibility build
-# %%HAMLET_GIT_COMMIT%% the immutable Hamlet source commit for this pair
+# %%HAMLET_VERSION%%  the exact published Hamlet and PPX version
 # %%CHECKSUM_SHA256%% the tarball checksum computed during release
 # %%TARBALL_URL%%     the GitHub Release asset URL
 #
-# Keep dependencies and package metadata aligned with the generated root opam
-# file. Hamlet is not published in opam yet, so the two packages are pinned
-# from one immutable GitHub commit. This preserves the single source revision
-# required by the resolver and the Hamlet PPX.
+# Hamlet and its PPX are published opam packages. both constraints must remain
+# exact: the staged PPX and the Typedtree resolver are released as one
+# compatibility family with the matching Hamlet release.
 opam-version: "2.0"
 version: "%%VERSION%%"
 synopsis: "Exact automatic propagation for Hamlet"
@@ -28,8 +27,8 @@ bug-reports: "https://github.com/hamlet-org/hamlet-subtractor/issues"
 depends: [
   "ocaml" {= "%%OCAML_TARGET%%"}
   "dune" {>= "3.18"}
-  "hamlet"
-  "ppx_hamlet"
+  "hamlet" {= "%%HAMLET_VERSION%%"}
+  "ppx_hamlet" {= "%%HAMLET_VERSION%%"}
   "ppxlib" {>= "0.38.0"}
   "dune-site"
   "yojson" {>= "2.0.0"}
@@ -38,12 +37,6 @@ depends: [
   "ocaml-lsp-server" {with-test}
   "fmt" {>= "0.11.0" & with-test}
   "odoc" {with-doc}
-]
-pin-depends: [
-  [ "hamlet.dev"
-    "git+https://github.com/hamlet-org/hamlet.git#%%HAMLET_GIT_COMMIT%%" ]
-  [ "ppx_hamlet.dev"
-    "git+https://github.com/hamlet-org/hamlet.git#%%HAMLET_GIT_COMMIT%%" ]
 ]
 build: [
   [

@@ -19,8 +19,6 @@
 DUNE := opam exec -- dune
 PROMOTE ?= 0
 OCAML_VERSION ?= 5.5.0
-HAMLET_GIT_URL ?= https://github.com/hamlet-org/hamlet.git
-HAMLET_GIT_REF ?= main
 
 .PHONY: all setup deps build test fmt fmt-fix doc opam clean promote watch help installed-consumer installed-consumer-keep _maybe_promote
 .DEFAULT_GOAL := help
@@ -30,8 +28,6 @@ help:
 
 setup:
 	opam switch create . --empty --yes
-	opam pin add --no-action --yes hamlet "$(HAMLET_GIT_URL)#$(HAMLET_GIT_REF)"
-	opam pin add --no-action --yes ppx_hamlet "$(HAMLET_GIT_URL)#$(HAMLET_GIT_REF)"
 	opam install --yes ocaml-base-compiler.$(OCAML_VERSION)
 	$(MAKE) --no-print-directory deps
 	git config core.hooksPath .githooks
@@ -60,6 +56,7 @@ doc:
 opam:
 	opam lint hamlet-subtractor.opam
 	./release/check-opam-template.sh
+	./release/check-policy.sh
 
 installed-consumer:
 	opam exec -- ./subtractor/integration/installed_consumer.sh

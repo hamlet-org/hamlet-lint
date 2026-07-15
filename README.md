@@ -20,22 +20,15 @@ use `[%hamlet.propagate_s.auto]` with `Hamlet.Combinators.provide`; a direct
 
 ## Use in a Hamlet project
 
-Hamlet is not published in opam yet. Pin Hamlet, its PPX, and this package from
-GitHub together:
+Install Hamlet and the matching Subtractor package from opam:
 
 ```sh
-opam pin add --yes --no-action hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#main"
-opam pin add --yes --no-action ppx_hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#main"
-opam pin add --yes hamlet-subtractor \
-  "git+https://github.com/hamlet-org/hamlet-subtractor.git#automatic-propagation-subtractor"
+opam install hamlet hamlet-subtractor
 ```
 
-`hamlet-subtractor.opam` records the two Hamlet Git pins too, so a future opam
-installation of this package obtains the same source dependencies
-automatically. A local checkout can instead run `make setup`; it uses the
-same URL and lets maintainers override `HAMLET_GIT_URL` and `HAMLET_GIT_REF`.
+The package selected for your exact OCaml compiler requires the same exact
+Hamlet and `ppx_hamlet` version. A local Subtractor checkout can run
+`make setup`; it installs those dependencies from opam too.
 
 Then configure each Dune target that contains an automatic marker with the
 staged bundle:
@@ -71,24 +64,29 @@ examples, diagnostics, and the explicit fallback.
 
 ## Compatibility and releases
 
-The resolver reads OCaml compiler Typedtree APIs. Each package targets one
-exact OCaml patch and pins `hamlet` with `ppx_hamlet` from one immutable
-GitHub commit. Development uses the current branch, but the release dispatcher
-resolves that branch once and rejects any non-commit release input before it
-generates opam metadata. Compatibility starts at OCaml 5.5.0. The current
-matrix contains OCaml 5.5.0; support for later compiler patches is added with
+The resolver reads OCaml compiler Typedtree APIs. Each published package
+targets one exact OCaml patch and requires the matching exact `hamlet` and
+`ppx_hamlet` opam version. Compatibility starts at OCaml 5.5.0. The current
+release family is Hamlet 0.1.0 on OCaml 5.5.0; later compiler patches require
 an explicit compatibility layer and matching CI image.
 
-Maintainer release runs need read access to the private companion repository.
-Set the optional `HAMLET_READ_TOKEN` GitHub Actions secret with repository
-contents read access, or grant the subtractor workflow token the same access.
-The credential is used only for the CI Git transport and never appears in the
-generated opam metadata.
+The release policy has two source files. `release/current-hamlet.sh` selects
+the one supported Hamlet release tag. `release/versions.sh` lists supported
+OCaml patches. A release creates the Cartesian product of those two values,
+skips packages already published or in an open upstream PR, and cannot accept
+a caller-selected Hamlet version, branch, commit, or OCaml matrix. The tag is
+resolved to a commit for release provenance; installed packages use ordinary
+exact opam constraints instead of Git pins.
 
-There is one forward-moving source tree. While Hamlet is installed from Git,
-the paired pins ensure the resolver is never combined with an unrelated Hamlet
-PPX or compiler version. When Hamlet is published in opam, the pins can become
-ordinary exact package constraints without changing the Dune setup.
+When Hamlet releases 0.2.0, update `release/current-hamlet.sh` and dispatch a
+release to publish 0.2.0 for every currently supported OCaml patch. When a new
+OCaml patch is supported, add it only to `release/versions.sh`; the dispatcher
+publishes it only for the configured current Hamlet release. Existing package
+versions remain historical and are never backfilled.
+
+Development CI may still read Hamlet `main` with `HAMLET_READ_TOKEN` so it can
+detect upcoming compatibility changes. That credential is not used by the
+release workflow or by installed users.
 
 `hamlet-lint` is the repository and package lineage from which the Typedtree
 analysis was migrated. Its old packages and releases remain historical. This

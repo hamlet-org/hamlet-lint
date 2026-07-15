@@ -1,71 +1,84 @@
 name: release
 
-# Release workflow. One run = one release pass for N (hamlet, ocaml)
-# pairs at once. Each pair still gets its own git tag and GitHub
-# Release on this repo (lifecycle unchanged), but the opam-repository
-# submission is bundled: one PR with N package directories, the shape
-# the maintainers prefer (cf. dune.3.22.2's 18-package PR).
-#
-# Typically dispatched by release/run.sh, which builds the JSON pairs
-# input from missing pairs (skipping anything already merged or in an
-# open PR upstream). Manual Run Workflow from the Actions UI works too:
-# paste a JSON array as the `pairs` input.
+# release workflow. one run derives the configured current Hamlet release
+# family and publishes one package for every supported OCaml patch. each pair
+# receives its own Git tag and GitHub Release; the opam-repository submission
+# is bundled into one PR.
 on:
   workflow_dispatch:
-    inputs:
-      pairs:
-        description: 'JSON array, e.g. [{"hamlet":"0.1.0","ocaml":"5.5.0","hamlet_git_commit":"0123456789abcdef0123456789abcdef01234567"}]'
-        required: true
-        type: string
 
 permissions:
   contents: write
 
-env:
-  # Hamlet remains outside opam while automatic propagation is introduced.
-  # Each input pair supplies its immutable source commit.
-  HAMLET_GIT_URL: https://github.com/hamlet-org/hamlet.git
-
 jobs:
-  # Re-filter the input list against the current state of opam-repository
-  # so a stale dispatch (manual UI typo, racing run.sh, etc.) self-corrects.
-  # Outputs the filtered JSON as `pairs`, plus a count for the gating
-  # `if:` on downstream jobs (matrix cannot be empty).
+  # derive rows from release/current-hamlet.sh and release/versions.sh, then
+  # filter pairs already published or represented by an open upstream PR.
+  # there is deliberately no workflow input through which a caller could pick
+  # an older Hamlet version, a branch, or a different OCaml matrix.
   plan:
     runs-on: ubuntu-latest
     outputs:
       pairs: ${{ steps.filter.outputs.pairs }}
       count: ${{ steps.filter.outputs.count }}
+      hamlet_version: ${{ steps.filter.outputs.hamlet_version }}
+      hamlet_release_tag: ${{ steps.filter.outputs.hamlet_release_tag }}
+      hamlet_git_commit: ${{ steps.filter.outputs.hamlet_git_commit }}
     steps:
-      - name: Filter out already-published pairs
+      - name: Checkout release policy
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Derive configured unpublished pairs
         id: filter
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PAIRS_IN: ${{ inputs.pairs }}
         run: |
-          if ! jq -e '
-            type == "array" and
-            all(.[];
-              type == "object" and
-              (.hamlet | type == "string" and length > 0) and
-              (.ocaml | type == "string" and length > 0) and
-              (.hamlet_git_commit | type == "string" and test("^[0-9a-f]{40}$")))
-          ' <<< "$PAIRS_IN" >/dev/null; then
-            echo "pairs must contain hamlet, ocaml, and a 40-character lowercase hamlet_git_commit" >&2
-            exit 2
-          fi
+          set -euo pipefail
+          source release/policy.sh
+          validate_release_policy
+          hamlet_git_commit="$(resolve_current_hamlet_commit)"
+          pairs_in="$(release_pairs_json "$hamlet_git_commit")"
+
+          is_published() {
+            local pkg="$1"
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/ocaml/opam-repository/contents/packages/hamlet-subtractor/hamlet-subtractor.${pkg}" \
+              >/dev/null 2>&1
+          }
+
+          collect_in_flight_packages() {
+            local prs pr
+            prs=$(gh pr list --repo ocaml/opam-repository --state open \
+              --search "hamlet-subtractor in:title" --json number --jq '.[].number')
+            for pr in $prs; do
+              gh pr view "$pr" --repo ocaml/opam-repository --json files \
+                --jq '.files[].path' \
+                | sed -nE 's|^packages/hamlet-subtractor/hamlet-subtractor\\.([^/]+)/opam$|\\1|p'
+            done | sort -u
+          }
+
+          mapfile -t in_flight < <(collect_in_flight_packages)
+          is_in_flight() {
+            local pkg="$1" candidate
+            for candidate in "${in_flight[@]}"; do
+              [ "$candidate" = "$pkg" ] && return 0
+            done
+            return 1
+          }
 
           out='[]'
           while read -r pair; do
             hamlet=$(jq -r '.hamlet' <<< "$pair")
             ocaml=$(jq -r '.ocaml' <<< "$pair")
             hamlet_git_commit=$(jq -r '.hamlet_git_commit' <<< "$pair")
-            pkg="${hamlet}~${ocaml}"
-            if gh api \
-                 -H "Accept: application/vnd.github+json" \
-                 "repos/ocaml/opam-repository/contents/packages/hamlet-subtractor/hamlet-subtractor.${pkg}" \
-                 >/dev/null 2>&1; then
+            pkg="$(opam_package_name "$ocaml")"
+            if is_published "$pkg"; then
               echo "skip ${pkg}: already merged on ocaml/opam-repository"
+            elif is_in_flight "$pkg"; then
+              echo "skip ${pkg}: already present in an open opam-repository PR"
             else
               echo "keep ${pkg}"
               out=$(jq -c \
@@ -75,10 +88,13 @@ jobs:
                       '. + [{"hamlet":$h,"ocaml":$o,"hamlet_git_commit":$c}]' \
                       <<< "$out")
             fi
-          done < <(jq -c '.[]' <<< "$PAIRS_IN")
+          done < <(jq -c '.[]' <<< "$pairs_in")
           count=$(jq 'length' <<< "$out")
           echo "pairs=$out" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "hamlet_version=$HAMLET_VERSION" >> "$GITHUB_OUTPUT"
+          echo "hamlet_release_tag=$HAMLET_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "hamlet_git_commit=$hamlet_git_commit" >> "$GITHUB_OUTPUT"
 
   # Per-pair build/test/tag/GitHub Release. Each matrix job mirrors the
   # old single-pair release job exactly, except the rendered opam file
@@ -93,8 +109,9 @@ jobs:
         pair: ${{ fromJSON(needs.plan.outputs.pairs) }}
     runs-on: ubuntu-latest
     env:
-      HAMLET_VERSION: ${{ matrix.pair.hamlet }}
-      HAMLET_GIT_COMMIT: ${{ matrix.pair.hamlet_git_commit }}
+      HAMLET_VERSION: ${{ needs.plan.outputs.hamlet_version }}
+      HAMLET_RELEASE_TAG: ${{ needs.plan.outputs.hamlet_release_tag }}
+      HAMLET_GIT_COMMIT: ${{ needs.plan.outputs.hamlet_git_commit }}
       OCAML_TARGET: ${{ matrix.pair.ocaml }}
       # Opam package version uses the tilde convention for the
       # OCaml-target suffix (idiomatic on opam-repository, see
@@ -115,33 +132,9 @@ jobs:
         with:
           ocaml-compiler: ${{ matrix.pair.ocaml }}
 
-      - name: Authenticate private Hamlet source
-        env:
-          HAMLET_READ_TOKEN: ${{ secrets.HAMLET_READ_TOKEN || github.token }}
+      - name: Install matching published Hamlet packages
         run: |
-          if [ -z "${HAMLET_READ_TOKEN:-}" ]; then
-            echo "::error::Release needs read access to hamlet-org/hamlet. Configure HAMLET_READ_TOKEN with repository read access, or grant this workflow token access to the companion repository."
-            exit 1
-          fi
-          echo "::add-mask::$HAMLET_READ_TOKEN"
-          git config --global \
-            url."https://x-access-token:${HAMLET_READ_TOKEN}@github.com/hamlet-org/".insteadOf \
-            "https://github.com/hamlet-org/"
-          if ! git ls-remote --heads "$HAMLET_GIT_URL" >/dev/null 2>&1; then
-            echo "::error::Release needs read access to hamlet-org/hamlet. Configure HAMLET_READ_TOKEN with repository read access, or grant this workflow token access to the companion repository."
-            exit 1
-          fi
-
-      - name: Install matching Hamlet source
-        run: |
-          if ! [[ "$HAMLET_GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "release requires an immutable 40-character Hamlet commit" >&2
-            exit 2
-          fi
-          source="git+${HAMLET_GIT_URL}#${HAMLET_GIT_COMMIT}"
-          opam pin add -y --no-action hamlet "$source"
-          opam pin add -y --no-action ppx_hamlet "$source"
-          opam install -y hamlet ppx_hamlet
+          opam install -y "hamlet.${HAMLET_VERSION}" "ppx_hamlet.${HAMLET_VERSION}"
           opam install -y . --deps-only --with-test
 
       - name: Build & test
@@ -217,7 +210,7 @@ jobs:
           else
             gh release create "$TAG_NAME" "${{ steps.archive.outputs.tarball }}" \
               --title "hamlet-subtractor ${PKG_VERSION}" \
-              --notes "Packaging release for hamlet ${HAMLET_VERSION} at ${HAMLET_GIT_COMMIT} on OCaml ${OCAML_TARGET}."
+              --notes "Packaging release for Hamlet ${HAMLET_VERSION} (${HAMLET_RELEASE_TAG} at ${HAMLET_GIT_COMMIT}) on OCaml ${OCAML_TARGET}."
           fi
           TARBALL_URL=$(gh release view "$TAG_NAME" --json assets -q '.assets[0].url')
           echo "TARBALL_URL=$TARBALL_URL" >> "$GITHUB_ENV"
@@ -228,7 +221,7 @@ jobs:
           OPAM_OUT="rendered/${PKG_VERSION}/opam"
           sed \
             -e "s|%%VERSION%%|${PKG_VERSION}|g" \
-            -e "s|%%HAMLET_GIT_COMMIT%%|${HAMLET_GIT_COMMIT}|g" \
+            -e "s|%%HAMLET_VERSION%%|${HAMLET_VERSION}|g" \
             -e "s|%%OCAML_TARGET%%|${OCAML_TARGET}|g" \
             -e "s|%%TARBALL_URL%%|${TARBALL_URL}|g" \
             -e "s|%%CHECKSUM_SHA256%%|${{ steps.archive.outputs.sha256 }}|g" \

@@ -45,23 +45,16 @@ its packages and commands are historical and are not part of this workflow.
 
 ## Project setup
 
-Hamlet is not published in opam yet. Pin it, its PPX, and Hamlet Subtractor
-from GitHub before configuring Dune:
+Install Hamlet and Hamlet Subtractor from opam before configuring Dune:
 
 ```sh
-opam pin add --yes --no-action hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#main"
-opam pin add --yes --no-action ppx_hamlet \
-  "git+https://github.com/hamlet-org/hamlet.git#main"
-opam pin add --yes hamlet-subtractor \
-  "git+https://github.com/hamlet-org/hamlet-subtractor.git#automatic-propagation-subtractor"
+opam install hamlet hamlet-subtractor
 ```
 
-The subtractor package records the two Hamlet Git pins as opam metadata too,
-so an opam installation can fetch its source dependencies without a manually
-managed checkout. `hamlet-subtractor` is tied to a specific OCaml
+The selected Subtractor package requires the same exact Hamlet and
+`ppx_hamlet` version. `hamlet-subtractor` is tied to a specific OCaml
 compiler-libs generation. Compatibility begins at OCaml 5.5.0, and the current
-matrix contains 5.5.0. Dune 3.18 or newer is required. This repository tests
+release family is Hamlet 0.1.0 on OCaml 5.5.0. Dune 3.18 or newer is required. This repository tests
 the editor path with Merlin 5.7 for OCaml 5.5.0 and OCaml-LSP 1.26.
 
 Every Dune stanza containing an automatic marker must use the staged Hamlet
