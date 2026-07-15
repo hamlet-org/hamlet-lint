@@ -191,8 +191,25 @@ let second = catch first ~handler:second_handler
 
 The Typedtree records that `second` uses the value bound as `first`. The engine
 therefore resolves `first`, passes its complete error-and-requirement
-certificate to `second`, and then resolves `second`. It reports a deterministic
-error for cycles, opaque links, or unsupported multi-source combinations.
+certificate to `second`, and then resolves `second`.
+
+The earlier result may sit inside supported composition:
+
+```ocaml
+let with_new_effect =
+  let* value = first in
+  operation_that_adds_a_known_effect value
+```
+
+The evidence layer builds a small source plan: “certificate from `first`,
+chained with the exact certificate of `operation_that_adds_a_known_effect`.”
+The engine fills in `first` only after resolving it, unions both channels, and
+uses that combined certificate as the next marker's input.
+
+Each marker may have at most one earlier marker predecessor, but a linear chain
+may contain any number of markers and exact new contributions. Cycles, opaque
+links, and merges of two independently marked values receive deterministic
+errors.
 
 ## Generated code
 

@@ -162,13 +162,16 @@ residual row immediately.
 Suppose the active buffer is `A.ml` and it imports `B`. Merlin sends the PPX
 the current in-memory contents of `A.ml`, but information about `B` comes from
 `B.cmi`, the interface produced the last time Dune compiled `B`. A change to an
-exported type or value in `B` becomes visible while analysing `A.ml` only after
-Dune rebuilds `B.cmi`.
+exported type or value in `B.ml` is therefore not visible from `A.ml` merely
+because `B.ml` was edited or saved. Dune must rebuild `B`; that writes a new
+`B.cmi`. The next analysis of `A.ml` then sees the new API.
 
-Merlin's optional external PPX result cache is unsupported. Its key does not
-include the dependency interfaces that influenced the proof, so it could reuse
-an expansion after an imported row changed. Keep it disabled as described in
-the [public guide](./automatic-propagation.md#why-staged_pps-is-required).
+Merlin's optional external PPX result cache is unsupported. For example, the
+source text of `A.ml` may stay unchanged while a rebuilt `B.cmi` adds a new
+error leaf. That interface changes the forwarding proof even though `A.ml` did
+not change. The external cache key does not include imported `.cmi` contents,
+so it could return the old expansion and omit the new leaf. Keep that optional
+cache disabled. Dune's normal Merlin configuration already does so.
 
 OCaml-LSP delegates OCaml typing and hovers to Merlin. It therefore needs no
 separate Hamlet extension. The acceptance harness tests both a saved document

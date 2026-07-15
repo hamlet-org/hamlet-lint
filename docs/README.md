@@ -4,6 +4,10 @@ Start with the guide that matches your task:
 
 - [Automatic Propagation](./automatic-propagation.md) explains how to use the
   feature in an application.
+- [Supported Patterns](./supported-patterns.md) gives small accepted examples
+  and explains the resulting rows.
+- [Refused Patterns](./refused-patterns.md) shows common refusals, the missing
+  proof, and the explicit fix.
 - [Architecture](./architecture.md) follows one marker through the
   implementation.
 - [Proof Model](./proof-model.md) defines the evidence required before code can

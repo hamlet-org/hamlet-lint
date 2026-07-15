@@ -116,8 +116,16 @@ OCaml often prints a principal value with an open lower bound:
 val program : ('a, [> `Missing | `Timeout ], [> Logger.Tag.r ]) Hamlet.t
 ```
 
-The resolver may close a fresh copy of one channel to its visible leaves only
-when:
+The printed `[> ... ]` is only a lower bound. The extra fact comes from how an
+exported value is typed: OCaml stores a reusable type scheme and creates fresh
+type variables each time the value is used.
+
+The resolver copies that scheme for the current use. On the copy, it tries to
+replace the row's “possibly more tags” tail with an empty tail. The test is
+accepted only when that change is local to the copy. It must not also restrict
+an argument, callback, or other type variable owned by surrounding code.
+
+Concretely, all of these conditions must hold:
 
 1. the type comes from the value's independently generalized definition, not
    from a handler-widened occurrence;
@@ -126,7 +134,10 @@ when:
 4. provenance does not lead to a function parameter, mutable cell, object
    field, unknown first-class module, or opaque higher-order input.
 
-The check runs on a copy. It never mutates the user's type scheme.
+The check never mutates the exported declaration or the caller's types. A
+simple value defined as `let program = fail `Missing` normally passes. A
+function defined as `let build error = fail error` fails because closing its
+result would also restrict the caller's `error` argument.
 
 ### 3. Traced concrete computation
 
@@ -171,6 +182,12 @@ for one never fabricates evidence for the other.
 A resolved automatic `catch` or `provide` produces a complete two-channel
 certificate. A later marker may use that certificate when Typedtree value
 identity proves that it consumes the earlier result.
+
+If supported `let*`, `chain`, `both`, `map`, or verified summon expressions
+surround that result, the resolver builds a source plan. At engine time it
+combines the previous marker certificate with the exact certificates of those
+new expressions. This is how an effect introduced between two markers remains
+visible to the later marker.
 
 ## Generated catalogues
 
@@ -308,8 +325,10 @@ certificate as `second`'s input evidence. It follows typed value UIDs, not just
 AST nesting.
 
 The supported dependency graph is a deterministic chain with at most one
-proven marker predecessor for each marker. Cycles, opaque edges, and unsupported
-multi-source marker composition receive explicit diagnostics.
+proven marker predecessor for each marker. The chain may be arbitrarily long,
+and each step may add exact effects through supported composition. Cycles,
+opaque edges, and a merge of two independently marked predecessors receive
+explicit diagnostics.
 
 ## Refusal boundary
 

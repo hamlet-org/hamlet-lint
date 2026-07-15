@@ -72,7 +72,10 @@ This refusal prevents the PPX from silently dropping a possible effect.
 ## Documentation
 
 - [Automatic Propagation](docs/automatic-propagation.md): setup, supported
-  code, examples, and fallbacks.
+  behavior, chaining, and fallbacks.
+- [Supported Patterns](docs/supported-patterns.md) and
+  [Refused Patterns](docs/refused-patterns.md): small examples with the reason
+  each form is accepted or rejected.
 - [Architecture](docs/architecture.md): the PPX, probe, resolver, and generated
   AST.
 - [Proof Model](docs/proof-model.md): what counts as exact evidence and why
