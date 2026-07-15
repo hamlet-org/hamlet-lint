@@ -89,6 +89,7 @@
  (name hamlet_subtractor_ppx)
  (public_name hamlet-subtractor.ppx)
  (kind ppx_rewriter)
+ (ppx_runtime_libraries hamlet_subtractor)
  (modules hamlet_subtractor_ppx)
  (libraries
   hamlet_subtractor_core

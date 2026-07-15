@@ -76,6 +76,23 @@ type correlation_error =
   | Unexpected_marker_result of Marker.id
   | Marker_mismatch of { expected : Marker.t; actual : Marker.t }
 
+(** Normalized codecs shared by bounded metadata protocols. Decoders receive a
+    JSON path so callers can preserve precise error locations. *)
+val leaf_to_json : Leaf.t -> Yojson.Safe.t
+
+val leaf_of_json : string list -> Yojson.Safe.t -> (Leaf.t, decode_error) result
+val proof_to_json : Proof.t -> Yojson.Safe.t
+
+val proof_of_json :
+  string list -> Yojson.Safe.t -> (Proof.t, decode_error) result
+
+val evidence_to_json : Effect_certificate.evidence -> Yojson.Safe.t
+
+val evidence_of_json :
+  string list ->
+  Yojson.Safe.t ->
+  (Effect_certificate.evidence, decode_error) result
+
 val request :
   request_id:string ->
   source_file:string ->

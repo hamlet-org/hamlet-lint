@@ -25,6 +25,15 @@ val create :
 val errors : t -> evidence
 val requirements : t -> evidence
 
+(** Combine evidence on one channel using the same normalization and conflict
+    checks as whole-certificate composition. *)
+val union :
+  kind:Kind.t ->
+  operation:Proof.composition ->
+  inputs:Marker.id list ->
+  evidence list ->
+  (evidence, validation_error) result
+
 val chain : inputs:Marker.id list -> t list -> (t, validation_error) result
 
 val recover :
