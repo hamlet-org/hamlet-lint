@@ -3363,6 +3363,10 @@ let helper_uid binding =
   | Tpat_var (_, _, uid) | Tpat_alias (_, _, _, uid, _) -> uid
   | _ -> refuse Higher_order_flow
 
+let helper_fingerprint helper =
+  Digest.string ("hamlet-subtractor-generic-helper-v1:" ^ helper)
+  |> Digest.to_hex
+
 let helper_source_identifier binding source_parameter =
   match binding.vb_expr.exp_desc with
   | Texp_function (parameters, _) -> (
@@ -3686,12 +3690,8 @@ let generic_contract_for_binding ~context_digest nodes binding =
         | None -> refuse Higher_order_flow)
     | [] -> refuse Higher_order_flow
   in
-  let uid = helper_uid binding in
-  let fingerprint =
-    Format.asprintf "%s:%a" helper Shape.Uid.print uid
-    |> Digest.string
-    |> Digest.to_hex
-  in
+  ignore (helper_uid binding);
+  let fingerprint = helper_fingerprint helper in
   let contract =
     Core.Generic_contract.create ~helper_fingerprint:fingerprint
       ~effect_parameter:source_parameter ~slots ~output
@@ -3741,7 +3741,7 @@ let retained_contract_payload helper path env =
 
 let contract_for_call ~definitions callee =
   match callee.exp_desc with
-  | Texp_ident (path, _, description) ->
+  | Texp_ident (path, _, _) ->
       let helper = Path.last path in
       let local =
         definitions
@@ -3761,11 +3761,7 @@ let contract_for_call ~definitions callee =
                   (Core_validation_failed
                      ("invalid retained contract for " ^ helper)))
       in
-      let fingerprint =
-        Format.asprintf "%s:%a" helper Shape.Uid.print description.Types.val_uid
-        |> Digest.string
-        |> Digest.to_hex
-      in
+      let fingerprint = helper_fingerprint helper in
       if
         not
           (String.equal fingerprint

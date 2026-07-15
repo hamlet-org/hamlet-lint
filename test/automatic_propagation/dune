@@ -97,6 +97,20 @@
    automatic_propagation_types.actual)))
 
 (rule
+ (targets generic_helper_types.actual)
+ (deps
+  ../../subtractor/integration/.hamlet_subtractor_generic_helper_consumer.objs/byte/hamlet_subtractor_generic_helper_consumer.cmt)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ./automatic_propagation_cmt_dump.exe %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff generic_helper_types.expected generic_helper_types.actual)))
+
+(rule
  (alias automatic-propagation-lsp)
  (deps
   .automatic_propagation_positive.objs/byte/automatic_propagation_positive.cmt
