@@ -229,10 +229,17 @@ Hamlet.Combinators.catch computation ~handler:(fun
   | [%hamlet.propagate_e] -> .)
 ```
 
-`[%hamlet.te ...]` is implemented by `ppx_hamlet`; it expands to a closed
-error-row type. Subtractor recognizes that closed type as an explicit boundary.
-The requirement equivalent annotates the `provide` handler parameter with
-`[%hamlet.ts ...]` and uses `[%hamlet.propagate_s]`.
+`ppx_hamlet` implements both `[%hamlet.te ...]` and the plain
+`[%hamlet.propagate_e]` marker. The annotation expands to a closed error-row
+type, and the marker forwards the unhandled members of that declared row.
+Subtractor recognizes the closed type as an explicit boundary.
+
+`[%hamlet.propagate_e.auto]`, by contrast, belongs to
+`hamlet-subtractor.ppx`: it obtains the row from compiler evidence and
+generates the ordinary forwarding arms before the final Hamlet expansion. The
+requirement equivalents are `[%hamlet.ts ...]` and
+`[%hamlet.propagate_s]` for `ppx_hamlet`, and `[%hamlet.propagate_s.auto]` for
+Subtractor.
 
 This is different from `let[@hamlet.generic]`: a generic helper leaves its
 input row to the caller and receives generated evidence for that row. An
