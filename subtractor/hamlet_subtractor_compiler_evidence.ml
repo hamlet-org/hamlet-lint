@@ -2594,6 +2594,10 @@ type source_plan =
   | Known_source of Effect_certificate.t
   | Generic_input_source
   | Dependency_source of string
+  | Explicit_boundary_source of {
+      source : source_plan;
+      boundary : Effect_certificate.t;
+    }
   | Chained_source of source_plan list
   | Recovered_source of { source : source_plan; recoveries : source_plan list }
   | Caught_source of {
@@ -2622,6 +2626,7 @@ type source_plan =
 let rec source_plan_dependencies = function
   | Known_source _ | Generic_input_source -> []
   | Dependency_source id -> [ id ]
+  | Explicit_boundary_source { source; _ } -> source_plan_dependencies source
   | Chained_source plans ->
       plans
       |> List.concat_map source_plan_dependencies
@@ -2839,7 +2844,6 @@ let rec source_plan_for_expression
                               let explicit_boundary =
                                 if
                                   recognized_layer_rhs
-                                  && dependencies = []
                                   && Option.is_none generic_input
                                   && Option.is_none rhs_generic_output
                                 then
@@ -2856,11 +2860,21 @@ let rec source_plan_for_expression
                               in
                               begin match explicit_boundary with
                               | Some type_ ->
-                                  let certificate, catalogues =
+                                  let boundary, catalogues =
                                     certificate_for_explicit_type_boundary
                                       ~context_digest type_
                                   in
-                                  (Known_source certificate, catalogues)
+                                  if dependencies = [] then
+                                    (Known_source boundary, catalogues)
+                                  else
+                                    let source, _ =
+                                      source_plan_for_expression ~context_digest
+                                        ~nodes ~marker_id ~kind ~generic_input
+                                        ~seen:(uid :: seen) rhs
+                                    in
+                                    ( Explicit_boundary_source
+                                        { source; boundary },
+                                      catalogues )
                               | None when not follows_rhs -> known_source ()
                               | None ->
                                   (try ignore (known_source ()) with
@@ -3587,6 +3601,9 @@ let rec symbolic_certificate_of_source_plan dependencies = function
       | None ->
           refuse
             (Core_validation_failed ("unresolved symbolic dependency " ^ id)))
+  | Explicit_boundary_source { source; boundary } ->
+      ignore (symbolic_certificate_of_source_plan dependencies source);
+      Core.Generic_contract.concrete boundary
   | Chained_source plans ->
       plans
       |> List.map (symbolic_certificate_of_source_plan dependencies)
@@ -3901,6 +3918,49 @@ let align_input_with_arms (node : node) input =
 let rec resolve_source_plan dependencies = function
   | Known_source certificate -> (certificate, [])
   | Generic_input_source -> refuse Higher_order_flow
+  | Explicit_boundary_source { source; boundary } ->
+      let source, inputs = resolve_source_plan dependencies source in
+      let boundary_evidence kind source boundary =
+        let source =
+          match kind with
+          | Kind.Error -> Effect_certificate.errors source
+          | Kind.Requirement -> Effect_certificate.requirements source
+        in
+        let boundary =
+          match kind with
+          | Kind.Error -> Effect_certificate.errors boundary
+          | Kind.Requirement -> Effect_certificate.requirements boundary
+        in
+        match
+          ( Effect_certificate.evidence_view source,
+            Effect_certificate.evidence_view boundary )
+        with
+        | Exact_proof source, Exact_proof boundary -> (
+            Proof.create ~kind ~origin:(Proof.origin source)
+              ~leaves:(Proof.leaves boundary)
+            |> function
+            | Ok proof -> Effect_certificate.exact proof
+            | Error _ ->
+                refuse
+                  (Core_validation_failed
+                     "invalid explicit Layer boundary proof"))
+        | Opaque_reasons _, Exact_proof _ -> boundary
+        | _, Opaque_reasons _ ->
+            refuse
+              (Core_validation_failed "explicit Layer boundary is not exact")
+      in
+      let boundary =
+        Effect_certificate.create
+          ~errors:(boundary_evidence Kind.Error source boundary)
+          ~requirements:(boundary_evidence Kind.Requirement source boundary)
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse
+              (Core_validation_failed
+                 "invalid explicit Layer boundary certificate")
+      in
+      (boundary, inputs)
   | Caught_source { source; handled; explicitly_forwarded; recoveries } ->
       let source, source_inputs = resolve_source_plan dependencies source in
       let recoveries, recovery_inputs =

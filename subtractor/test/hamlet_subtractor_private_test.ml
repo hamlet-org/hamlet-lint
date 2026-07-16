@@ -1538,6 +1538,13 @@ let outer =
     in
     match outer with
     | Hamlet_subtractor_core.Protocol.Resolved residual ->
+        if String.equal label "explicit Layer boundary" then
+          Alcotest.(check (list string))
+            "dependent boundary retains its declared universe"
+            [ "Extra"; "Recovery"; "Timeout" ]
+            (Hamlet_subtractor_core.Residual.input residual
+            |> Hamlet_subtractor_core.Proof.leaves
+            |> leaf_labels);
         begin match
           Hamlet_subtractor_core.Residual.input residual
           |> Hamlet_subtractor_core.Proof.origin
@@ -1559,7 +1566,8 @@ let outer =
   in
   check "unannotated Layer baseline" "";
   check "explicit Layer boundary"
-    ": (Logger.Tag.t, [ `Recovery | `Timeout ], Hamlet.never) Hamlet.Layer.t"
+    ": (Logger.Tag.t, [ `Extra | `Recovery | `Timeout ], Hamlet.never) \
+     Hamlet.Layer.t"
 
 let test_layer_provider_source_is_post_owner_contributor () =
   let engine =
