@@ -211,19 +211,26 @@ boundary.
 
 ## Explicit fallback
 
-When the row is intentionally abstract, state its universe and use the ordinary
-Hamlet marker:
+When the row is intentionally abstract, annotate the **handler parameter**
+with Hamlet's closed error universe and use the ordinary Hamlet marker:
 
 ```ocaml
-let source = ([%hamlet.te computation] : (unit, errors, requirements) Hamlet.t)
+module Errors = struct
+  type missing = [ `Missing ]
+  type timeout = [ `Timeout ]
+end
 
-Hamlet.Combinators.catch source ~handler:(function
+Hamlet.Combinators.catch computation ~handler:(fun
+    (error : [%hamlet.te Errors.missing, Errors.timeout]) ->
+  match error with
   | `Missing -> recover ()
-  | [%hamlet.propagate_e errors] -> .)
+  | [%hamlet.propagate_e] -> .)
 ```
 
-The equivalent requirement boundary uses `%hamlet.ts` and
-`[%hamlet.propagate_s ...]`.
+`[%hamlet.te ...]` is implemented by `ppx_hamlet`; it expands to a closed
+error-row type. Subtractor recognizes that closed type as an explicit boundary.
+The requirement equivalent annotates the `provide` handler parameter with
+`[%hamlet.ts ...]` and uses `[%hamlet.propagate_s]`.
 
 ## Cross-module generated errors
 
