@@ -44,19 +44,34 @@ exported public error type. An explicit `[%hamlet.te ...]` boundary is useful
 only while the variants are visible; it cannot make an already abstract
 `Source.error` usable outside `Source`.
 
-## Row chosen by a function argument
+## Row chosen by an error argument
 
-The caller chooses `error`, so this ordinary helper has no finite universe at
-its definition:
+Here the caller chooses the raw error value, so the result row depends on a
+function argument:
 
 ```ocaml
 let build error = Hamlet.Combinators.fail error
 ```
 
-Fix: make the enclosing effect function a `[@hamlet.generic]` helper when its
-last argument is the generic computation, or give a deliberate explicit
-universe. Do not add annotations to concrete call sites merely to satisfy the
-PPX.
+`[@hamlet.generic]` does not apply to this function: `error` is a value, not
+the final `Hamlet.t` parameter that generic helpers specialize.
+
+If `build` is meant to accept a fixed set of errors, make that set part of its
+own API:
+
+```ocaml
+module Errors = struct
+  type error = [ `Missing | `Timeout ]
+end
+
+let build (error : Errors.error) = Hamlet.Combinators.fail error
+```
+
+The named type is a real contract of `build`, so the resolver can use it as a
+finite universe. If `build` is intentionally polymorphic in its error value,
+keep an automatic marker out of that function and place it where the error is
+concrete. The next section covers the different case where the caller supplies
+an entire `Hamlet.t` computation; that case can use `[@hamlet.generic]`.
 
 ## Effect passed as a parameter
 
