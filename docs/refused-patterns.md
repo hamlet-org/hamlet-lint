@@ -6,19 +6,6 @@ wildcard.
 
 Each section shows one refused form and the smallest usual fix.
 
-## Open row
-
-The tail of this row is unknown:
-
-```ocaml
-let source : (unit, [> `Missing ], Hamlet.never) Hamlet.t = effect
-```
-
-The PPX cannot know which other errors a generated branch must forward.
-
-Fix: let inference produce a closed row, expose a closed named type, or state an
-explicit `%hamlet.te` universe.
-
 ## Abstract, private, or hidden row
 
 An implementation may know the variants while the current compilation unit
@@ -50,7 +37,17 @@ PPX.
 
 ## Effect passed as a parameter
 
-An ordinary generic handler is compiled before any caller chooses the row:
+``[> `Missing ]`` is not itself a refusal. It is also the normal inferred shape
+of this concrete expression, which the resolver accepts because it can follow
+the `fail` call:
+
+```ocaml
+let source = Hamlet.Combinators.fail `Missing
+```
+
+The problem is an unknown origin. In this ordinary helper, the caller chooses
+what `source` contains, so the resolver cannot determine the complete row when
+it compiles the helper:
 
 ```ocaml
 let handle source =
