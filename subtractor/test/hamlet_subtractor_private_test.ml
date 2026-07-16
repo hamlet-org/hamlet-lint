@@ -758,6 +758,12 @@ let only_outcome engine =
   | outcomes ->
       Alcotest.failf "expected one exact outcome, got %d" (List.length outcomes)
 
+let refused_code engine =
+  match only_outcome engine with
+  | _, Hamlet_subtractor_core.Protocol.Refused diagnostic ->
+      Hamlet_subtractor_core.Diagnostic.code diagnostic
+  | _, Resolved _ -> Alcotest.fail "expected exact evidence refusal"
+
 let resolved_residual engine =
   match only_outcome engine with
   | _, Hamlet_subtractor_core.Protocol.Resolved residual -> residual
@@ -1374,6 +1380,168 @@ let provided =
   Alcotest.(check (list string))
     "provider output includes source requirements" [ "Clock" ] requirements
 
+let test_layer_fail_like_replaces_errors_and_preserves_source () =
+  let engine =
+    resolve_exact
+      {|
+let build :
+    (unit, Local_io.Errors.error, Clock.Tag.r) Hamlet.t =
+  assert false
+
+let primary = Hamlet.Layer.make Logger.Tag.key build
+
+let clean_build :
+    (unit, Hamlet.never, Clock.Tag.r) Hamlet.t =
+  assert false
+
+let fallback = Hamlet.Layer.make Logger.Tag.key clean_build
+
+let first =
+  Hamlet.Layer.catch primary ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.read_error -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-before-fail-like"]))
+
+let read : Local_io.Errors.read_error = `Read 1
+
+let failed_direct :
+    (Logger.Tag.t, Local_io.Errors.read_error, Clock.Tag.r) Hamlet.Layer.t =
+  Hamlet.Layer.fail_like primary read
+
+let failed :
+    (Logger.Tag.t, Local_io.Errors.read_error, Clock.Tag.r) Hamlet.Layer.t =
+  Hamlet.Layer.fail_like first read
+
+let caught =
+  Hamlet.Layer.catch failed ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.read_error -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-after-fail-like"]))
+
+let provided =
+  Hamlet.Layer.provide_to_effect
+    ~source:failed_direct
+    ~handler:(fun service request ->
+      match request with
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness service
+      | _ -> (assert false [@hamlet.subtractor.marker.v1 "s:layer-fail-like-source"]))
+    (Hamlet.Combinators.summon Logger.Tag.key Logger.Tag.tag)
+|}
+  in
+  let outcomes = Hamlet_subtractor_engine.outcomes engine in
+  Alcotest.(check int) "three Layer markers" 3 (List.length outcomes);
+  let residuals =
+    outcomes
+    |> List.mapi (fun index -> function
+      | _, Hamlet_subtractor_core.Protocol.Resolved residual -> residual
+      | _, Hamlet_subtractor_core.Protocol.Refused diagnostic ->
+          Alcotest.failf "Layer marker %d: %s" index
+            (Hamlet_subtractor_core.Diagnostic.message diagnostic))
+  in
+  let after_residual = List.nth residuals 1 in
+  Alcotest.(check (list string))
+    "concrete fail_like error is the marker input" [ "Read" ]
+    (Hamlet_subtractor_core.Residual.input after_residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check int)
+    "fail_like replacement is fully handled" 0
+    (Hamlet_subtractor_core.Residual.residual after_residual |> List.length);
+  let provider_residual = List.nth residuals 2 in
+  Alcotest.(check (list string))
+    "provider handles its target requirement" [ "Logger" ]
+    (Hamlet_subtractor_core.Residual.input provider_residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check int)
+    "target requirement is handled" 0
+    (Hamlet_subtractor_core.Residual.residual provider_residual |> List.length);
+  Alcotest.(check (list string))
+    "source requirements are preserved" [ "Clock" ]
+    (Hamlet_subtractor_core.Residual.output provider_residual |> leaf_labels)
+
+let test_layer_unwrap_transparent_return_is_exact () =
+  let engine =
+    resolve_exact
+      {|
+let trace_source =
+  Hamlet.Layer.make Logger.Tag.key
+    (if Sys.opaque_identity true then
+       Hamlet.Combinators.fail `Trace_timeout
+     else Hamlet.Combinators.fail `Trace_missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let transparent_layer_effect = Hamlet.Combinators.return trace_source
+
+let caught :
+    (Logger.Tag.t, [ `Trace_timeout ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.unwrap Logger.Tag.key transparent_layer_effect
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Trace_missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-unwrap"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "unwrap exposes both returned Layer errors"
+    [ "Trace_missing"; "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.input residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check (list string))
+    "unwrap handles only the selected error" [ "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_labels)
+
+let test_layer_unwrap_opaque_effect_is_refused () =
+  let engine =
+    resolve_exact
+      {|
+let recover_selected selected =
+  Hamlet.Layer.unwrap Logger.Tag.key (Hamlet.Combinators.return selected)
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Read _ -> selected
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:opaque-layer-unwrap"]))
+|}
+  in
+  ignore (refused_code engine)
+
+let test_named_layer_catch_cause_result_is_traced () =
+  let engine =
+    resolve_exact
+      {|
+let primary =
+  Hamlet.Layer.make Logger.Tag.key
+    (Hamlet.Combinators.fail (`Read 1))
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key
+    (Hamlet.Combinators.fail (`Write "cause"))
+
+let recovered =
+  Hamlet.Layer.catch_cause primary ~handler:(fun _cause -> fallback)
+
+let clean =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let caught =
+  Hamlet.Layer.catch recovered ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.write_error -> clean
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:named-layer-cause"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "named catch_cause exposes only handler errors" [ "Write" ]
+    (Hamlet_subtractor_core.Residual.input residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check int)
+    "named catch_cause error is handled" 0
+    (Hamlet_subtractor_core.Residual.residual residual |> List.length)
+
 let test_exact_cases_subset () =
   let engine =
     resolve_exact
@@ -1498,12 +1666,6 @@ let provided =
   Alcotest.(check int)
     "give discharges the singleton tag" 0
     (Hamlet_subtractor_core.Residual.residual residual |> List.length)
-
-let refused_code engine =
-  match only_outcome engine with
-  | _, Hamlet_subtractor_core.Protocol.Refused diagnostic ->
-      Hamlet_subtractor_core.Diagnostic.code diagnostic
-  | _, Resolved _ -> Alcotest.fail "expected exact evidence refusal"
 
 let test_fake_callee_refused () =
   let engine =
@@ -2224,6 +2386,14 @@ let () =
             test_exact_layer_catch;
           Alcotest.test_case "Layer provider source is post-owner" `Quick
             test_layer_provider_source_is_post_owner_contributor;
+          Alcotest.test_case "Layer.fail_like replaces only errors" `Quick
+            test_layer_fail_like_replaces_errors_and_preserves_source;
+          Alcotest.test_case "Layer.unwrap transparent return is exact" `Quick
+            test_layer_unwrap_transparent_return_is_exact;
+          Alcotest.test_case "Layer.unwrap opaque effect is refused" `Quick
+            test_layer_unwrap_opaque_effect_is_refused;
+          Alcotest.test_case "named Layer.catch_cause result is traced" `Quick
+            test_named_layer_catch_cause_result_is_traced;
           Alcotest.test_case "Cases subsets stay nominal" `Quick
             test_exact_cases_subset;
           Alcotest.test_case "transparent aliases stay structural" `Quick

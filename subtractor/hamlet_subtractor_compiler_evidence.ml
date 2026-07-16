@@ -72,18 +72,20 @@ let refusal_message (refusal : refusal) =
       explicit "automatic propagation received an invalid marker identity"
   | Fake_or_aliased_callee ->
       explicit
-        "automatic propagation owner is not Hamlet.Combinators.catch or provide"
+        "automatic propagation owner is not a supported direct Hamlet \
+         catch/provider"
   | Wrong_hamlet_effect_shape ->
-      explicit "automatic propagation upstream is not a Hamlet effect"
+      explicit "automatic propagation upstream is not a Hamlet effect or Layer"
   | Abstract_or_hidden_alias _ ->
       explicit "automatic propagation cannot inspect an abstract or hidden row"
-  | Open_row -> explicit "automatic propagation requires a finite closed row"
+  | Open_row ->
+      explicit "automatic propagation cannot prove all members of this open row"
   | Unresolved_row ->
       explicit "automatic propagation cannot resolve the row at this site"
   | Polymorphic_parameter ->
       explicit
-        "automatic propagation cannot close a row rooted in a function \
-         parameter"
+        "automatic propagation row is chosen by a function parameter, so its \
+         complete universe is unknown here"
   | Unsupported_payload _ ->
       explicit "automatic propagation cannot normalize a row payload"
   | Invalid_error_catalogue message ->
@@ -1166,9 +1168,6 @@ let canonical_simple_producer expression =
           ("Combinators", "defect_with_bt");
           ("Combinators", "defect_die");
           ("Combinators", "thunk");
-          ("Layer", "make");
-          ("Layer", "merge_all");
-          ("Layer", "merge_all_with_key");
         ]
   | _ -> false
 
@@ -1179,6 +1178,8 @@ let canonical_combinator_name expression =
         "chain";
         "both";
         "map";
+        "return";
+        "success";
         "catch";
         "catch_cause";
         "catch_filter";
@@ -1229,6 +1230,62 @@ let labelled_argument label arguments =
     | Labelled actual, Arg expression when String.equal actual label ->
         Some expression
     | Nolabel, _ | Optional _, _ | Labelled _, _ -> None)
+
+let rec transparent_returned_layer bindings seen expression =
+  match expression.exp_desc with
+  | Texp_ident (path, _, description) ->
+      let uid = description.Types.val_uid in
+      if List.exists (Shape.Uid.equal uid) seen then None
+      else
+        Option.bind (find_value_binding bindings path uid) (fun rhs ->
+            transparent_returned_layer bindings (uid :: seen) rhs)
+  | Texp_apply (producer, producer_arguments)
+    when Option.exists
+           (fun name ->
+             String.equal name "return" || String.equal name "success")
+           (canonical_combinator_name producer) ->
+      begin match positional_arguments producer_arguments with
+      | [ layer ] -> Some layer
+      | _ -> None
+      end
+  | _ -> None
+
+let rec independently_exact_selection_effect bindings seen expression =
+  match expression.exp_desc with
+  | Texp_ident (path, _, description) ->
+      let uid = description.Types.val_uid in
+      if List.exists (Shape.Uid.equal uid) seen then false
+      else
+        begin match find_value_binding bindings path uid with
+        | Some rhs ->
+            independently_exact_selection_effect bindings (uid :: seen) rhs
+        | None ->
+            begin match (uid_compilation_unit uid, current_unit_name ()) with
+            | Some owner, Some current -> not (String.equal owner current)
+            | Some _, None -> true
+            | None, _ -> false
+            end
+        end
+  | _ -> false
+
+let rec failure_argument_has_independent_origin bindings seen expression =
+  match expression.exp_desc with
+  | Texp_variant _ -> true
+  | Texp_ident (path, _, description) ->
+      let uid = description.Types.val_uid in
+      if List.exists (Shape.Uid.equal uid) seen then false
+      else
+        begin match find_value_binding bindings path uid with
+        | Some rhs ->
+            failure_argument_has_independent_origin bindings (uid :: seen) rhs
+        | None ->
+            begin match (uid_compilation_unit uid, current_unit_name ()) with
+            | Some owner, Some current -> not (String.equal owner current)
+            | Some _, None -> true
+            | None, _ -> false
+            end
+        end
+  | _ -> false
 
 let generated_tag_summon expression =
   match expression.exp_desc with
@@ -1370,6 +1427,10 @@ let rec expression_has_independent_origin
   else if canonical_simple_producer expression then true
   else if generated_service_summon expression then true
   else if service_module_method service_modules expression then true
+  else if
+    layer_application_has_independent_origin bindings seen service_modules
+      expression
+  then true
   else
     match expression.exp_desc with
     | Texp_ident (path, _, description) -> (
@@ -1527,6 +1588,76 @@ let rec expression_has_independent_origin
                  operator.bop_exp)
              ands
     | _ -> false
+
+and layer_application_has_independent_origin
+    bindings
+    seen
+    service_modules
+    expression =
+  match expression.exp_desc with
+  | Texp_apply (callee, arguments) ->
+      let callee, arguments =
+        match Hamlet_subtractor_upstream.unstage_apply expression with
+        | Some application -> application
+        | None -> (callee, arguments)
+      in
+      begin match canonical_layer_name callee with
+      | Some ("make" | "merge_all" | "merge_all_with_key") ->
+          begin match List.rev (positional_arguments arguments) with
+          | build :: _ ->
+              expression_has_independent_origin bindings seen service_modules
+                build
+          | [] -> false
+          end
+      | Some ("fresh" | "or_die") ->
+          begin match positional_arguments arguments with
+          | source :: _ ->
+              expression_has_independent_origin bindings seen service_modules
+                source
+          | [] -> false
+          end
+      | Some "fail_like" ->
+          begin match positional_arguments arguments with
+          | [ source; error ] ->
+              expression_has_independent_origin bindings seen service_modules
+                source
+              && failure_argument_has_independent_origin bindings seen error
+          | _ -> false
+          end
+      | Some
+          ( "catch" | "catch_cause" | "catch_defect" | "tap" | "tap_fail"
+          | "tap_defect" | "tap_cause" ) ->
+          begin match
+            ( positional_arguments arguments,
+              labelled_argument "handler" arguments,
+              labelled_argument "f" arguments )
+          with
+          | source :: _, Some handler, _ | source :: _, None, Some handler ->
+              expression_has_independent_origin bindings seen service_modules
+                source
+              && function_result_has_independent_origin bindings seen
+                   service_modules ~source handler
+          | _ -> false
+          end
+      | Some "unwrap" ->
+          begin match List.rev (positional_arguments arguments) with
+          | layer_effect :: _ ->
+              begin match
+                transparent_returned_layer bindings [] layer_effect
+              with
+              | Some layer ->
+                  expression_has_independent_origin bindings seen
+                    service_modules layer_effect
+                  && expression_has_independent_origin bindings seen
+                       service_modules layer
+              | None ->
+                  independently_exact_selection_effect bindings [] layer_effect
+              end
+          | [] -> false
+          end
+      | Some _ | None -> false
+      end
+  | _ -> false
 
 and function_result_has_independent_origin
     bindings
@@ -1709,6 +1840,7 @@ let resolve_target_channel
       end
   | _
     when canonical_simple_producer upstream
+         || layer_application_has_independent_origin bindings [] [] upstream
          || has_explicit_type_boundary upstream ->
       resolve_channel ~context_digest ~kind ~origin:Proof.Closed_row
         upstream.exp_env occurrence_type
@@ -2331,6 +2463,35 @@ let generated_summon_call_certificate ~context_digest expression arguments =
       | _ -> None)
   | _ -> None
 
+let failure_argument_certificate ~context_digest argument =
+  let leaves, catalogues =
+    match argument.exp_desc with
+    | Texp_variant (label, payload) ->
+        if has_explicit_type_boundary argument then
+          resolve_error_row ~context_digest argument.exp_env argument.exp_type
+        else
+          let leaf =
+            structural_variant_leaf ~context_digest argument.exp_env label
+              payload
+          in
+          let named, catalogues =
+            catalogue_error_leaves ~context_digest argument.exp_env
+              (Leaf.members leaf)
+          in
+          if named = [] then ([ leaf ], []) else (named, catalogues)
+    | Texp_ident (_, _, description) ->
+        resolve_error_row ~context_digest argument.exp_env description.val_type
+    | _ -> refuse Unresolved_row
+  in
+  let errors =
+    proof_of_leaves ~kind:Kind.Error
+      ~origin:(Proof.Composition { operation = Proof.Fail; inputs = [] })
+      leaves
+  in
+  ( exact_certificate ~errors
+      ~requirements:(empty_proof Kind.Requirement Proof.Fail),
+    catalogues )
+
 let intrinsic_certificate ~context_digest expression =
   match expression.exp_desc with
   | Texp_ident (path, _, description) ->
@@ -2372,30 +2533,7 @@ let intrinsic_certificate ~context_digest expression =
             | Some argument -> argument
             | None -> refuse Unresolved_row
           in
-          let leaf =
-            match argument.exp_desc with
-            | Texp_variant (label, payload) ->
-                structural_variant_leaf ~context_digest argument.exp_env label
-                  payload
-            | _ -> refuse Unresolved_row
-          in
-          let leaves, catalogues =
-            let named, catalogues =
-              catalogue_error_leaves ~context_digest argument.exp_env
-                (Leaf.members leaf)
-            in
-            if named = [] then ([ leaf ], []) else (named, catalogues)
-          in
-          let errors =
-            proof_of_leaves ~kind:Kind.Error
-              ~origin:
-                (Proof.Composition { operation = Proof.Fail; inputs = [] })
-              leaves
-          in
-          Some
-            ( exact_certificate ~errors
-                ~requirements:(empty_proof Kind.Requirement Proof.Fail),
-              catalogues )
+          Some (failure_argument_certificate ~context_digest argument)
       | _ -> None)
   | _ -> None
 
@@ -2662,23 +2800,40 @@ let rec source_plan_for_expression
                                 binding.rhs)
                               binding
                           in
-                          if
-                            dependencies <> []
-                            || Option.is_some generic_input
-                            || Option.exists
-                                 (fun rhs ->
-                                   Option.is_some (generic_call_output rhs))
-                                 rhs
-                          then (
-                            if List.exists (Shape.Uid.equal uid) seen then
-                              refuse Higher_order_flow;
-                            match rhs with
-                            | Some rhs ->
+                          begin match rhs with
+                          | Some rhs ->
+                              if List.exists (Shape.Uid.equal uid) seen then
+                                refuse Higher_order_flow;
+                              begin try
                                 source_plan_for_expression ~context_digest
                                   ~nodes ~marker_id ~kind ~generic_input
                                   ~seen:(uid :: seen) rhs
-                            | None -> refuse Higher_order_flow)
-                          else known_source ()
+                              with Refuse _ as refusal ->
+                                let recognized_layer_rhs =
+                                  match rhs.exp_desc with
+                                  | Texp_apply (callee, _) ->
+                                      let callee =
+                                        match
+                                          Hamlet_subtractor_upstream
+                                          .unstage_apply rhs
+                                        with
+                                        | Some (callee, _) -> callee
+                                        | None -> callee
+                                      in
+                                      Option.is_some
+                                        (canonical_layer_name callee)
+                                  | _ -> false
+                                in
+                                if
+                                  dependencies <> []
+                                  || Option.is_some generic_input
+                                  || Option.is_some (generic_call_output rhs)
+                                  || recognized_layer_rhs
+                                then raise refusal
+                                else known_source ()
+                              end
+                          | None -> known_source ()
+                          end
                       end
                   | Texp_let (_, _, body) | Texp_struct_item (_, body) ->
                       source_plan_for_expression ~context_digest ~nodes
@@ -2798,11 +2953,18 @@ let rec source_plan_for_expression
                                       ~context_digest ~nodes ~marker_id ~kind
                                       ~generic_input ~seen handler
                                   in
-                                  ( Recovered_source
-                                      {
-                                        source = source_plan;
-                                        recoveries = [ handler_plan ];
-                                      },
+                                  ( (if String.equal name "catch_cause" then
+                                       chain_source_plans
+                                         [
+                                           Cleared_errors source_plan;
+                                           handler_plan;
+                                         ]
+                                     else
+                                       Recovered_source
+                                         {
+                                           source = source_plan;
+                                           recoveries = [ handler_plan ];
+                                         }),
                                     source_catalogues @ handler_catalogues )
                               end
                           | _ -> refuse Higher_order_flow
@@ -2894,43 +3056,62 @@ let rec source_plan_for_expression
                             List.rev (positional_arguments arguments)
                           with
                           | layer_effect :: _ ->
-                              let effect_plan, effect_catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  layer_effect
-                              in
                               let returned_layer =
-                                match layer_effect.exp_desc with
-                                | Texp_apply (producer, producer_arguments)
-                                  when Option.exists
-                                         (fun name ->
-                                           String.equal name "return"
-                                           || String.equal name "success")
-                                         (canonical_combinator_name producer) ->
-                                    begin match
-                                      positional_arguments producer_arguments
-                                    with
-                                    | [ layer ] -> layer
-                                    | _ -> refuse Higher_order_flow
-                                    end
-                                | _ -> refuse Higher_order_flow
+                                match
+                                  transparent_returned_layer nodes.bindings []
+                                    layer_effect
+                                with
+                                | Some layer
+                                  when expression_has_independent_origin
+                                         nodes.bindings [] [] layer ->
+                                    layer
+                                | Some _ -> refuse Polymorphic_parameter
+                                | None ->
+                                    if
+                                      independently_exact_selection_effect
+                                        nodes.bindings [] layer_effect
+                                    then layer_effect
+                                    else
+                                      refuse
+                                        (Core_validation_failed
+                                           "unwrap selection is not \
+                                            independently exact")
                               in
-                              let layer_plan, layer_catalogues =
+                              let layer_plan, catalogues =
                                 source_plan_for_expression ~context_digest
                                   ~nodes ~marker_id ~kind ~generic_input ~seen
                                   returned_layer
                               in
-                              ( chain_source_plans [ effect_plan; layer_plan ],
-                                effect_catalogues @ layer_catalogues )
+                              let empty =
+                                Known_source
+                                  (exact_certificate
+                                     ~errors:
+                                       (empty_proof Kind.Error Proof.Return)
+                                     ~requirements:
+                                       (empty_proof Kind.Requirement
+                                          Proof.Return))
+                              in
+                              ( chain_source_plans [ empty; layer_plan ],
+                                catalogues )
                           | [] -> refuse Higher_order_flow
                           end
                       | Some "fail_like" ->
-                          (* [fail_like] is a nominal forwarding constructor
-                             used by generated Layer.catch handlers. Its public
-                             error argument may itself be widened, so source
-                             tracing deliberately refuses it instead of
-                             guessing an exact replacement error row. *)
-                          refuse Higher_order_flow
+                          begin match positional_arguments arguments with
+                          | [ source; error ] ->
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              let output, output_catalogues =
+                                failure_argument_certificate ~context_digest
+                                  error
+                              in
+                              ( Errors_from_output
+                                  { source = source_plan; output },
+                                source_catalogues @ output_catalogues )
+                          | _ -> refuse Higher_order_flow
+                          end
                       | Some _ -> refuse Higher_order_flow
                       | None ->
                           begin match canonical_combinator_name callee with

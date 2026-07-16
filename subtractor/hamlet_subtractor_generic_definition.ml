@@ -535,7 +535,8 @@ let row_preserving_combinator = function
   | "add_finalizer_exit" | "acquire_release" | "acquire_use_release" | "both" ->
       true
   | "make" | "provide_to_effect" | "provide_to_layer" | "merge_all"
-  | "merge_all_with_key" | "provide_merge_to_layer" | "fresh" | "unwrap" ->
+  | "merge_all_with_key" | "provide_merge_to_layer" | "fresh" | "fail_like"
+  | "unwrap" ->
       true
   | _ -> false
 
