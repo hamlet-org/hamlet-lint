@@ -211,9 +211,10 @@ boundary.
 ## Explicit fallback
 
 Use this form when automatic propagation cannot prove the source row, but you
-want to state a fixed, closed error universe yourself. The computation may be
-an opaque API value or a function parameter; the annotation constrains it to
-the listed errors rather than making it generic:
+want to state a fixed, closed error universe yourself. The computation may
+come from an API whose construction is not visible, or be a function parameter;
+the annotation constrains it to the listed errors rather than making it
+generic:
 
 ```ocaml
 module Errors = struct
@@ -243,7 +244,9 @@ Subtractor.
 This is different from `let[@hamlet.generic]`: a generic helper leaves its
 input row to the caller and receives generated evidence for that row. An
 explicit `[%hamlet.te ...]` annotation fixes the row to the errors named in the
-annotation.
+annotation. It cannot reveal a type that another module has made abstract or
+private; resolve or translate that error inside the module, or export a usable
+finite error type.
 
 ## Cross-module generated errors
 

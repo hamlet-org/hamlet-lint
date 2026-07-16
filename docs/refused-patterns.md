@@ -18,8 +18,31 @@ module Source : sig
 end
 ```
 
-Fix: export a usable closed error type, or put an explicit propagation boundary
-at the abstraction boundary.
+Fix: export a usable finite error type when callers need to propagate those
+errors automatically. Otherwise, resolve or translate every internal error
+before it crosses the abstraction boundary:
+
+```ocaml
+module Source = struct
+  module Errors = struct
+    type missing = [ `Missing ]
+    type timeout = [ `Timeout ]
+  end
+
+  let value = Hamlet.Combinators.fail `Missing
+
+  let handled_inside_source =
+    Hamlet.Combinators.catch value ~handler:(function
+      | `Missing -> Hamlet.Combinators.return ()
+      | `Timeout -> Hamlet.Combinators.return ())
+end
+```
+
+Here the exported result has no typed errors, so callers have nothing left to
+propagate. A producer may instead translate its internal errors to a separate,
+exported public error type. An explicit `[%hamlet.te ...]` boundary is useful
+only while the variants are visible; it cannot make an already abstract
+`Source.error` usable outside `Source`.
 
 ## Row chosen by a function argument
 
