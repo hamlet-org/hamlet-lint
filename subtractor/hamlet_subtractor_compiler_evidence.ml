@@ -3403,6 +3403,20 @@ let rec source_plan_for_expression
                                       labelled_argument "handler" arguments )
                                   with
                                   | Some _, Some handler ->
+                                      let handler =
+                                        if
+                                          Option.equal String.equal
+                                            (canonical_combinator_name callee)
+                                            (Some "scoped_with")
+                                        then
+                                          match
+                                            Hamlet_subtractor_propagate
+                                            .peel_outer handler 1
+                                          with
+                                          | Some handler -> handler
+                                          | None -> refuse Unsupported_pattern
+                                        else handler
+                                      in
                                       let classified =
                                         classify_generic_handler ~context_digest
                                           ~kind:Kind.Requirement handler

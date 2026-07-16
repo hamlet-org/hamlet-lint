@@ -98,6 +98,15 @@ let[@hamlet.generic] provide_logger logger source =
     | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
     | [%hamlet.propagate_s.auto] -> .)
 
+let[@hamlet.generic] scoped_then_provide_logger logger source =
+  Hamlet.Combinators.provide
+    (Hamlet.Combinators.scoped_with source ~handler:(fun scope -> function
+      | #Hamlet.Scope.Tag.r as witness -> Hamlet.Scope.Tag.give witness scope
+      | requirement -> Hamlet.Dispatch.need requirement))
+    ~handler:(function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | [%hamlet.propagate_s.auto] -> .)
+
 module Ordinary = struct
   let add left right = left + right
   let identity value = value
