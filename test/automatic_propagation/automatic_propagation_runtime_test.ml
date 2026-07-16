@@ -12,6 +12,12 @@ module Provision_live = Automatic_propagation_external.Provision.Make (struct
   let fetch () = Hamlet.Combinators.fail (`Provision_error "failed")
 end)
 
+module Layer_clock_live = Hamlet_subtractor_layer_fixture.Clock.Make (struct
+  let now () = Hamlet.Combinators.return 42
+end)
+
+module Layer_fixture = Hamlet_subtractor_layer_fixture
+
 let expect_ok name expected eff =
   Alcotest.(check (result string reject))
     name (Ok expected)
@@ -535,6 +541,47 @@ let generic_output_to_requirement_marker () =
   |> Alcotest.(check (result unit reject))
        "generic output marker provides residual Clock" (Ok ())
 
+let provide_layer_clock computation =
+  computation
+  |> Combinators.provide ~handler:(function
+      | #Hamlet_subtractor_layer_fixture.Clock.Tag.r as witness ->
+      Hamlet_subtractor_layer_fixture.Clock.Tag.give witness
+        (module Layer_clock_live))
+
+let mixed_layer_source_handles_first_error () =
+  Layer_fixture.mixed_source_marker_then_effect_marker_direct 0
+  |> provide_layer_clock
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "Layer marker handles first error" (Ok ())
+
+let mixed_layer_source_handles_second_error () =
+  Layer_fixture.mixed_source_marker_then_effect_marker_direct 1
+  |> provide_layer_clock
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "effect marker handles second error" (Ok ())
+
+let mixed_layer_source_forwards_third_error () =
+  let result =
+    Layer_fixture.mixed_source_marker_then_effect_marker_pipeline 2
+    |> provide_layer_clock
+    |> Hamlet.Interpreter.run
+  in
+  match result with
+  | Error `Recovery_missing -> ()
+  | Ok () -> Alcotest.fail "third error disappeared"
+
+let mixed_layer_target_forwards_third_error () =
+  let result =
+    Layer_fixture.mixed_target_marker_then_effect_marker 2
+    |> provide_layer_clock
+    |> Hamlet.Interpreter.run
+  in
+  match result with
+  | Error `Target_c -> ()
+  | Ok _ -> Alcotest.fail "target error disappeared"
+
 let () =
   Alcotest.run "automatic propagation"
     [
@@ -557,6 +604,14 @@ let () =
             chain_handles_recovery_added_later;
           Alcotest.test_case "provision error crosses provide" `Quick
             provision_error_crosses_provide;
+          Alcotest.test_case "Layer marker handles first error" `Quick
+            mixed_layer_source_handles_first_error;
+          Alcotest.test_case "effect marker handles second Layer error" `Quick
+            mixed_layer_source_handles_second_error;
+          Alcotest.test_case "Layer source forwards third error" `Quick
+            mixed_layer_source_forwards_third_error;
+          Alcotest.test_case "Layer target forwards third error" `Quick
+            mixed_layer_target_forwards_third_error;
           Alcotest.test_case "generic helper handles claimed error" `Quick
             generic_helper_handles_claimed_error;
           Alcotest.test_case "generic helper forwards residual error" `Quick

@@ -31,6 +31,8 @@
   layer_wrong_marker_channel
   layer_provider_wrong_marker_channel
   layer_provider_wrong_arity
+  layer_provider_incomplete_handler
+  layer_provider_two_marker_sources
   layer_fake_owner
   layer_aliased_owner
   layer_cause_direct_marker

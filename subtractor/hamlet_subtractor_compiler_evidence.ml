@@ -2172,6 +2172,19 @@ let classify_generic_handler ~context_digest ~kind handler =
   if not fallback_forwards then refuse Unsupported_pattern;
   List.map (classify_typed_arm ~context_digest ~kind) preceding
 
+let classify_concrete_requirement_handler ~context_digest handler =
+  try
+    ( classify_generic_handler ~context_digest ~kind:Kind.Requirement handler,
+      false )
+  with Refuse Unsupported_pattern ->
+    let arms =
+      match arms_of_handler handler with
+      | Some arms -> arms
+      | None -> refuse Unsupported_pattern
+    in
+    ( List.map (classify_typed_arm ~context_digest ~kind:Kind.Requirement) arms,
+      true )
+
 type expression_nodes = {
   upstreams : (string, expression list) Hashtbl.t;
   callees : (string, expression list) Hashtbl.t;
@@ -2610,6 +2623,7 @@ type source_plan =
       source : source_plan;
       handled : Leaf.t list;
       explicitly_forwarded : Leaf.t list;
+      complete : bool;
     }
   | Errors_from_output of {
       source : source_plan;
@@ -3074,9 +3088,15 @@ let rec source_plan_for_expression
                                 | Some handler -> handler
                                 | None -> refuse Unsupported_pattern
                               in
-                              let classified =
-                                classify_generic_handler ~context_digest
-                                  ~kind:Kind.Requirement handler
+                              let classified, complete =
+                                match generic_input with
+                                | None ->
+                                    classify_concrete_requirement_handler
+                                      ~context_digest handler
+                                | Some _ ->
+                                    ( classify_generic_handler ~context_digest
+                                        ~kind:Kind.Requirement handler,
+                                      false )
                               in
                               let leaves action =
                                 classified
@@ -3099,6 +3119,7 @@ let rec source_plan_for_expression
                                         handled = leaves Residual.Handle;
                                         explicitly_forwarded =
                                           leaves Residual.Forward;
+                                        complete;
                                       };
                                     source_plan;
                                   ],
@@ -3406,6 +3427,7 @@ let rec source_plan_for_expression
                                             handled = leaves Residual.Handle;
                                             explicitly_forwarded =
                                               leaves Residual.Forward;
+                                            complete = false;
                                           },
                                         source_catalogues )
                                   | _ ->
@@ -3640,7 +3662,7 @@ let rec symbolic_certificate_of_source_plan dependencies = function
       Core.Generic_contract.catch ~inputs:[] ~source ~handled
         ~explicitly_forwarded ~recoveries
       |> generic_result "concrete catch"
-  | Provided_source { source; handled; explicitly_forwarded } ->
+  | Provided_source { source; handled; explicitly_forwarded; complete = _ } ->
       let source = symbolic_certificate_of_source_plan dependencies source in
       Core.Generic_contract.provide ~inputs:[] ~source ~handled
         ~explicitly_forwarded ~handlers:[]
@@ -3706,7 +3728,7 @@ type node = {
   post_contributors : source_plan list;
   arms : Residual.arm list;
   arm_members : (Identity.t * Atom.t list) list;
-  recoveries : Effect_certificate.t list;
+  recoveries : source_plan list;
   catalogues : Hamlet_subtractor_catalogue.t list;
 }
 
@@ -3750,11 +3772,6 @@ let extract_node ~context_digest nodes marker_id marker_expression =
         in
         ([ plan ], catalogues)
   in
-  let dependencies =
-    upstream_dependencies
-    @ List.concat_map source_plan_dependencies post_contributors
-    |> List.sort_uniq String.compare
-  in
   let handler =
     match
       Hamlet_subtractor_propagate.peel_outer handler
@@ -3773,10 +3790,33 @@ let extract_node ~context_digest nodes marker_id marker_expression =
           match classified.action with
           | Residual.Handle -> true
           | Forward -> false)
-      |> List.map
-           (recovery_certificate ~context_digest ~bindings:nodes.bindings)
+      |> List.map (fun classified ->
+          match owner_descriptor.forwarding with
+          | Owner_descriptor.Layer_fail_like -> (
+              try
+                source_plan_for_expression ~context_digest ~nodes
+                  ~marker_id:(marker_id ^ ":recovery") ~kind ~generic_input:None
+                  ~seen:[] classified.rhs
+              with Refuse _ ->
+                let certificate, catalogues =
+                  recovery_certificate ~context_digest ~bindings:nodes.bindings
+                    classified
+                in
+                (Known_source certificate, catalogues))
+          | Owner_descriptor.Effect_fail | Owner_descriptor.Dispatch_need ->
+              let certificate, catalogues =
+                recovery_certificate ~context_digest ~bindings:nodes.bindings
+                  classified
+              in
+              (Known_source certificate, catalogues))
       |> List.split
     else ([], [])
+  in
+  let dependencies =
+    upstream_dependencies
+    @ List.concat_map source_plan_dependencies post_contributors
+    @ List.concat_map source_plan_dependencies recoveries
+    |> List.sort_uniq String.compare
   in
   {
     marker;
@@ -4017,7 +4057,7 @@ let rec resolve_source_plan dependencies = function
             refuse (Core_validation_failed "invalid traced Layer.catch")
       in
       (certificate, inputs)
-  | Provided_source { source; handled; explicitly_forwarded } ->
+  | Provided_source { source; handled; explicitly_forwarded; complete } ->
       let source, inputs = resolve_source_plan dependencies source in
       let arms =
         List.map
@@ -4034,6 +4074,16 @@ let rec resolve_source_plan dependencies = function
             explicitly_forwarded
       in
       let input = exact_evidence Kind.Requirement source in
+      (if complete then
+         let covered = handled @ explicitly_forwarded in
+         if
+           not
+             (Proof.leaves input
+             |> List.for_all (fun leaf ->
+                 List.exists
+                   (fun candidate -> Leaf.equal leaf candidate)
+                   covered))
+         then refuse Unsupported_pattern);
       let residual =
         Residual.calculate ~input ~arms ~recovery:[] |> function
         | Ok residual -> residual
@@ -4153,13 +4203,45 @@ let rec resolve_source_plan dependencies = function
       in
       (certificate, inputs)
 
+let recovery_conflicts_with_input input certificate =
+  match
+    certificate |> Effect_certificate.errors |> Effect_certificate.evidence_view
+  with
+  | Opaque_reasons _ -> false
+  | Exact_proof recovery ->
+      let input_leaves = Proof.leaves input in
+      Proof.leaves recovery
+      |> List.exists (fun recovery_leaf ->
+          input_leaves
+          |> List.exists (fun input_leaf ->
+              (not (Leaf.equal recovery_leaf input_leaf))
+              && Leaf.members recovery_leaf
+                 |> List.exists (fun recovery_atom ->
+                     Leaf.members input_leaf
+                     |> List.exists (Atom.equal_structural recovery_atom))))
+
+let resolved_recoveries dependencies (node : node) input =
+  node.recoveries
+  |> List.map (fun recovery ->
+      let certificate = resolve_source_plan dependencies recovery |> fst in
+      if not (recovery_conflicts_with_input input certificate) then certificate
+      else
+        Effect_certificate.create
+          ~errors:(Effect_certificate.opaque Opaque_recovery)
+          ~requirements:(Effect_certificate.requirements certificate)
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse
+              (Core_validation_failed "cannot normalize Layer recovery proof"))
+
 let residual_for_node dependencies (node : node) source =
   let kind = Core.Marker.kind node.marker in
   let input = exact_evidence kind source |> align_input_with_arms node in
   let recovery =
     match kind with
     | Kind.Error ->
-        node.recoveries
+        resolved_recoveries dependencies node input
         |> List.concat_map (fun certificate ->
             match
               certificate
@@ -4183,6 +4265,9 @@ let residual_for_node dependencies (node : node) source =
 
 let output_certificate dependencies (node : node) source residual =
   let input_id = Core.Marker.id node.marker in
+  let recoveries =
+    resolved_recoveries dependencies node (Residual.input residual)
+  in
   let contributors =
     node.post_contributors
     |> List.map (fun contributor ->
@@ -4204,7 +4289,7 @@ let output_certificate dependencies (node : node) source residual =
     | Kind.Error ->
         Effect_certificate.catch ~inputs:[ input_id ] ~source
           ~error_result:residual
-          ~recoveries:(node.recoveries @ contributors)
+          ~recoveries:(recoveries @ contributors)
     | Kind.Requirement ->
         Effect_certificate.provide ~inputs:[ input_id ] ~source
           ~requirement_result:residual ~handlers:contributors)

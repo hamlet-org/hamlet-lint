@@ -29,3 +29,7 @@ case_layer_trace_tap_cause result=Logger.Tag.t errors=closed[Trace_timeout] requ
 case_layer_trace_unwrap result=Logger.Tag.t errors=closed[Trace_timeout] requirements=Hamlet.never
 case_layer_trace_unwrap_builder result=Logger.Tag.t errors=closed[Trace_timeout] requirements=Hamlet.never
 case_mixed_effect_marker_then_layer_marker result=Logger.Tag.t errors=closed[Trace_timeout] requirements=Hamlet.never
+case_mixed_layer_marker_then_effect_marker_direct result=unit errors=closed[Recovery_missing] requirements=Clock.Tag.r
+case_mixed_layer_marker_then_effect_marker_pipeline result=unit errors=closed[Recovery_missing] requirements=Clock.Tag.r
+case_layer_complete_provider_handler result=unit errors=closed[Complete_b] requirements=Clock.Tag.r
+case_mixed_target_marker_then_effect_marker result=module errors=closed[Target_c] requirements=Clock.Tag.r

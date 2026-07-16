@@ -79,6 +79,7 @@
  (libraries
   hamlet
   automatic_propagation_external
+  hamlet_subtractor_layer_fixture
   hamlet_subtractor_generic_helper_producer
   hamlet_subtractor_nested_outer_fixture
   alcotest)
