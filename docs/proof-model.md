@@ -64,6 +64,12 @@ let source : (unit, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t = effect
 
 The resolver enumerates both tags and normalizes their payloads.
 
+A direct type constraint on a named `Layer.t` binding is the corresponding
+Layer boundary. Both its build-error and build-requirement rows must be finite.
+The constraint may deliberately expose more leaves than the constructor
+currently creates; later markers use the declared Layer API. A contextual
+constraint at one use site is not a boundary for the original binding.
+
 ### Explicit Hamlet boundary
 
 `%hamlet.te` and `%hamlet.ts` state a deliberate error or requirement universe.

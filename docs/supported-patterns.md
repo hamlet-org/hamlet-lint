@@ -157,6 +157,31 @@ let wired_layer =
     target_layer
 ```
 
+A Layer provider may also sit between an earlier Layer error marker and a
+later effect error marker. Its ordinary handler needs no automatic requirement
+marker when it covers the target's exact requirement row completely:
+
+```ocaml
+let provided =
+  Hamlet.Layer.provide_to_effect ~source
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | #Clock.Tag.r as witness -> Hamlet.Dispatch.need witness)
+    target
+
+let recovered =
+  Hamlet.Combinators.catch provided ~handler:(function
+    | `Timeout -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+```
+
+The resolver verifies that every target requirement has one unguarded concrete
+`give` or `need` arm. It then carries the source Layer's build errors and
+requirements through the provider, so `recovered` sees the exact residual from
+an earlier `Layer.catch`. Missing, guarded, or opaque coverage is refused
+instead of being treated as complete. Direct and pipeline provider
+syntax are equivalent.
+
 ## Layer construction and metadata
 
 These calls preserve the exact errors and requirements of their visible build
@@ -260,6 +285,27 @@ In every form, the resolver checks both the selection effect and the returned
 Layer build. A caller-controlled or opaque selector is refused; see the
 refused guide.
 
+The returned Layer may use canonical `Combinators.try_catch` when its exception
+handler is inline and every branch returns an exact finite error value:
+
+```ocaml
+let parsed_layer =
+  Hamlet.Layer.make Service.Tag.key
+    (Hamlet.Combinators.try_catch
+       ~thunk:(fun () -> (module Service_live : Service.S))
+       ~handler:(function
+         | Failure _ -> `Invalid_config
+         | _ -> `Unexpected_exception))
+
+let layer =
+  Hamlet.Layer.unwrap Service.Tag.key
+    (Hamlet.Combinators.return parsed_layer)
+```
+
+`try_catch` introduces no requirements; its exact error row is the union of
+the visible handler results. A named or parameter-controlled handler is
+refused. `try_catch_with_bt` is not part of this exact form.
+
 ## Explicit forwarding arm
 
 An arm may name a leaf and deliberately keep it in the output.
@@ -310,6 +356,28 @@ let result =
 An ordinary OCaml type annotation is still useful when an API deliberately
 exposes a wider row than its implementation constructs. That is an API choice,
 not a requirement imposed by the subtractor.
+
+The same rule applies to a named Layer binding. Here the implementation
+currently constructs `Missing`, while the declared Layer API permits both
+errors:
+
+```ocaml
+let source_layer :
+    (Logger.Tag.t, [ `Missing | `Timeout ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.make Logger.Tag.key
+    (Hamlet.Combinators.fail `Missing)
+
+let recovered =
+  Hamlet.Layer.catch source_layer ~handler:(function
+    | `Missing -> fallback_layer
+    | [%hamlet.propagate_e.auto] -> .)
+```
+
+The generated branch forwards `Timeout` because the annotation deliberately
+makes it part of `source_layer`'s finite public error universe. This works for
+a direct constraint on a simple `let name : Layer.t = ...` binding. A use-site
+annotation does not retroactively change the binding's API, and an open row
+such as ``[> `Missing ]`` still does not provide a finite universe.
 
 ## Independently generalized builder
 
@@ -522,6 +590,31 @@ let result = with_logger logger concrete_source
 The caller-generated slot forwards every concrete requirement other than
 `Logger`.
 
+## Generic `scoped_with`
+
+`scoped_with` passes a fresh scope to its handler before the target
+requirement. A generic helper may handle that first argument and continue with
+an automatic requirement marker:
+
+```ocaml
+let[@hamlet.generic] scoped_then_logger logger source =
+  let scoped =
+    Hamlet.Combinators.scoped_with source
+      ~handler:(fun scope -> function
+        | #Hamlet.Scope.Tag.r as witness ->
+            Hamlet.Scope.Tag.give witness scope
+        | requirement -> Hamlet.Dispatch.need requirement)
+  in
+  Hamlet.Combinators.provide scoped ~handler:(function
+    | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+    | [%hamlet.propagate_s.auto] -> .)
+```
+
+The caller may pass an unannotated local source built from verified operations
+such as `add_finalizer` and generated service summons. Caller evidence follows
+that visible construction and requires exact proofs for both channels. A
+named scope handler or a source returned by an opaque callback is refused.
+
 ## Generic Layer helper
 
 The final symbolic argument may be a Layer. The helper and its caller need no
@@ -555,6 +648,48 @@ let wired = provide_logger concrete_target_layer
 
 The caller's target requirements determine the generated evidence;
 requirements needed to build `logger_layer` remain in the result.
+
+A generic Layer may also pass through the transparent `unwrap` form. The
+selection effect must return the symbolic Layer directly:
+
+```ocaml
+let[@hamlet.generic] recover_selected source =
+  Hamlet.Layer.unwrap Logger.Tag.key
+    (Hamlet.Combinators.return source)
+  |> Hamlet.Layer.catch ~handler:(function
+       | `Missing -> fallback_layer
+       | [%hamlet.propagate_e.auto] -> .)
+
+let recovered = recover_selected concrete_layer
+```
+
+`return source` and `success source` are supported. A callback that computes
+which Layer to return is still opaque because its result need not be the
+symbolic input.
+
+Optional `?fresh` arguments are preserved on direct and pipeline
+`Layer.catch` calls. The PPX binds the input Layer once, so forwarding cannot
+evaluate an effectful input expression a second time.
+
+## Generic `catch_cause`
+
+`catch_cause` handles the complete cause, so none of the symbolic input's
+typed errors survives it. A visible inline handler may introduce a new finite
+error row that a later marker can use:
+
+```ocaml
+let[@hamlet.generic] recover_cause source =
+  source
+  |> Hamlet.Combinators.catch_cause ~handler:(fun _cause ->
+       Hamlet.Combinators.fail `Recovered)
+  |> Hamlet.Combinators.catch ~handler:(function
+       | `Recovered -> Hamlet.Combinators.return ()
+       | [%hamlet.propagate_e.auto] -> .)
+```
+
+The contract keeps the input requirements and adds the handler's effects. A
+named or otherwise opaque cause handler is refused because its result effects
+cannot be proved from the helper body.
 
 ## Several markers in one generic helper
 

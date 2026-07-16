@@ -145,6 +145,14 @@ private value. Both the real catch call and every generated `Layer.fail_like`
 branch use that value. Generated code therefore cannot repeat a source
 expression with side effects or a freshly generated key.
 
+When a Layer provider appears between markers, the target proof is transformed
+by its requirement handler and the source Layer proof is added afterward. A
+normal handler without an automatic marker is exact only when every target
+requirement has an unguarded verified `give` or `need` arm. This lets an error
+certificate from an earlier `Layer.catch` cross the provider. The resolver
+checks declaration identities; it does not trust the names printed in the
+handler.
+
 ## Generated code
 
 `hamlet_subtractor_generator.ml` materializes forwarding branches. It uses the

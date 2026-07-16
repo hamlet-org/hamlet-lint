@@ -347,11 +347,22 @@ let layer =
 ```
 
 A visible local selector such as `let choose () = return fallback_layer` is
-also supported. If abstraction is intentional, expose an independently
-generalized selector with a finite exact result. `[@hamlet.generic]` does not
-fix this particular helper: its symbolic Layer is wrapped inside the selection
-effect, rather than flowing directly through a supported Layer operation. Do
-not add an annotation that claims rows the implementation does not guarantee.
+also supported. If the Layer itself is the helper's final symbolic argument,
+the direct transparent form may instead be generic:
+
+```ocaml
+let[@hamlet.generic] handle selected =
+  Hamlet.Layer.unwrap Service.Tag.key
+    (Hamlet.Combinators.return selected)
+  |> Hamlet.Layer.catch ~handler:(function
+       | `Missing -> fallback_layer
+       | [%hamlet.propagate_e.auto] -> .)
+```
+
+This works because the selector returns `selected` unchanged. A callback,
+alias, or other opaque computation that chooses a different Layer remains
+refused. Do not add an annotation that claims rows the implementation does not
+guarantee.
 
 ## Indirect `give` or `need`
 
@@ -437,6 +448,11 @@ let combined = choose left right
 Fix: use a supported direct composition such as `both`, or introduce one exact
 boundary for `combined`. A direct linear marker flow is supported; this refusal
 is about ambiguity, not its length.
+
+The same rule applies when a Layer provider's target and source depend on two
+different earlier markers. One marker may cross the provider together with a
+concrete source or target, but two independent predecessor certificates are
+refused until the program introduces one unambiguous exact boundary.
 
 ## Invalid generic-helper definition
 

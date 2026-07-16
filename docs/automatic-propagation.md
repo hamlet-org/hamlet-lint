@@ -105,11 +105,22 @@ The same handler form works with `Layer.provide_to_effect` and
 the result after target requirements have been subtracted; they are not
 mistaken for requests handled by this callback.
 
+The provider may be an intermediate step between error markers. If its normal
+handler exhaustively gives or forwards every exact target requirement, the
+resolver preserves an earlier Layer marker's residual errors across the
+provider and a later effect marker may continue from them. A handler with
+missing or guarded coverage is not considered exhaustive.
+
 The resolver also follows verified direct uses of Layer packaging, recovery,
 observation, and unwrapping primitives between markers. The exact supported
 forms and safe refusal boundaries are shown in
 [Supported Patterns](./supported-patterns.md) and
 [Refused Patterns](./refused-patterns.md).
+
+Inside a transparently selected Layer, canonical `try_catch` is exact when its
+handler is inline and each branch returns a provable finite error value. Its
+requirement proof is empty and its error proof is the union of those branch
+results. Named handlers and `try_catch_with_bt` remain refusal boundaries.
 
 A generic helper may take a Layer as its final symbolic input. Only the helper
 definition is annotated:
@@ -125,6 +136,21 @@ let recovered = recover_missing_layer concrete_layer
 
 The caller writes an ordinary direct call. The PPX specializes the helper's
 contract from `concrete_layer` and generates the hidden forwarding evidence.
+The same rule covers `Layer.unwrap key (return source)` and
+`Layer.unwrap key (success source)`: these forms only wrap and recover the
+symbolic Layer, so they preserve its exact caller-supplied proof. An opaque
+selector that may return another Layer is refused.
+
+Generic `catch_cause` is also exact when its handler is visible. The operation
+removes all typed errors from the symbolic input, preserves its requirements,
+and adds the handler result's errors and requirements. A following automatic
+marker therefore sees the handler's error row, not the caller's original one.
+
+Generic `scoped_with` peels the fresh scope argument before reading its inline
+requirement dispatcher. At a call, an unannotated visible local source can be
+proved through the same concrete source language used for marker inputs,
+including `add_finalizer` and generated summons. Opaque callback-produced
+sources still require a deliberate exact boundary.
 
 ## Several markers and intervening operations
 
@@ -258,6 +284,8 @@ Automatic propagation can proceed from:
 - a finite row proved from a supported concrete construction, even when OCaml
   keeps a fresh tail flexible for later unification;
 - an explicit `%hamlet.te` or `%hamlet.ts` boundary;
+- a finite ordinary type constraint on a named `Layer.t` binding, when the
+  declared Layer API is intentionally wider than its visible constructor;
 - an imported or independently generalized value whose fresh instance has a
   finite visible row without constraining an argument or surrounding value;
 - the proven output of an earlier automatic marker or a direct generic call.
@@ -272,8 +300,10 @@ let build () = Hamlet.Combinators.fail `Missing
 
 The call `build ()` can be analyzed on its own. By contrast,
 `let build error = Hamlet.Combinators.fail error` receives its error universe
-from the caller and needs either a generic-helper contract or an explicit row
-boundary.
+from a raw value argument. That function cannot itself use the generic-helper
+contract, which specializes a final `Hamlet.t` or `Layer.t` argument. Give the
+raw argument a deliberate finite public error type, or put the automatic
+handler in a generic helper that receives the completed computation.
 
 ## Explicit fallback
 
