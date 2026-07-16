@@ -131,10 +131,16 @@ let expect_generic_unwrap_and_optional_fresh () =
   if !Fixture.optional_pipeline_evaluations <> 1 then
     failwith "pipeline optional fresh evaluated its upstream more than once"
 
+let expect_try_catch_unwrap_recovery () =
+  Fixture.case_layer_trace_unwrap_try_catch
+  |> run_logger_layer
+  |> expect_success "try_catch Layer.unwrap recovery"
+
 let () =
   expect_counted_forwarding ();
   expect_explicit_boundary_forwarding ();
   expect_structural_forwarding ();
   expect_cross_cu_forwarding ();
   expect_provider_matrix ();
-  expect_generic_unwrap_and_optional_fresh ()
+  expect_generic_unwrap_and_optional_fresh ();
+  expect_try_catch_unwrap_recovery ()

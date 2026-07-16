@@ -1212,6 +1212,7 @@ let canonical_combinator_name expression =
         "tap_fail";
         "tap_defect";
         "tap_cause";
+        "try_catch";
       ]
       |> List.find_opt (fun value_name ->
           canonical_hamlet_value expression.exp_env ~loc:expression.exp_loc
@@ -1415,6 +1416,17 @@ let canonical_binding_operator expression operator expected_name =
     ~module_name:"Combinators" ~value_name:expected_name operator.bop_op_path
     operator.bop_op_val
 
+let failure_function_result_has_independent_origin bindings seen expression =
+  match expression.exp_desc with
+  | Texp_function (_, Tfunction_body body) ->
+      failure_argument_has_independent_origin bindings seen body
+  | Texp_function (_, Tfunction_cases { cases; _ }) ->
+      List.for_all
+        (fun (case : value case) ->
+          failure_argument_has_independent_origin bindings seen case.c_rhs)
+        cases
+  | _ -> false
+
 let rec expression_has_independent_origin
     bindings
     seen
@@ -1502,6 +1514,13 @@ let rec expression_has_independent_origin
                   function_result_has_independent_origin bindings seen
                     service_modules ~source:callback callback
               | [] -> false
+              end
+          | Some "try_catch" ->
+              begin match labelled_argument "handler" arguments with
+              | Some handler ->
+                  failure_function_result_has_independent_origin bindings seen
+                    handler
+              | None -> false
               end
           | Some "acquire_use_release" ->
               begin match
@@ -2520,6 +2539,28 @@ let failure_argument_certificate ~context_digest argument =
       ~requirements:(empty_proof Kind.Requirement Proof.Fail),
     catalogues )
 
+let failure_function_certificate ~context_digest expression =
+  let results =
+    match expression.exp_desc with
+    | Texp_function (_, Tfunction_body body) -> [ body ]
+    | Texp_function (_, Tfunction_cases { cases; _ }) ->
+        List.map (fun (case : value case) -> case.c_rhs) cases
+    | _ -> refuse Unresolved_row
+  in
+  if results = [] then refuse Unresolved_row;
+  let certificates, catalogues =
+    results
+    |> List.map (failure_argument_certificate ~context_digest)
+    |> List.split
+  in
+  let certificate =
+    Effect_certificate.chain ~inputs:[] certificates |> function
+    | Ok certificate -> certificate
+    | Error _ ->
+        refuse (Core_validation_failed "invalid failure handler certificate")
+  in
+  (certificate, List.concat catalogues)
+
 let intrinsic_certificate ~context_digest expression =
   match expression.exp_desc with
   | Texp_ident (path, _, description) ->
@@ -2562,6 +2603,16 @@ let intrinsic_certificate ~context_digest expression =
             | None -> refuse Unresolved_row
           in
           Some (failure_argument_certificate ~context_digest argument)
+      | Texp_ident (path, _, description)
+        when canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc
+               ~module_name:"Combinators" ~value_name:"try_catch" path
+               description ->
+          let handler =
+            match labelled_argument "handler" arguments with
+            | Some handler -> handler
+            | None -> refuse Unresolved_row
+          in
+          Some (failure_function_certificate ~context_digest handler)
       | _ -> None)
   | _ -> None
 

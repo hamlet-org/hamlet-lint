@@ -30,6 +30,7 @@
   generic_scoped_with_opaque_handler
   generic_scoped_with_opaque_source
   layer_opaque_unwrap
+  layer_unwrap_try_catch_opaque_handler
   layer_wrong_marker_channel
   layer_provider_wrong_marker_channel
   layer_provider_wrong_arity

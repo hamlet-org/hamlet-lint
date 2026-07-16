@@ -479,6 +479,22 @@ let case_layer_trace_unwrap_builder :
     | `Trace_missing -> trace_fallback
     | [%hamlet.propagate_e.auto] -> .)
 
+exception Try_catch_build_failed
+
+let try_catch_layer =
+  Layer.make Logger.Tag.key
+    (Combinators.try_catch
+       ~thunk:(fun () -> raise Try_catch_build_failed)
+       ~handler:(function
+         | Try_catch_build_failed -> `Try_catch_build | _ -> `Try_catch_other))
+
+let case_layer_trace_unwrap_try_catch :
+    (Logger.Tag.t, [ `Try_catch_other ], never) Layer.t =
+  Layer.unwrap Logger.Tag.key (Combinators.return try_catch_layer)
+  |> Layer.catch ~handler:(function
+    | `Try_catch_build -> trace_fallback
+    | [%hamlet.propagate_e.auto] -> .)
+
 let effect_marker_inside_layer =
   (if Sys.opaque_identity true then Combinators.fail `Trace_timeout
    else Combinators.fail `Trace_missing)
