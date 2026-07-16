@@ -5422,8 +5422,56 @@ let contract_for_call ~definitions callee =
   | Texp_ident _ -> generic_contract_for_callee ~definitions callee
   | _ -> refuse Fake_or_aliased_callee
 
+let certificate_is_exact certificate =
+  let exact evidence =
+    match Effect_certificate.evidence_view evidence with
+    | Exact_proof _ -> true
+    | Opaque_reasons _ -> false
+  in
+  exact (Effect_certificate.errors certificate)
+  && exact (Effect_certificate.requirements certificate)
+
+let exact_local_generic_call_input ~context_digest ~bindings source =
+  match source.exp_desc with
+  | Texp_ident (path, _, description) ->
+      begin match
+        find_value_binding bindings path description.Types.val_uid
+      with
+      | Some rhs ->
+          let nodes =
+            {
+              upstreams = Hashtbl.create 0;
+              callees = Hashtbl.create 0;
+              handlers = Hashtbl.create 0;
+              contributors = Hashtbl.create 0;
+              markers = Hashtbl.create 0;
+              generic_outputs = Hashtbl.create 0;
+              bindings;
+            }
+          in
+          let plan, catalogues =
+            source_plan_for_expression ~context_digest ~nodes
+              ~marker_id:"generic-call-input" ~kind:Kind.Error
+              ~generic_input:None ~seen:[] rhs
+          in
+          if source_plan_dependencies plan <> [] then refuse Higher_order_flow;
+          let certificate, inputs = resolve_source_plan [] plan in
+          if inputs <> [] || not (certificate_is_exact certificate) then
+            refuse Higher_order_flow;
+          (certificate, catalogues)
+      | None -> refuse Higher_order_flow
+      end
+  | _ -> refuse Higher_order_flow
+
 let exact_generic_call_input ~context_digest ~bindings source =
-  concrete_certificate_for_expression ~context_digest ~bindings ~seen:[] source
+  try
+    concrete_certificate_for_expression ~context_digest ~bindings ~seen:[]
+      source
+  with
+  | Refuse Higher_order_flow
+  | Refuse (Open_row | Unresolved_row | Polymorphic_parameter)
+  ->
+    exact_local_generic_call_input ~context_digest ~bindings source
 
 let validate_call_source_position _contract call source =
   match call.exp_desc with

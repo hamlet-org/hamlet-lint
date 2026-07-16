@@ -28,6 +28,7 @@
   generic_alias
   generic_catch_cause_opaque_handler
   generic_scoped_with_opaque_handler
+  generic_scoped_with_opaque_source
   layer_opaque_unwrap
   layer_wrong_marker_channel
   layer_provider_wrong_marker_channel

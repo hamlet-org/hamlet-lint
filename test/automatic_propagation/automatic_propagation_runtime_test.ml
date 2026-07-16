@@ -479,6 +479,16 @@ Hamlet_subtractor_generic_helper_producer.Clock.Make (struct
   let now () = Hamlet.Combinators.return 42
 end)
 
+let generic_scoped_cross_module_source =
+  let open Hamlet.Combinators in
+  let* () = add_finalizer (return ()) in
+  let* _logger = Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon in
+  let* _metrics =
+    Hamlet_subtractor_generic_helper_producer.Metrics.Tag.summon
+  in
+  let* _clock = Hamlet_subtractor_generic_helper_producer.Clock.Tag.summon in
+  return ()
+
 let generic_helper_provides_requirement () =
   let source =
     let open Hamlet.Combinators in
@@ -582,6 +592,26 @@ let mixed_layer_target_forwards_third_error () =
   | Error `Target_c -> ()
   | Ok _ -> Alcotest.fail "target error disappeared"
 
+let generic_scoped_with_forwards_residual_requirement () =
+  Hamlet_subtractor_generic_helper_producer.case_generic_scoped_with_same_module
+  |> Combinators.provide ~handler:(function
+      | #Hamlet_subtractor_generic_helper_producer.Clock.Tag.r as witness ->
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.give witness
+        (module Generic_clock_live))
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "same-module generic scoped_with forwards Clock" (Ok ());
+  Hamlet_subtractor_generic_helper_producer.scoped_then_provide_metrics
+    (module Generic_logger_live)
+    generic_scoped_cross_module_source
+  |> Combinators.provide ~handler:(function
+      | #Hamlet_subtractor_generic_helper_producer.Clock.Tag.r as witness ->
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.give witness
+        (module Generic_clock_live))
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "cross-module generic scoped_with forwards Clock" (Ok ())
+
 let () =
   Alcotest.run "automatic propagation"
     [
@@ -654,5 +684,7 @@ let () =
             `Quick generic_helper_forwards_residual_requirement;
           Alcotest.test_case "generic output feeds a requirement marker" `Quick
             generic_output_to_requirement_marker;
+          Alcotest.test_case "generic scoped_with forwards requirement" `Quick
+            generic_scoped_with_forwards_residual_requirement;
         ] );
     ]

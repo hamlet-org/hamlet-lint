@@ -144,6 +144,25 @@ let case_generic_first =
 let case_generic_second =
   Hamlet_subtractor_generic_helper_producer.recover_missing second_source
 
+let scoped_requirement_source =
+  let open Hamlet.Combinators in
+  let* () = add_finalizer (return ()) in
+  let* _logger = Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon in
+  let* _metrics =
+    Hamlet_subtractor_generic_helper_producer.Metrics.Tag.summon
+  in
+  let* _clock = Hamlet_subtractor_generic_helper_producer.Clock.Tag.summon in
+  return ()
+
+let case_generic_scoped_with_cross_module :
+    ( unit,
+      Hamlet.never,
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.r )
+    Hamlet.t =
+  Hamlet_subtractor_generic_helper_producer.scoped_then_provide_metrics
+    (module Hamlet_subtractor_generic_helper_producer.Logger_live)
+    scoped_requirement_source
+
 let generic_first_handled =
   Hamlet.Combinators.catch case_generic_first ~handler:(function
     | `Recovery -> Hamlet.Combinators.return ()

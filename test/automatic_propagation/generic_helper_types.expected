@@ -9,3 +9,4 @@ case_layer_generic_provide_merge_to_layer result=Hamlet_subtractor_generic_helpe
 case_generic_first result=unit errors=principal[Recovery,Timeout] requirements=Hamlet.never
 case_generic_second result=unit errors=principal[Offline,Recovery] requirements=Hamlet.never
 case_generic_catch_cause_cross_module result=unit errors=closed[Cause_residual] requirements=Hamlet.never
+case_generic_scoped_with_cross_module result=unit errors=Hamlet.never requirements=Hamlet_subtractor_generic_helper_producer.Clock.Tag.r

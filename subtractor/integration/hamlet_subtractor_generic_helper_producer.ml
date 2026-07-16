@@ -98,14 +98,28 @@ let[@hamlet.generic] provide_logger logger source =
     | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
     | [%hamlet.propagate_s.auto] -> .)
 
-let[@hamlet.generic] scoped_then_provide_logger logger source =
+let[@hamlet.generic] scoped_then_provide_metrics logger source =
   Hamlet.Combinators.provide
     (Hamlet.Combinators.scoped_with source ~handler:(fun scope -> function
       | #Hamlet.Scope.Tag.r as witness -> Hamlet.Scope.Tag.give witness scope
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
       | requirement -> Hamlet.Dispatch.need requirement))
     ~handler:(function
-      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | #Metrics.Tag.r as witness ->
+          Metrics.Tag.give witness (module Metrics_live)
       | [%hamlet.propagate_s.auto] -> .)
+
+let same_module_scoped_source =
+  let open Hamlet.Combinators in
+  let* () = add_finalizer (return ()) in
+  let* _logger = Logger.Tag.summon in
+  let* _metrics = Metrics.Tag.summon in
+  let* _clock = Clock.Tag.summon in
+  return ()
+
+let case_generic_scoped_with_same_module :
+    (unit, Hamlet.never, Clock.Tag.r) Hamlet.t =
+  scoped_then_provide_metrics (module Logger_live) same_module_scoped_source
 
 module Ordinary = struct
   let add left right = left + right

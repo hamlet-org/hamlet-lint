@@ -18,6 +18,7 @@ exhausted_warning|warning 11|unused
 generic_alias|Evidence.slot|Hamlet.t
 generic_catch_cause_opaque_handler|cannot trace automatic marker source|%hamlet.te
 generic_scoped_with_opaque_handler|cannot trace automatic marker source|%hamlet.te
+generic_scoped_with_opaque_source|higher-order effect flow|%hamlet.te
 layer_opaque_unwrap|chosen by a function parameter|%hamlet.te
 layer_wrong_marker_channel|kind mismatch|propagate_e.auto
 layer_provider_wrong_marker_channel|kind mismatch|propagate_s.auto
