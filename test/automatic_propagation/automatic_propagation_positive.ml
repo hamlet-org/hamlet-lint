@@ -237,6 +237,18 @@ let case_two_direct_chains_before_marker =
       | #Composition_errors.a -> Combinators.return "a"
       | [%hamlet.propagate_e.auto] -> .)
 
+let case_let_plus_before_marker =
+  let mapped =
+    let open Combinators in
+    let+ value = composition_source in
+    value
+  in
+  mapped
+  |> Combinators.catch ~handler:(fun error ->
+      match error with
+      | #Composition_errors.a -> Combinators.return "a"
+      | [%hamlet.propagate_e.auto] -> .)
+
 let case_chain_between_two_markers =
   let after_first =
     composition_source

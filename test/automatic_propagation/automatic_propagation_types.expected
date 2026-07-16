@@ -9,6 +9,7 @@ case_error_function result=string errors=closed[Local_corrupt(string),Local_miss
 case_error_dependent result=string errors=closed[Local_denied] requirements=closed[Local_io(Hamlet.P.t<Local_io.Tag.t>)]
 case_error_chain_composition result=string errors=closed[Chain_introduced_two,Chain_old_c] requirements=Hamlet.never
 case_two_direct_chains_before_marker result=string errors=closed[Composition_b,Composition_c] requirements=Hamlet.never
+case_let_plus_before_marker result=string errors=closed[Composition_b,Composition_c] requirements=Hamlet.never
 case_chain_between_two_markers result=string errors=closed[Composition_c] requirements=Hamlet.never
 case_plain_catch_between_two_markers result=string errors=closed[Replacement_b] requirements=Hamlet.never
 case_catch_cause_between_two_markers result=string errors=closed[Replacement_b] requirements=Hamlet.never

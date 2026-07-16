@@ -117,6 +117,13 @@ match __input with
 | `Composition_c as error -> Hamlet.Combinators.fail error
 | _ -> .
 
+case_let_plus_before_marker match-1:
+match __input with
+| #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
+| `Composition_b as error -> Hamlet.Combinators.fail error
+| `Composition_c as error -> Hamlet.Combinators.fail error
+| _ -> .
+
 case_chain_between_two_markers match-1:
 match __input with
 | #Composition_errors.a -> ((Combinators.return "a")[@merlin.loc ])
