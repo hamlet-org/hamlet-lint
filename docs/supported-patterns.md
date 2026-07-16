@@ -7,6 +7,22 @@ Each example below is intentionally small. Assume its Dune target uses:
  (staged_pps hamlet-subtractor.ppx))
 ```
 
+## What “exact” means
+
+The PPX does not require you to annotate every effect with a closed row. OCaml
+normally keeps rows flexible so later expressions can unify with them; that is
+expected and works.
+
+For automatic propagation, “exact” means something narrower: the resolver can
+account for every error or requirement introduced by the computation it is
+following. For example, it knows that `Hamlet.Combinators.fail \`Missing`
+introduces `Missing`, even though OCaml may keep the surrounding row flexible.
+It combines such facts as it follows supported calls.
+
+It stops only when part of the computation is genuinely unknown, such as an
+opaque API result or a function parameter in an ordinary helper. In that case,
+use an explicit Hamlet boundary or make the helper generic.
+
 ## Inline error handler
 
 The handler must be written at the `catch` call and the marker must be last.
@@ -68,6 +84,182 @@ Hamlet.Combinators.provide source ~handler:(function
 
 If the input requires `Logger` and `Clock`, only `Clock` is forwarded.
 
+## Layer error handler
+
+`Layer.catch` uses the error marker in the same position as effect-level
+`catch`:
+
+```ocaml
+let recovered =
+  Hamlet.Layer.catch source_layer ~handler:(function
+    | `Missing -> fallback_layer
+    | [%hamlet.propagate_e.auto] -> .)
+```
+
+For input errors ``[ `Missing | `Timeout | `Unavailable ]``, the generated
+branches rebuild same-key failing layers for `Timeout` and `Unavailable`. The
+source expression is evaluated once even though both the catch and generated
+branches need its hidden service key.
+
+`fallback_layer` must also use the same service key as `source_layer`; that is
+the normal `Layer.catch` contract, independent of automatic propagation.
+
+Pipeline syntax is also supported:
+
+```ocaml
+source_layer
+|> Hamlet.Layer.catch ~handler:(function
+     | `Missing -> fallback_layer
+     | [%hamlet.propagate_e.auto] -> .)
+```
+
+## Layer requirement handlers
+
+The Layer provider callback has two parameters. The first is the built source
+service; the second is a requirement of the target:
+
+```ocaml
+let wired =
+  Hamlet.Layer.provide_to_effect
+    ~source:logger_layer
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | [%hamlet.propagate_s.auto] -> .)
+    target
+```
+
+If `target` requires `Logger` and `Clock`, the handler supplies `Logger` and
+forwards `Clock`. Errors and requirements needed to build `logger_layer` remain
+in `wired`.
+
+The same automatic handler works with `Layer.provide_to_layer`:
+
+```ocaml
+let wired_layer =
+  Hamlet.Layer.provide_to_layer
+    ~source:logger_layer
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | [%hamlet.propagate_s.auto] -> .)
+    target_layer
+```
+
+For an effect that builds an object containing several services, use
+`provide_merge_to_layer` directly:
+
+```ocaml
+let wired_layer =
+  Hamlet.Layer.provide_merge_to_layer
+    ~source:environment_build
+    ~handler:(fun environment -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness environment#logger
+      | [%hamlet.propagate_s.auto] -> .)
+    target_layer
+```
+
+## Layer construction and metadata
+
+These calls preserve the exact errors and requirements of their visible build
+or input layer:
+
+```ocaml
+let one = Hamlet.Layer.make Service.Tag.key build
+let many = Hamlet.Layer.merge_all build_environment
+let named_many =
+  Hamlet.Layer.merge_all_with_key Environment.Tag.key build_environment
+let rebuilt_each_time = Hamlet.Layer.fresh one
+```
+
+`make`, `merge_all`, and `merge_all_with_key` package their build effect.
+`fresh` changes only caching metadata. The resolver follows these calls when a
+later marker needs the resulting Layer rows.
+
+`fail_like` keeps a template Layer's key, cache policy, and requirements while
+replacing its build errors with one visible error:
+
+```ocaml
+let unavailable = Hamlet.Layer.fail_like template_layer `Unavailable
+```
+
+Subtractor generates this primitive for `Layer.catch` forwarding, but direct
+uses are traceable too. An error chosen by an unconstrained function parameter
+is still not a finite universe.
+
+## Layer recovery and observation
+
+`Layer.or_die` removes typed build errors while preserving requirements:
+
+```ocaml
+let infallible = Hamlet.Layer.or_die fallible_layer
+```
+
+`Layer.catch_defect` preserves the primary typed errors and adds the visible
+fallback layer effects. `Layer.catch_cause` replaces the primary typed errors
+with the visible fallback layer effects:
+
+```ocaml
+let recovered_defect =
+  Hamlet.Layer.catch_defect layer ~handler:(fun _ -> fallback_layer)
+
+let recovered_cause =
+  Hamlet.Layer.catch_cause layer ~handler:(fun _ -> fallback_layer)
+```
+
+Their callbacks receive a defect or a complete `Cause.t`, not a typed error,
+so they are traced between markers but do not own `propagate_e.auto` directly.
+
+All four observation calls keep the primary layer effects and add the visible
+callback effects:
+
+```ocaml
+let observed =
+  Hamlet.Layer.tap layer ~f:(fun _ ->
+    Hamlet.Combinators.fail `Audit_failed)
+
+let observed_failure =
+  Hamlet.Layer.tap_fail layer ~f:(fun _ ->
+    Hamlet.Combinators.return ())
+
+let observed_defect =
+  Hamlet.Layer.tap_defect layer ~f:(fun _ ->
+    Hamlet.Combinators.return ())
+
+let observed_cause =
+  Hamlet.Layer.tap_cause layer ~f:(fun _ ->
+    Hamlet.Combinators.return ())
+```
+
+## Transparent Layer unwrapping
+
+`Layer.unwrap` combines two stages: an effect chooses a layer, then Hamlet
+builds that layer. The resolver needs exact evidence for both stages. The
+smallest form is:
+
+```ocaml
+let layer =
+  Hamlet.Layer.unwrap Service.Tag.key
+    (Hamlet.Combinators.return fallback_layer)
+```
+
+The selected layer may also be held in a visible local binding:
+
+```ocaml
+let selected = Hamlet.Combinators.return fallback_layer
+let layer = Hamlet.Layer.unwrap Service.Tag.key selected
+```
+
+An independently generalized local selector is supported when the resolver can
+follow its construction:
+
+```ocaml
+let choose () = Hamlet.Combinators.return fallback_layer
+let layer = Hamlet.Layer.unwrap Service.Tag.key (choose ())
+```
+
+In every form, the resolver checks both the selection effect and the returned
+Layer build. A caller-controlled or opaque selector is refused; see the
+refused guide.
+
 ## Explicit forwarding arm
 
 An arm may name a leaf and deliberately keep it in the output.
@@ -98,9 +290,11 @@ Hamlet.Combinators.catch source ~handler:(function
 
 When the guard is false, the generated dispatcher forwards `` `Missing ``.
 
-## Closed inferred row
+## Finite concrete branches
 
-A normal closed value needs no effect-row annotation.
+A concrete value built from visible finite branches needs no effect-row
+annotation. OCaml may still infer a flexible row tail; the resolver proves the
+two constructors from the branch expressions themselves.
 
 ```ocaml
 let source =
@@ -191,9 +385,7 @@ Hamlet.Combinators.catch source ~handler:(function
 Any exact requirements of `audit_recovery ()` are added to the output
 requirement channel.
 
-## Two catches in sequence
-
-Two markers are sufficient; there is no “three or more” rule.
+## Catches in sequence
 
 ```ocaml
 source
@@ -205,7 +397,7 @@ source
      | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The second marker receives the first marker's exact output.
+Each later marker receives the exact output of its direct predecessor.
 
 ## Catch and provide in either order
 
@@ -225,7 +417,7 @@ Reversing those two calls is also supported when the resulting types are valid.
 Each marker changes only its own channel and incorporates effects introduced by
 its handler.
 
-## `chain`, `let*`, `and*`, `both`, and `map`
+## `chain`, `let*`, `let+`, `and*`, `both`, and `map`
 
 Composition can occur between markers:
 
@@ -236,8 +428,10 @@ let* second = next first in
 return (first, second)
 ```
 
-The same flow may be written with `chain`. `and*` and `both` combine the effects
-of both inputs. `map` preserves the effect rows of its input.
+The same flow may be written with `chain`. `let+` is Hamlet's mapping syntax:
+`ppx_hamlet` rewrites it to `map` before Subtractor analyses the expression.
+`and*` and `both` combine the effects of both inputs. `map` preserves the
+effect rows of its input.
 
 ## Catch filters
 
@@ -284,16 +478,16 @@ cleanup computation's own requirements:
 Hamlet.Combinators.add_finalizer cleanup
 ```
 
-The same rule applies to `add_finalizer_exit` and `acquire_release`. `ensuring`
-combines the source and finalizer effects. `scoped` removes the `Scope`
-requirement, while `scoped_with` subtracts whichever requirement arms its
-inline handler supplies.
+The same rule applies to `add_finalizer_exit` and `acquire_release`. The
+signature tells OCaml that `Scope` is required, but it does not list the other
+requirements. Subtractor recognizes these particular combinators and applies
+their known rule: add `Scope` to the requirements proven for their visible
+cleanup, acquire, and release computations. If one of those computations is
+unknown, the normal exactness rule still applies and the PPX refuses to guess.
 
-The `Scope` rule is explicit because these combinators return an open
-requirement row: “at least `Scope`, and possibly more.” An open row cannot be
-enumerated as a finite proof. The resolver therefore verifies the real
-generated `Hamlet.Scope.Tag.r`, adds that one exact leaf, and separately keeps
-the exact requirements of the cleanup, acquire, and release computations.
+`ensuring` combines the source and finalizer effects. `scoped` removes the
+`Scope` requirement, while `scoped_with` subtracts whichever requirement arms
+its inline handler supplies.
 
 `or_die` and `sandbox` clear the typed-error channel; `thaw` widens a proven
 empty error channel. `sandbox_cause` is deliberately more limited because it
@@ -327,6 +521,40 @@ let result = with_logger logger concrete_source
 
 The caller-generated slot forwards every concrete requirement other than
 `Logger`.
+
+## Generic Layer helper
+
+The final symbolic argument may be a Layer. The helper and its caller need no
+row annotations:
+
+```ocaml
+let[@hamlet.generic] recover_missing_layer source =
+  Hamlet.Layer.catch source ~handler:(function
+    | `Missing -> fallback_layer
+    | [%hamlet.propagate_e.auto] -> .)
+
+let recovered = recover_missing_layer concrete_layer
+```
+
+At the call, the PPX specializes the helper from `concrete_layer`. Forwarded
+errors use `Layer.fail_like`, so they keep the concrete layer's service key.
+The specialized output remains exact and may feed a later automatic marker.
+
+Layer providers can be generic over their target in the same way:
+
+```ocaml
+let[@hamlet.generic] provide_logger target =
+  Hamlet.Layer.provide_to_layer ~source:logger_layer
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | [%hamlet.propagate_s.auto] -> .)
+    target
+
+let wired = provide_logger concrete_target_layer
+```
+
+The caller's target requirements determine the generated evidence;
+requirements needed to build `logger_layer` remain in the result.
 
 ## Several markers in one generic helper
 

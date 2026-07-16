@@ -116,6 +116,20 @@
   (diff generic_helper_types.expected generic_helper_types.actual)))
 
 (rule
+ (targets layer_types.actual)
+ (deps
+  ../../subtractor/integration/.hamlet_subtractor_layer_fixture.objs/byte/hamlet_subtractor_layer_fixture.cmt)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run ./automatic_propagation_cmt_dump.exe %{deps}))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff layer_types.expected layer_types.actual)))
+
+(rule
  (targets nested_generic_helper_types.actual)
  (deps
   ../../subtractor/integration/.hamlet_subtractor_nested_outer_fixture.objs/byte/hamlet_subtractor_nested_outer_fixture.cmt)

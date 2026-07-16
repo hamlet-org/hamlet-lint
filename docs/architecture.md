@@ -41,9 +41,15 @@ The probe AST is a temporary copy. A marker is replaced by type-safe placeholder
 code, and private attributes connect four expressions:
 
 - the marker;
-- its owning `catch` or `provide` call;
+- its owning effect or Layer handler call;
 - the input computation;
 - the inline handler.
+
+An owner descriptor states which argument is the target, how many leading
+handler parameters precede the matched error or requirement, whether a source
+Layer contributes additional effects, and which forwarding expression the
+final code needs. This keeps effect `catch`/`provide` and the Layer owner family
+on one checked path.
 
 Stable IDs preserve those links after OCaml has rewritten the syntax into a
 Typedtree. Locations still point to the user's live source, including an
@@ -110,6 +116,35 @@ when `chain`, another `catch`, `provide`, or another supported primitive adds or
 removes effects between them. Cyclic or ambiguous predecessor graphs are
 refused.
 
+## Layer owner flow
+
+Layer providers have two independent inputs: the target whose requirements are
+handled, and the source whose build effects remain afterward. `Layer.catch`
+has one input, but generated forwarding also needs that exact Layer value to
+preserve its hidden service key.
+
+```mermaid
+flowchart LR
+    Owner[verified owner descriptor] --> Target[target certificate]
+    Owner --> Handler[inline handler cases]
+    Owner --> Contributor[source Layer or environment]
+    Target --> Residual[subtract handled leaves]
+    Handler --> Residual
+    Contributor --> Output[union post-owner effects]
+    Residual --> Strategy{forwarding strategy}
+    Strategy -->|effect error| Fail[Combinators.fail]
+    Strategy -->|Layer error| LayerFail[Layer.fail_like bound_primary]
+    Strategy -->|requirement| Need[Dispatch.need]
+    Fail --> Output
+    LayerFail --> Output
+    Need --> Output
+```
+
+For `Layer.catch`, the base AST first binds the primary Layer expression to a
+private value. Both the real catch call and every generated `Layer.fail_like`
+branch use that value. Generated code therefore cannot repeat a source
+expression with side effects or a freshly generated key.
+
 ## Generated code
 
 `hamlet_subtractor_generator.ml` materializes forwarding branches. It uses the
@@ -119,6 +154,13 @@ representation proved for each leaf:
 - a structural polymorphic-variant pattern;
 - a generated `Errors.Cases.dispatch` catalogue;
 - a generated service-tag pattern.
+
+The verified owner selects the branch result: `Combinators.fail` for an effect
+error, `Layer.fail_like` for a Layer error, or `Dispatch.need` for a service
+requirement. A generated `Errors.Cases` catalogue still proves the named leaves
+of an imported Layer error row. Its callbacks return `Hamlet.t`, however, so a
+Layer handler emits one verified named-leaf case instead of calling the
+effect-only catalogue dispatcher.
 
 `hamlet_subtractor_replace.ml` inserts those cases at the marker location and
 removes every private probe attribute. If nothing remains, the marker's
@@ -187,6 +229,8 @@ earlier definition. Recursive contracts are refused.
 
 - `subtractor/core` defines compiler-independent proof values and the pure
   algorithms that validate, combine, serialize, and instantiate them.
+- `subtractor/core/owner_descriptor.ml` describes every supported marker owner:
+  its channel, handler shape, extra contributor, and forwarding strategy.
 - `subtractor/hamlet_subtractor_probe.ml` finds ordinary automatic markers and
   builds the linked base/probe pair.
 - `subtractor/hamlet_subtractor_compiler_evidence.ml` verifies Typedtree facts

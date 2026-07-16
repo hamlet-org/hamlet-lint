@@ -25,7 +25,16 @@
   external_no_cases
   multiple_marker_sources
   exhausted_warning
-  generic_alias)
+  generic_alias
+  layer_opaque_unwrap
+  layer_wrong_marker_channel
+  layer_provider_wrong_marker_channel
+  layer_provider_wrong_arity
+  layer_fake_owner
+  layer_aliased_owner
+  layer_cause_direct_marker
+  layer_defect_direct_marker
+  layer_tap_fail_direct_marker)
  (libraries
   hamlet
   automatic_propagation_external

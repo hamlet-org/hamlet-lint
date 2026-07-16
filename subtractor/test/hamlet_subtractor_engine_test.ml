@@ -116,9 +116,52 @@ let generated ?(catalogues = []) residual =
   Hamlet_subtractor_generator.cases ~loc:Location.none ~catalogues residual
   |> get_ok "generation"
 
+let generated_layer ?(catalogues = []) residual =
+  Hamlet_subtractor_generator.cases ~loc:Location.none ~catalogues
+    ~forwarding:(Hamlet_subtractor_generator.Layer_fail_like "primary_once")
+    residual
+  |> get_ok "Layer generation"
+
 let generated_at ?(catalogues = []) loc residual =
   Hamlet_subtractor_generator.cases ~loc ~catalogues residual
   |> get_ok "generation"
+
+let test_layer_fail_like_generation () =
+  let direct = error_leaf "direct_error" "Direct" in
+  let structural =
+    error_leaf ~materialization:Leaf.Structural_variant "structural_error"
+      "Structural"
+  in
+  let direct_cases =
+    residual (proof Kind.Error [ direct; structural ])
+    |> generated_layer
+    |> print_cases
+  in
+  Alcotest.(check int)
+    "two direct fail_like calls" 2
+    (count_occurrences direct_cases "Hamlet.Layer.fail_like primary_once");
+  Alcotest.(check int)
+    "no effect fail calls" 0
+    (count_occurrences direct_cases "Hamlet.Combinators.fail");
+  let catalogue, first, second, third = cases_fixture () in
+  let arms =
+    [
+      Residual.arm
+        ~target:(Residual.Complete_leaf (Leaf.identity first))
+        ~guard:Residual.Unguarded ~action:Residual.Handle;
+    ]
+  in
+  let catalogue_cases =
+    residual ~arms (proof Kind.Error [ first; second; third ])
+    |> generated_layer ~catalogues:[ catalogue ]
+    |> print_cases
+  in
+  Alcotest.(check int)
+    "two catalogue fail_like callbacks" 2
+    (count_occurrences catalogue_cases "Hamlet.Layer.fail_like primary_once");
+  Alcotest.(check int)
+    "Layer avoids effect-only catalogue dispatch" 0
+    (count_occurrences catalogue_cases "Cases.dispatch")
 
 let test_position offset =
   {
@@ -1020,6 +1063,42 @@ let exact_leaf_count evidence =
   | Effect_certificate.Exact_proof proof -> List.length (Proof.leaves proof)
   | Effect_certificate.Opaque_reasons _ -> Alcotest.fail "opaque dependency"
 
+let test_engine_accepts_exact_certificate_contributors () =
+  let marker = marker "s:provider" Kind.Requirement in
+  let contributed = requirement_leaf "Clock" "Clock" in
+  let result =
+    Residual.calculate
+      ~input:(empty_proof Kind.Requirement)
+      ~arms:[] ~recovery:[ contributed ]
+    |> get_ok "contributor residual"
+  in
+  let certificate =
+    Effect_certificate.create
+      ~errors:(Effect_certificate.exact (empty_proof Kind.Error))
+      ~requirements:
+        (Effect_certificate.exact (proof Kind.Requirement [ contributed ]))
+    |> get_ok "contributor certificate"
+  in
+  let backend =
+    Hamlet_subtractor_engine.
+      {
+        dependencies = (fun () _ -> Ok []);
+        resolve =
+          (fun () ~marker:_ ~dependencies:_ ->
+            Ok { residual = result; certificate });
+      }
+  in
+  let engine =
+    Hamlet_subtractor_engine.elaborate ~backend ~context:() ~catalogues:[]
+      ~markers:[ marker ]
+    |> get_ok "contributor engine"
+  in
+  match Hamlet_subtractor_engine.outcomes engine with
+  | [ (_, Protocol.Resolved _) ] -> ()
+  | [ (_, Protocol.Refused _) ] ->
+      Alcotest.fail "exact certificate contributor was refused"
+  | _ -> Alcotest.fail "unexpected contributor outcome count"
+
 let test_interleaved_channels_keep_certificates () =
   let error_marker = marker "e:catch" Kind.Error in
   let requirement_marker = marker "s:provide" Kind.Requirement in
@@ -1187,6 +1266,8 @@ let () =
         [
           Alcotest.test_case "error and requirement forwarding" `Quick
             test_error_and_requirement_generation;
+          Alcotest.test_case "Layer.fail_like forwarding" `Quick
+            test_layer_fail_like_generation;
           Alcotest.test_case "nonempty refutation guard" `Quick
             test_nonempty_generation_appends_refutation_guard;
           Alcotest.test_case "structural arity" `Quick test_structural_arity;
@@ -1226,6 +1307,8 @@ let () =
             test_engine_dependency_order_and_cycle;
           Alcotest.test_case "interleaved channels keep certificates" `Quick
             test_interleaved_channels_keep_certificates;
+          Alcotest.test_case "exact certificate contributors" `Quick
+            test_engine_accepts_exact_certificate_contributors;
         ] );
       ( "resolver",
         [

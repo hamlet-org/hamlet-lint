@@ -6,6 +6,7 @@ module Compiler_types = Types
 
 open Ppxlib
 module A = Ast_builder.Default
+module Descriptor = Hamlet_subtractor_core.Owner_descriptor
 
 let marker_attribute = "hamlet.subtractor.marker.v1"
 let upstream_attribute = "hamlet.subtractor.upstream.v1"
@@ -13,6 +14,9 @@ let callee_attribute = "hamlet.subtractor.callee.v1"
 let handler_attribute = "hamlet.subtractor.handler.v1"
 let owner_attribute = "hamlet.subtractor.owner.v1"
 let generic_output_link_attribute = "hamlet.subtractor.generic_output_link.v1"
+let layer_forwarding_attribute = "hamlet.subtractor.layer_forwarding.v1"
+let layer_type_attribute = "hamlet.subtractor.layer_type.v1"
+let contributor_attribute = "hamlet.subtractor.contributor.v1"
 
 type propagation_kind = Error_propagation | Requirement_propagation
 
@@ -160,23 +164,28 @@ let canonicalize_markers structure =
   let structure = mapper#structure structure in
   (structure, List.rev !markers)
 
-let is_exact_combinator_path kind = function
-  | Longident.Ldot (Lident "Combinators", name)
-  | Ldot (Ldot (Lident "Hamlet", "Combinators"), name) -> (
-      match (kind, name) with
-      | Error_propagation, "catch" | Requirement_propagation, "provide" -> true
-      | _ -> false)
-  | _ -> false
-
-let combinator_kind expression =
-  match expression.pexp_desc with
-  | Pexp_ident { txt; _ } ->
-      if is_exact_combinator_path Error_propagation txt then
-        Some Error_propagation
-      else if is_exact_combinator_path Requirement_propagation txt then
-        Some Requirement_propagation
-      else None
+let descriptor_of_written_path = function
+  | Longident.Ldot (Lident module_name, value_name)
+  | Ldot (Ldot (Lident "Hamlet", module_name), value_name) ->
+      let module_name =
+        match module_name with
+        | "Combinators" -> Some Descriptor.Combinators
+        | "Layer" -> Some Descriptor.Layer
+        | _ -> None
+      in
+      Option.bind module_name (fun module_name ->
+          Descriptor.find ~module_name ~value_name)
   | _ -> None
+
+let owner_descriptor expression =
+  match expression.pexp_desc with
+  | Pexp_ident { txt; _ } -> descriptor_of_written_path txt
+  | _ -> None
+
+let propagation_kind_of_descriptor descriptor =
+  match descriptor.Descriptor.channel with
+  | Descriptor.Error -> Error_propagation
+  | Descriptor.Requirement -> Requirement_propagation
 
 let is_pipe expression =
   match expression.pexp_desc with
@@ -189,7 +198,7 @@ let is_loc_argument = function
 
 type candidate =
   | Direct_candidate of {
-      kind : propagation_kind;
+      descriptor : Descriptor.t;
       call : expression;
       callee : expression;
       args : (arg_label * expression) list;
@@ -198,7 +207,7 @@ type candidate =
       handler : expression;
     }
   | Pipe_candidate of {
-      kind : propagation_kind;
+      descriptor : Descriptor.t;
       call : expression;
       pipe : expression;
       left : expression;
@@ -215,11 +224,15 @@ type candidate_status =
 let indexed arguments =
   List.mapi (fun index argument -> (index, argument)) arguments
 
-let direct_candidate call callee args kind =
+let direct_candidate call callee args descriptor =
   let handlers =
     List.filter_map
       (fun (_, (label, argument)) ->
-        match label with Labelled "handler" -> Some argument | _ -> None)
+        match label with
+        | Labelled actual
+          when String.equal actual descriptor.Descriptor.handler_label ->
+            Some argument
+        | _ -> None)
       (indexed args)
   in
   let upstreams =
@@ -231,28 +244,48 @@ let direct_candidate call callee args kind =
   let valid_labels =
     List.for_all
       (function
-        | Nolabel, _ | Labelled "handler", _ -> true
+        | Nolabel, _ -> true
+        | Labelled actual, _
+          when String.equal actual descriptor.Descriptor.handler_label ->
+            true
+        | Labelled actual, _
+          when Option.equal String.equal descriptor.required_label (Some actual)
+          ->
+            true
+        | Labelled "fresh", _ when descriptor.bind_upstream_once -> true
         | argument -> is_loc_argument argument)
       args
   in
-  match (handlers, upstreams, valid_labels) with
-  | [ handler ], [ (upstream_index, upstream) ], true ->
+  let has_required_label =
+    match descriptor.required_label with
+    | None -> true
+    | Some required ->
+        List.exists
+          (function
+            | Labelled actual, _ -> String.equal actual required | _ -> false)
+          args
+  in
+  match (handlers, upstreams, valid_labels, has_required_label) with
+  | [ handler ], [ (upstream_index, upstream) ], true, true ->
       Candidate
         (Direct_candidate
-           { kind; call; callee; args; upstream_index; upstream; handler })
-  | [ _ ], [], true -> Partial_candidate
-  | _ -> Unsupported_candidate kind
+           { descriptor; call; callee; args; upstream_index; upstream; handler })
+  | [ _ ], [], true, true -> Partial_candidate
+  | _ -> Unsupported_candidate (propagation_kind_of_descriptor descriptor)
 
 let pipe_candidate call pipe left right =
   match right.pexp_desc with
   | Pexp_apply (callee, args) -> (
-      match combinator_kind callee with
+      match owner_descriptor callee with
       | None -> Not_candidate
-      | Some kind -> (
+      | Some descriptor -> (
           let handlers =
             List.filter_map
               (function
-                | Labelled "handler", handler -> Some handler | _ -> None)
+                | Labelled actual, handler
+                  when String.equal actual descriptor.handler_label ->
+                    Some handler
+                | _ -> None)
               args
           in
           let has_upstream =
@@ -261,15 +294,34 @@ let pipe_candidate call pipe left right =
           let valid_labels =
             List.for_all
               (function
-                | Labelled "handler", _ -> true
+                | Labelled actual, _
+                  when String.equal actual descriptor.handler_label ->
+                    true
+                | Labelled actual, _
+                  when Option.equal String.equal descriptor.required_label
+                         (Some actual) ->
+                    true
+                | Labelled "fresh", _ when descriptor.bind_upstream_once -> true
                 | argument -> is_loc_argument argument)
               args
           in
-          match (handlers, has_upstream, valid_labels) with
-          | [ handler ], false, true ->
+          let has_required_label =
+            match descriptor.required_label with
+            | None -> true
+            | Some required ->
+                List.exists
+                  (function
+                    | Labelled actual, _ -> String.equal actual required
+                    | _ -> false)
+                  args
+          in
+          match (handlers, has_upstream, valid_labels, has_required_label) with
+          | [ handler ], false, true, true ->
               Candidate
-                (Pipe_candidate { kind; call; pipe; left; right; handler })
-          | _ -> Unsupported_candidate kind))
+                (Pipe_candidate { descriptor; call; pipe; left; right; handler })
+          | _ ->
+              Unsupported_candidate (propagation_kind_of_descriptor descriptor))
+      )
   | _ -> Not_candidate
 
 let candidate_status expression =
@@ -278,13 +330,18 @@ let candidate_status expression =
     ->
       pipe_candidate expression pipe left right
   | Pexp_apply (callee, args) -> (
-      match combinator_kind callee with
-      | Some kind -> direct_candidate expression callee args kind
+      match owner_descriptor callee with
+      | Some descriptor -> direct_candidate expression callee args descriptor
       | None -> Not_candidate)
   | _ -> Not_candidate
 
 let candidate_kind = function
-  | Direct_candidate { kind; _ } | Pipe_candidate { kind; _ } -> kind
+  | Direct_candidate { descriptor; _ } | Pipe_candidate { descriptor; _ } ->
+      propagation_kind_of_descriptor descriptor
+
+let candidate_descriptor = function
+  | Direct_candidate { descriptor; _ } | Pipe_candidate { descriptor; _ } ->
+      descriptor
 
 let candidate_call = function
   | Direct_candidate { call; _ } | Pipe_candidate { call; _ } -> call
@@ -394,8 +451,20 @@ let add_upstream_attribute ~kind ~id expression =
     ~value:(upstream_attribute_value kind id)
     expression
 
+let descriptor_uses_layer_type descriptor =
+  descriptor.Descriptor.module_name = Descriptor.Layer
+  && not (String.equal descriptor.value_name "provide_to_effect")
+
+let add_layer_type_attribute descriptor ~id expression =
+  if descriptor_uses_layer_type descriptor then
+    add_string_attribute ~name:layer_type_attribute ~value:id expression
+  else expression
+
 let add_evidence_attribute ~name ~id expression =
   add_string_attribute ~name ~value:id expression
+
+let once_binding_name id =
+  "_hamlet_subtractor_layer_primary_" ^ Digest.to_hex (Digest.string id)
 
 let add_value_binding_attribute ~name ~id binding =
   let loc = binding.pvb_loc in
@@ -415,18 +484,76 @@ let mark_base_candidate candidate marker =
   let kind = candidate_kind candidate in
   let id = marker.id in
   match candidate with
-  | Direct_candidate { call; callee; args; upstream_index; upstream; _ } ->
-      let upstream = add_upstream_attribute ~kind ~id upstream in
-      let args = replace_direct_upstream upstream_index upstream args in
-      let call = add_evidence_attribute ~name:owner_attribute ~id call in
-      { call with pexp_desc = Pexp_apply (callee, args) }
-  | Pipe_candidate { call; pipe; left; right; _ } ->
-      let left = add_upstream_attribute ~kind ~id left in
-      let call = add_evidence_attribute ~name:owner_attribute ~id call in
-      {
-        call with
-        pexp_desc = Pexp_apply (pipe, [ (Nolabel, left); (Nolabel, right) ]);
-      }
+  | Direct_candidate
+      { descriptor; call; callee; args; upstream_index; upstream; _ } ->
+      let upstream =
+        add_upstream_attribute ~kind ~id upstream
+        |> add_layer_type_attribute descriptor ~id
+      in
+      if descriptor.bind_upstream_once then
+        let name = once_binding_name id in
+        let binding =
+          A.value_binding ~loc:upstream.pexp_loc
+            ~pat:
+              (A.ppat_var ~loc:upstream.pexp_loc
+                 { txt = name; loc = upstream.pexp_loc })
+            ~expr:upstream
+        in
+        let replacement = A.evar ~loc:upstream.pexp_loc name in
+        let call =
+          {
+            call with
+            pexp_desc =
+              Pexp_apply
+                (callee, replace_direct_upstream upstream_index replacement args);
+          }
+        in
+        A.pexp_let ~loc:call.pexp_loc Nonrecursive [ binding ] call
+        |> add_layer_type_attribute descriptor ~id
+        |> add_evidence_attribute ~name:owner_attribute ~id
+        |> add_evidence_attribute ~name:layer_forwarding_attribute ~id
+      else
+        let args = replace_direct_upstream upstream_index upstream args in
+        let call =
+          add_evidence_attribute ~name:owner_attribute ~id call
+          |> add_layer_type_attribute descriptor ~id
+        in
+        { call with pexp_desc = Pexp_apply (callee, args) }
+  | Pipe_candidate { descriptor; call; pipe; left; right; _ } ->
+      let left =
+        add_upstream_attribute ~kind ~id left
+        |> add_layer_type_attribute descriptor ~id
+      in
+      if descriptor.bind_upstream_once then
+        let name = once_binding_name id in
+        let binding =
+          A.value_binding ~loc:left.pexp_loc
+            ~pat:
+              (A.ppat_var ~loc:left.pexp_loc
+                 { txt = name; loc = left.pexp_loc })
+            ~expr:left
+        in
+        let replacement = A.evar ~loc:left.pexp_loc name in
+        let call =
+          {
+            call with
+            pexp_desc =
+              Pexp_apply (pipe, [ (Nolabel, replacement); (Nolabel, right) ]);
+          }
+        in
+        A.pexp_let ~loc:call.pexp_loc Nonrecursive [ binding ] call
+        |> add_layer_type_attribute descriptor ~id
+        |> add_evidence_attribute ~name:owner_attribute ~id
+        |> add_evidence_attribute ~name:layer_forwarding_attribute ~id
+      else
+        let call =
+          add_evidence_attribute ~name:owner_attribute ~id call
+          |> add_layer_type_attribute descriptor ~id
+        in
+        {
+          call with
+          pexp_desc = Pexp_apply (pipe, [ (Nolabel, left); (Nolabel, right) ]);
+        }
 
 let isolate_candidate candidate marker =
   let kind = candidate_kind candidate in
@@ -435,7 +562,10 @@ let isolate_candidate candidate marker =
   let digest = Digest.to_hex (Digest.string marker.id) in
   let binding_name = "_hamlet_subtractor_upstream_" ^ digest in
   let pattern = A.ppat_var ~loc:upstream.pexp_loc { txt = binding_name; loc } in
-  let marked_upstream = add_upstream_attribute ~kind ~id:marker.id upstream in
+  let marked_upstream =
+    add_upstream_attribute ~kind ~id:marker.id upstream
+    |> add_layer_type_attribute (candidate_descriptor candidate) ~id:marker.id
+  in
   let binding =
     A.value_binding ~loc ~pat:pattern ~expr:marked_upstream
     |> add_value_binding_attribute ~name:generic_output_link_attribute
@@ -459,10 +589,17 @@ let isolate_candidate candidate marker =
       ~expr:marked_handler
   in
   let probe_handler =
-    A.pexp_fun ~loc:handler.pexp_loc Nolabel None
-      (A.ppat_any ~loc:handler.pexp_loc)
-      (A.pexp_assert ~loc:handler.pexp_loc
-         (A.ebool ~loc:handler.pexp_loc false))
+    let body =
+      A.pexp_assert ~loc:handler.pexp_loc (A.ebool ~loc:handler.pexp_loc false)
+    in
+    let rec parameters remaining body =
+      if remaining = 0 then body
+      else
+        A.pexp_fun ~loc:handler.pexp_loc Nolabel None
+          (A.ppat_any ~loc:handler.pexp_loc)
+          (parameters (remaining - 1) body)
+    in
+    parameters ((candidate_descriptor candidate).handler_peel + 1) body
   in
   let call = candidate_call candidate in
   let call_without_outer_attributes = { call with pexp_attributes = [] } in
@@ -476,7 +613,17 @@ let isolate_candidate candidate marker =
           List.map
             (fun (label, argument) ->
               match label with
-              | Labelled "handler" -> (label, probe_handler)
+              | Labelled actual
+                when String.equal actual
+                       (candidate_descriptor candidate).handler_label ->
+                  (label, probe_handler)
+              | Labelled actual
+                when Option.equal String.equal
+                       (candidate_descriptor candidate).required_label
+                       (Some actual) ->
+                  ( label,
+                    add_evidence_attribute ~name:contributor_attribute
+                      ~id:marker.id argument )
               | Nolabel | Optional _ | Labelled _ -> (label, argument))
             args
         in
@@ -498,7 +645,17 @@ let isolate_candidate candidate marker =
                 List.map
                   (fun (label, argument) ->
                     match label with
-                    | Labelled "handler" -> (label, probe_handler)
+                    | Labelled actual
+                      when String.equal actual
+                             (candidate_descriptor candidate).handler_label ->
+                        (label, probe_handler)
+                    | Labelled actual
+                      when Option.equal String.equal
+                             (candidate_descriptor candidate).required_label
+                             (Some actual) ->
+                        ( label,
+                          add_evidence_attribute ~name:contributor_attribute
+                            ~id:marker.id argument )
                     | Nolabel | Optional _ | Labelled _ -> (label, argument))
                   args
               in
@@ -515,6 +672,7 @@ let isolate_candidate candidate marker =
     A.pexp_let ~loc Nonrecursive [ handler_binding ] isolated_call
   in
   { call with pexp_desc = Pexp_let (Nonrecursive, [ binding ], isolated_call) }
+  |> add_layer_type_attribute (candidate_descriptor candidate) ~id:marker.id
   |> add_evidence_attribute ~name:owner_attribute ~id:marker.id
 
 let prepare structure =

@@ -7,6 +7,8 @@ type error =
 
 val error_message : error -> string
 
+type forwarding = Default | Layer_fail_like of string
+
 (** Generate the final propagation cases at the marker location. A ghost
     wildcard refutation validates that the generated forwarding cases cover the
     final compiler's input type. A fully exhausted residual adds the existing
@@ -16,5 +18,6 @@ val error_message : error -> string
 val cases :
   loc:Ppxlib.Location.t ->
   catalogues:Hamlet_subtractor_catalogue.t list ->
+  ?forwarding:forwarding ->
   Residual.t ->
   (Ppxlib.Parsetree.case list, error) result

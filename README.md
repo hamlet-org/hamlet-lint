@@ -10,10 +10,10 @@ Hamlet.Combinators.catch source ~handler:(fun error ->
   | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The PPX reads the input computation's inferred effect rows, subtracts the
-preceding handler arms, and replaces the marker with ordinary OCaml cases. It
-refuses the marker if the complete input row cannot be proved. The normal
-compiler, Merlin, and OCaml-LSP type-check the generated code.
+The PPX proves the input effect or Layer build rows, subtracts the preceding
+handler arms, and replaces the marker with ordinary OCaml cases. It refuses the
+marker if the complete input row cannot be proved. The normal compiler, Merlin,
+and OCaml-LSP type-check the generated code.
 
 ## Install
 
@@ -47,8 +47,9 @@ target. Targets that use no subtractor feature may keep ordinary
 
 - `[%hamlet.propagate_e.auto]` forwards errors not handled by a `catch`.
 - `[%hamlet.propagate_s.auto]` forwards services not supplied by a `provide`.
+- The same markers work in supported `Hamlet.Layer` catch and provider handlers.
 - `let[@hamlet.generic]` makes a reusable helper specialize automatically when
-  called directly with a concrete effect.
+  called directly with a concrete effect or layer.
 - The exact output of a direct generic call can feed the next automatic marker.
 
 One marker is enough. Multiple markers may form a supported linear sequence of

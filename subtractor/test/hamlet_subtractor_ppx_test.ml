@@ -256,7 +256,7 @@ let test_diagnostics_are_actionable_and_marker_local () =
   in
   Alcotest.(check bool)
     "replacement keeps reason" true
-    (contains replacement_message "finite closed row");
+    (contains replacement_message "prove all members of this open row");
   Alcotest.(check bool)
     "replacement requirement annotation" true
     (contains replacement_message "%hamlet.ts");
@@ -458,6 +458,33 @@ let test_generic_requirement_pipeline () =
       Generic_definition.handler_attribute;
       Generic_definition.slot_attribute;
     ]
+
+let test_generic_layer_owners () =
+  let catch =
+    generic_transform
+      "let[@hamlet.generic] recover_layer source =\n\
+       Hamlet.Layer.catch source ~handler:(function\n\
+       | `Missing -> fallback\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+    |> render_structure
+  in
+  check_rendered "Layer primary is bound once"
+    "_hamlet_subtractor_layer_primary_" catch;
+  check_rendered "Layer forwarding preserves the primary shape"
+    "Hamlet.Layer.fail_like" catch;
+  let provider =
+    generic_transform
+      "let[@hamlet.generic] provide_layer provider source =\n\
+       Hamlet.Layer.provide_to_effect ~source:provider\n\
+       ~handler:(fun service -> function\n\
+       | #Logger.Tag.r as witness -> Logger.Tag.give witness service\n\
+       | [%hamlet.propagate_s.auto] -> .) source"
+    |> render_structure
+  in
+  check_rendered "Layer provider contributor"
+    Hamlet_subtractor_probe.contributor_attribute provider;
+  check_rendered "Layer provider dispatch forwarding" "Hamlet.Dispatch.need"
+    provider
 
 let test_generic_two_alternating_slots () =
   let rendered =
@@ -819,6 +846,7 @@ let () =
           Alcotest.test_case "one error slot" `Quick test_generic_one_error_slot;
           Alcotest.test_case "requirement pipeline" `Quick
             test_generic_requirement_pipeline;
+          Alcotest.test_case "Layer owners" `Quick test_generic_layer_owners;
           Alcotest.test_case "alternating slots" `Quick
             test_generic_two_alternating_slots;
           Alcotest.test_case "two pipeline slots" `Quick

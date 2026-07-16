@@ -15,7 +15,12 @@ open Ppxlib
 let parse ?(source_file = "probe.ml") source =
   let lexbuf = Lexing.from_string source in
   Location.init lexbuf source_file;
-  Parse.implementation lexbuf
+  try Parse.implementation lexbuf
+  with Syntaxerr.Error _ ->
+    let position = lexbuf.lex_curr_p in
+    Alcotest.failf "parse failed at %s:%d:%d" position.pos_fname
+      position.pos_lnum
+      (position.pos_cnum - position.pos_bol)
 
 let inspect ?(source_file = "probe.ml") structure =
   Hamlet_subtractor_compiler_compat.inspect_probe ~tool_name:"ocamlopt"
@@ -413,6 +418,63 @@ let test_direct_and_pipe_owners () =
     "pipe base owner attr" 1
     (attribute_count "hamlet.subtractor.owner.v1" pipe.base_structure)
 
+let test_layer_owner_descriptors () =
+  let prepared =
+    parse
+      "let caught =\n\
+       Hamlet.Layer.catch ~fresh:true primary ~handler:(function\n\
+       | `Handled -> fallback\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"e:layer-catch\"]))\n\
+       let provided_effect =\n\
+       Hamlet.Layer.provide_to_effect ~source:source\n\
+       ~handler:(fun service request -> match request with\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:layer-effect\"]))\n\
+       target\n\
+       let layer =\n\
+       Hamlet.Layer.provide_to_layer ~source:source\n\
+       ~handler:(fun service request -> match request with\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:layer-layer\"]))\n\
+       target_layer\n\
+       let merged =\n\
+       Hamlet.Layer.provide_merge_to_layer ~source:environment\n\
+       ~handler:(fun environment request -> match request with\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:layer-merge\"]))\n\
+       target_layer"
+    |> Hamlet_subtractor_probe.prepare
+  in
+  Alcotest.(check int) "four Layer owners" 4 (List.length prepared.owners);
+  Alcotest.(check int)
+    "no Layer owner refusals" 0
+    (List.length prepared.refusals);
+  Alcotest.(check int)
+    "all Layer owners marked" 4
+    (attribute_count "hamlet.subtractor.owner.v1" prepared.base_structure);
+  Alcotest.(check int)
+    "only Layer.catch uses fail_like forwarding" 1
+    (attribute_count "hamlet.subtractor.layer_forwarding.v1"
+       prepared.base_structure);
+  Alcotest.(check int)
+    "three provider contributors in probe" 3
+    (attribute_count "hamlet.subtractor.contributor.v1" prepared.probe_structure)
+
+let test_non_typed_layer_callbacks_are_not_owners () =
+  let prepared =
+    parse
+      "let cause =\n\
+       Hamlet.Layer.catch_cause source ~handler:(function\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"e:layer-cause\"]))\n\
+       let defect =\n\
+       Hamlet.Layer.catch_defect source ~handler:(function\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"e:layer-defect\"]))"
+    |> Hamlet_subtractor_probe.prepare
+  in
+  Alcotest.(check int)
+    "no non-typed Layer owners" 0
+    (List.length prepared.owners);
+  Alcotest.(check int)
+    "both direct markers refused" 2
+    (List.length prepared.refusals)
+
 let test_nested_owners_keep_distinct_ids () =
   let prepared =
     parse
@@ -696,11 +758,24 @@ let only_outcome engine =
   | outcomes ->
       Alcotest.failf "expected one exact outcome, got %d" (List.length outcomes)
 
+let refused_code engine =
+  match only_outcome engine with
+  | _, Hamlet_subtractor_core.Protocol.Refused diagnostic ->
+      Hamlet_subtractor_core.Diagnostic.code diagnostic
+  | _, Resolved _ -> Alcotest.fail "expected exact evidence refusal"
+
 let resolved_residual engine =
   match only_outcome engine with
   | _, Hamlet_subtractor_core.Protocol.Resolved residual -> residual
   | _, Refused diagnostic ->
       Alcotest.fail (Hamlet_subtractor_core.Diagnostic.message diagnostic)
+
+let resolved_certificate engine =
+  match Hamlet_subtractor_engine.resolved_values engine with
+  | [ (_, resolved) ] -> resolved.certificate
+  | resolved ->
+      Alcotest.failf "expected one resolved certificate, got %d"
+        (List.length resolved)
 
 let leaf_names leaves =
   List.map
@@ -1247,6 +1322,290 @@ let caught =
     "local union does not fabricate Cases" 0
     (Hamlet_subtractor_engine.catalogues engine |> List.length)
 
+let test_exact_layer_catch () =
+  let engine =
+    resolve_exact
+      {|
+let primary =
+  Hamlet.Layer.make Logger.Tag.key
+    (Hamlet.Combinators.fail (`Write "layer" : Local_io.Errors.error))
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.success ())
+
+let caught =
+  Hamlet.Layer.catch primary ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.read_error -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-catch-exact"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "Layer.catch subtracts handled errors" [ "write_error" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_names)
+
+let test_layer_provider_source_is_post_owner_contributor () =
+  let engine =
+    resolve_exact
+      {|
+let target : (unit, Hamlet.never, Logger.Tag.r) Hamlet.t =
+  Hamlet.Combinators.summon Logger.Tag.key Logger.Tag.tag
+
+let provided =
+  Hamlet.Layer.provide_to_effect
+    ~source:
+      (Hamlet.Layer.make Logger.Tag.key
+         (Hamlet.Combinators.summon Clock.Tag.key Clock.Tag.tag))
+    ~handler:(fun service request ->
+      match request with
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness service
+      | _ -> (assert false [@hamlet.subtractor.marker.v1 "s:layer-provider-exact"]))
+    target
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check int)
+    "provider marker input excludes source requirements" 0
+    (Hamlet_subtractor_core.Residual.residual residual |> List.length);
+  Alcotest.(check (list string))
+    "provider residual output includes source requirements" [ "Clock" ]
+    (Hamlet_subtractor_core.Residual.output residual |> leaf_labels);
+  let requirements =
+    resolved_certificate engine
+    |> Hamlet_subtractor_core.Effect_certificate.requirements
+    |> symbolic_exact_leaves
+    |> leaf_labels
+  in
+  Alcotest.(check (list string))
+    "provider output includes source requirements" [ "Clock" ] requirements
+
+let test_layer_fail_like_replaces_errors_and_preserves_source () =
+  let engine =
+    resolve_exact
+      {|
+let build :
+    (unit, Local_io.Errors.error, Clock.Tag.r) Hamlet.t =
+  assert false
+
+let primary = Hamlet.Layer.make Logger.Tag.key build
+
+let clean_build :
+    (unit, Hamlet.never, Clock.Tag.r) Hamlet.t =
+  assert false
+
+let fallback = Hamlet.Layer.make Logger.Tag.key clean_build
+
+let first =
+  Hamlet.Layer.catch primary ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.read_error -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-before-fail-like"]))
+
+let read : Local_io.Errors.read_error = `Read 1
+
+let failed_direct :
+    (Logger.Tag.t, Local_io.Errors.read_error, Clock.Tag.r) Hamlet.Layer.t =
+  Hamlet.Layer.fail_like primary read
+
+let failed :
+    (Logger.Tag.t, Local_io.Errors.read_error, Clock.Tag.r) Hamlet.Layer.t =
+  Hamlet.Layer.fail_like first read
+
+let caught =
+  Hamlet.Layer.catch failed ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.read_error -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-after-fail-like"]))
+
+let provided =
+  Hamlet.Layer.provide_to_effect
+    ~source:failed_direct
+    ~handler:(fun service request ->
+      match request with
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness service
+      | _ -> (assert false [@hamlet.subtractor.marker.v1 "s:layer-fail-like-source"]))
+    (Hamlet.Combinators.summon Logger.Tag.key Logger.Tag.tag)
+|}
+  in
+  let outcomes = Hamlet_subtractor_engine.outcomes engine in
+  Alcotest.(check int) "three Layer markers" 3 (List.length outcomes);
+  let residuals =
+    outcomes
+    |> List.mapi (fun index -> function
+      | _, Hamlet_subtractor_core.Protocol.Resolved residual -> residual
+      | _, Hamlet_subtractor_core.Protocol.Refused diagnostic ->
+          Alcotest.failf "Layer marker %d: %s" index
+            (Hamlet_subtractor_core.Diagnostic.message diagnostic))
+  in
+  let after_residual = List.nth residuals 1 in
+  Alcotest.(check (list string))
+    "concrete fail_like error is the marker input" [ "Read" ]
+    (Hamlet_subtractor_core.Residual.input after_residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check int)
+    "fail_like replacement is fully handled" 0
+    (Hamlet_subtractor_core.Residual.residual after_residual |> List.length);
+  let provider_residual = List.nth residuals 2 in
+  Alcotest.(check (list string))
+    "provider handles its target requirement" [ "Logger" ]
+    (Hamlet_subtractor_core.Residual.input provider_residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check int)
+    "target requirement is handled" 0
+    (Hamlet_subtractor_core.Residual.residual provider_residual |> List.length);
+  Alcotest.(check (list string))
+    "source requirements are preserved" [ "Clock" ]
+    (Hamlet_subtractor_core.Residual.output provider_residual |> leaf_labels)
+
+let test_layer_unwrap_transparent_return_is_exact () =
+  let engine =
+    resolve_exact
+      {|
+let trace_source =
+  Hamlet.Layer.make Logger.Tag.key
+    (if Sys.opaque_identity true then
+       Hamlet.Combinators.fail `Trace_timeout
+     else Hamlet.Combinators.fail `Trace_missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let transparent_layer_effect = Hamlet.Combinators.return trace_source
+
+let caught :
+    (Logger.Tag.t, [ `Trace_timeout ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.unwrap Logger.Tag.key transparent_layer_effect
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Trace_missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-unwrap"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "unwrap exposes both returned Layer errors"
+    [ "Trace_missing"; "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.input residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check (list string))
+    "unwrap handles only the selected error" [ "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_labels)
+
+let test_layer_unwrap_opaque_effect_is_refused () =
+  let engine =
+    resolve_exact
+      {|
+let recover_selected selected =
+  Hamlet.Layer.unwrap Logger.Tag.key (Hamlet.Combinators.return selected)
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Read _ -> selected
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:opaque-layer-unwrap"]))
+|}
+  in
+  ignore (refused_code engine)
+
+let test_layer_unwrap_exact_local_selection_builder () =
+  let engine =
+    resolve_exact
+      {|
+let trace_source =
+  Hamlet.Layer.make Logger.Tag.key
+    (if Sys.opaque_identity true then
+       Hamlet.Combinators.fail `Trace_timeout
+     else Hamlet.Combinators.fail `Trace_missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let choose () :
+    ((Logger.Tag.t, [ `Trace_missing | `Trace_timeout ], Hamlet.never)
+       Hamlet.Layer.t,
+     [ `Trace_missing | `Trace_timeout ],
+     Hamlet.never)
+    Hamlet.t =
+  Hamlet.Combinators.return trace_source
+
+let caught :
+    (Logger.Tag.t, [ `Trace_timeout ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.unwrap Logger.Tag.key (choose ())
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Trace_missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-unwrap-local-builder"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "local selection builder exposes its exact errors"
+    [ "Trace_missing"; "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.input residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check (list string))
+    "local selection builder preserves the forwarded error" [ "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_labels)
+
+let test_layer_unwrap_parameter_selection_builder_is_refused () =
+  let engine =
+    resolve_exact
+      {|
+let choose selected = Hamlet.Combinators.return selected
+
+let trace_source =
+  Hamlet.Layer.make Logger.Tag.key
+    (if Sys.opaque_identity true then
+       Hamlet.Combinators.fail `Trace_timeout
+     else Hamlet.Combinators.fail `Trace_missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let caught =
+  Hamlet.Layer.unwrap Logger.Tag.key (choose trace_source)
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Trace_missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-unwrap-parameter-builder"]))
+|}
+  in
+  ignore (refused_code engine)
+
+let test_named_layer_catch_cause_result_is_traced () =
+  let engine =
+    resolve_exact
+      {|
+let primary =
+  Hamlet.Layer.make Logger.Tag.key
+    (Hamlet.Combinators.fail (`Read 1))
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key
+    (Hamlet.Combinators.fail (`Write "cause"))
+
+let recovered =
+  Hamlet.Layer.catch_cause primary ~handler:(fun _cause -> fallback)
+
+let clean =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let caught =
+  Hamlet.Layer.catch recovered ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.write_error -> clean
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:named-layer-cause"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "named catch_cause exposes only handler errors" [ "Write" ]
+    (Hamlet_subtractor_core.Residual.input residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check int)
+    "named catch_cause error is handled" 0
+    (Hamlet_subtractor_core.Residual.residual residual |> List.length)
+
 let test_exact_cases_subset () =
   let engine =
     resolve_exact
@@ -1371,12 +1730,6 @@ let provided =
   Alcotest.(check int)
     "give discharges the singleton tag" 0
     (Hamlet_subtractor_core.Residual.residual residual |> List.length)
-
-let refused_code engine =
-  match only_outcome engine with
-  | _, Hamlet_subtractor_core.Protocol.Refused diagnostic ->
-      Hamlet_subtractor_core.Diagnostic.code diagnostic
-  | _, Resolved _ -> Alcotest.fail "expected exact evidence refusal"
 
 let test_fake_callee_refused () =
   let engine =
@@ -1975,6 +2328,75 @@ let caught =
     (Hamlet_subtractor_engine.catalogues byte
     = Hamlet_subtractor_engine.catalogues native)
 
+let test_fused_handler_peel_arity () =
+  with_typed_exact
+    {|
+let fused (_service : unit) = function
+  | `Logger -> 1
+  | `Clock -> 2
+
+let over_curried (_service : unit) (_extra : unit) request =
+  match request with
+  | `Logger -> 1
+  | `Clock -> 2
+|}
+  @@ fun structure ->
+  let fused = ref None in
+  let over_curried = ref None in
+  let iterator =
+    let default = Compiler_tast_iterator.default_iterator in
+    {
+      default with
+      value_binding =
+        (fun self binding ->
+          (match binding.vb_pat.pat_desc with
+          | Tpat_var (_, { txt = "fused"; _ }, _) ->
+              fused := Some binding.vb_expr
+          | Tpat_var (_, { txt = "over_curried"; _ }, _) ->
+              over_curried := Some binding.vb_expr
+          | _ -> ());
+          default.value_binding self binding);
+    }
+  in
+  iterator.structure iterator structure;
+  let handler = Option.get !fused in
+  Alcotest.(check bool)
+    "one fused leading parameter peels" true
+    (Option.is_some (Hamlet_subtractor_propagate.peel_outer handler 1));
+  Alcotest.(check bool)
+    "extra peel is rejected" true
+    (Option.is_none (Hamlet_subtractor_propagate.peel_outer handler 2));
+  Alcotest.(check bool)
+    "too few peels reject an over-curried body" true
+    (Option.is_none
+       (Hamlet_subtractor_propagate.peel_outer (Option.get !over_curried) 1))
+
+let test_legacy_owner_classifier_alignment () =
+  let module Descriptor = Hamlet_subtractor_core.Owner_descriptor in
+  List.iter
+    (fun (descriptor : Descriptor.t) ->
+      let name = Descriptor.display_name descriptor in
+      match List.assoc_opt name Hamlet_subtractor_classify.paths with
+      | None -> Alcotest.failf "missing legacy classifier for %s" name
+      | Some (info : Hamlet_subtractor_classify.info) ->
+          let expected_slot =
+            match descriptor.channel with
+            | Descriptor.Error -> `Catch
+            | Descriptor.Requirement -> `Provide
+          in
+          Alcotest.(check bool)
+            (name ^ " channel") true
+            (info.slot = expected_slot);
+          Alcotest.(check int)
+            (name ^ " handler peel") descriptor.handler_peel info.peel;
+          Alcotest.(check string)
+            (name ^ " handler label") descriptor.handler_label
+            info.handler_label)
+    Descriptor.owners;
+  Alcotest.(check bool)
+    "Layer.fail_like is canonicalized for source planning" true
+    (List.mem "fail_like" Descriptor.traced_layer_values)
+
 let () =
   Alcotest.run "hamlet elaboration private bridge"
     [
@@ -2007,6 +2429,14 @@ let () =
             test_wrong_channel_is_refused_before_typing;
           Alcotest.test_case "direct and pipe owners are recognized" `Quick
             test_direct_and_pipe_owners;
+          Alcotest.test_case "Layer owner descriptors are recognized" `Quick
+            test_layer_owner_descriptors;
+          Alcotest.test_case "non-typed Layer callbacks are not owners" `Quick
+            test_non_typed_layer_callbacks_are_not_owners;
+          Alcotest.test_case "fused handler peel checks arity" `Quick
+            test_fused_handler_peel_arity;
+          Alcotest.test_case "legacy owner classifier stays aligned" `Quick
+            test_legacy_owner_classifier_alignment;
           Alcotest.test_case "nested owners keep distinct IDs" `Quick
             test_nested_owners_keep_distinct_ids;
           Alcotest.test_case "refused markers stay outside typed lookup" `Quick
@@ -2016,6 +2446,22 @@ let () =
         [
           Alcotest.test_case "closed local catch is exact" `Quick
             test_exact_local_catch;
+          Alcotest.test_case "Layer.catch is exact" `Quick
+            test_exact_layer_catch;
+          Alcotest.test_case "Layer provider source is post-owner" `Quick
+            test_layer_provider_source_is_post_owner_contributor;
+          Alcotest.test_case "Layer.fail_like replaces only errors" `Quick
+            test_layer_fail_like_replaces_errors_and_preserves_source;
+          Alcotest.test_case "Layer.unwrap transparent return is exact" `Quick
+            test_layer_unwrap_transparent_return_is_exact;
+          Alcotest.test_case "Layer.unwrap opaque effect is refused" `Quick
+            test_layer_unwrap_opaque_effect_is_refused;
+          Alcotest.test_case "Layer.unwrap local builder is exact" `Quick
+            test_layer_unwrap_exact_local_selection_builder;
+          Alcotest.test_case "Layer.unwrap parameter builder is refused" `Quick
+            test_layer_unwrap_parameter_selection_builder_is_refused;
+          Alcotest.test_case "named Layer.catch_cause result is traced" `Quick
+            test_named_layer_catch_cause_result_is_traced;
           Alcotest.test_case "Cases subsets stay nominal" `Quick
             test_exact_cases_subset;
           Alcotest.test_case "transparent aliases stay structural" `Quick

@@ -8,6 +8,9 @@
 - Support dependent markers across verified Hamlet composition, including
   alternating `catch` and `provide`, chaining, filters, scope, and resource
   primitives.
+- Support exact Layer error and requirement propagation through `Layer.catch`
+  and the Layer provider family, including generic Layer helpers and traced
+  Layer transformations.
 - Add generic automatic helpers with `let[@hamlet.generic]` definitions and
   automatic specialization at direct calls; caller source needs no annotation.
 - Export symbolic helper contracts through generated companion declarations so

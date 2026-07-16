@@ -28,7 +28,7 @@ The suite verifies:
 - exact error and requirement residual types from saved builds;
 - final PPX output with no automatic markers or private probe attributes;
 - runtime routing for handled, forwarded, guarded, recovery, chained, generic,
-  nested-generic, and requirement cases;
+  nested-generic, Layer, and requirement cases;
 - two or more dependent markers with `catch`, `provide`, `chain`, filters, and
   intervening effects;
 - cross-module generated error catalogues;
@@ -36,6 +36,14 @@ The suite verifies:
 - unsaved Merlin buffers, Typedtree output, and hover types;
 - dependency `.cmi` changes invalidating the expected elaboration;
 - stable diagnostics for every refused fixture.
+
+Layer cases lock exact rows for direct and pipeline catches, every provider
+form, primitive tracing, mixed effect flows, and same-module, cross-module, and
+nested generic helpers. Runtime checks cover residual forwarding, once-only
+source evaluation, provider wiring, and installed-package elaboration. Refused
+fixtures cover opaque unwrapping, malformed handlers, wrong marker channels,
+noncanonical owners, and direct markers in cause, defect, and `tap_fail`
+handlers.
 
 Expected type and expansion files are committed. Update them only after
 reviewing why the observable output changed.

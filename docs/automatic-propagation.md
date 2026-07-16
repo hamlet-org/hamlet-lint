@@ -61,11 +61,75 @@ If `source` requires `Logger` and `Clock`, this handler supplies `Logger` and
 forwards `Clock`. `Logger.Tag.need witness` or `Hamlet.Dispatch.need witness`
 explicitly forwards a matched requirement.
 
+## Layers
+
+A `Hamlet.Layer.t` has the same two effect channels as `Hamlet.t`: errors while
+building the service, and services required by that build. Automatic
+propagation can therefore operate on Layer handlers as well.
+
+`Layer.catch` owns an error marker:
+
+```ocaml
+let recovered_layer =
+  Hamlet.Layer.catch source_layer ~handler:(function
+    | `Missing -> fallback_layer
+    | [%hamlet.propagate_e.auto] -> .)
+```
+
+If `source_layer` can fail with `Missing` or `Timeout`, the generated `Timeout`
+branch returns `Layer.fail_like source_layer error`. That Hamlet primitive
+keeps the hidden service key while rebuilding the layer as a failure. The PPX
+binds `source_layer` once, so a nontrivial source expression is not evaluated a
+second time by generated forwarding code.
+
+The user-written `fallback_layer` must provide the same service key as
+`source_layer`, as required by `Layer.catch`. Generated forwarding satisfies
+that rule automatically through `fail_like`.
+
+The Layer provider family owns requirement markers. Its handler first receives
+the service built by `source`, then receives a requirement from the target:
+
+```ocaml
+let wired_layer =
+  Hamlet.Layer.provide_to_layer
+    ~source:logger_layer
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | [%hamlet.propagate_s.auto] -> .)
+    target_layer
+```
+
+The same handler form works with `Layer.provide_to_effect` and
+`Layer.provide_merge_to_layer`. The generated residual branches return
+`Hamlet.Dispatch.need witness`. Requirements of the source layer are added to
+the result after target requirements have been subtracted; they are not
+mistaken for requests handled by this callback.
+
+The resolver also follows verified direct uses of Layer packaging, recovery,
+observation, and unwrapping primitives between markers. The exact supported
+forms and safe refusal boundaries are shown in
+[Supported Patterns](./supported-patterns.md) and
+[Refused Patterns](./refused-patterns.md).
+
+A generic helper may take a Layer as its final symbolic input. Only the helper
+definition is annotated:
+
+```ocaml
+let[@hamlet.generic] recover_missing_layer source =
+  Hamlet.Layer.catch source ~handler:(function
+    | `Missing -> fallback_layer
+    | [%hamlet.propagate_e.auto] -> .)
+
+let recovered = recover_missing_layer concrete_layer
+```
+
+The caller writes an ordinary direct call. The PPX specializes the helper's
+contract from `concrete_layer` and generates the hidden forwarding evidence.
+
 ## Several markers and intervening operations
 
-There is no minimum chain length. One marker works; two markers work; longer
-linear sequences work. `catch` and `provide` may alternate, and supported
-Hamlet combinators may appear between them.
+Markers may occur in one direct linear flow. `catch` and `provide` may
+alternate, and supported Hamlet combinators may appear between them.
 
 ```ocaml
 source
@@ -86,7 +150,7 @@ For each marker it starts from the proven output of its predecessors and also
 accounts for effects introduced by intervening operations. Supported families
 include:
 
-- `chain`, `let*`, `and*`, `both`, `map`, and `suspend`;
+- `chain`, `let*`, `let+`, `and*`, `both`, `map`, and `suspend`;
 - `catch`, `catch_cause`, `catch_filter`, and `catch_cause_filter`;
 - `map_fail`, `catch_defect`, `tap`, `tap_fail`, `tap_defect`, and `tap_cause`;
 - `provide`, `scoped_with`, `scoped`, `or_die`, `thaw`, and `sandbox`;
@@ -102,8 +166,9 @@ generic error row because it maps `'e` to `'e Cause.t`, and manual
 
 ## Generic helpers
 
-A normal marker cannot inspect a row chosen later by a caller. An opted-in
-generic helper therefore receives caller-generated forwarding evidence.
+A normal marker cannot inspect rows chosen later by a caller. An opted-in
+generic helper therefore receives caller-generated forwarding evidence for its
+final effect or Layer argument.
 
 Definition:
 
@@ -178,7 +243,8 @@ definition remains the only annotated part.
 Version-one generic helpers are deliberately regular:
 
 - a named, non-recursive function;
-- the last user-written positional parameter is the generic `Hamlet.t`;
+- the last user-written positional parameter is the generic `Hamlet.t` or
+  `Hamlet.Layer.t`;
 - that parameter follows one supported linear effect flow;
 - direct, fully applied helper calls only.
 
@@ -189,11 +255,11 @@ hide the generated companion, and opaque callbacks are refused.
 
 Automatic propagation can proceed from:
 
-- a closed inferred row;
+- a finite row proved from a supported concrete construction, even when OCaml
+  keeps a fresh tail flexible for later unification;
 - an explicit `%hamlet.te` or `%hamlet.ts` boundary;
-- a concrete Hamlet computation the resolver can trace;
-- an imported or independently generalized value with a row that can be
-  closed without changing types shared with its environment;
+- an imported or independently generalized value whose fresh instance has a
+  finite visible row without constraining an argument or surrounding value;
 - the proven output of an earlier automatic marker or a direct generic call.
 
 “Independently generalized” means the value owns fresh type variables rather
@@ -211,19 +277,43 @@ boundary.
 
 ## Explicit fallback
 
-When the row is intentionally abstract, state its universe and use the ordinary
-Hamlet marker:
+Use this form when automatic propagation cannot prove the source row, but you
+want to state a fixed, closed error universe yourself. The computation may
+come from an API whose construction is not visible, or be a function parameter;
+the annotation constrains it to the listed errors rather than making it
+generic:
 
 ```ocaml
-let source = ([%hamlet.te computation] : (unit, errors, requirements) Hamlet.t)
+module Errors = struct
+  type missing = [ `Missing ]
+  type timeout = [ `Timeout ]
+end
 
-Hamlet.Combinators.catch source ~handler:(function
+Hamlet.Combinators.catch computation ~handler:(fun
+    (error : [%hamlet.te Errors.missing, Errors.timeout]) ->
+  match error with
   | `Missing -> recover ()
-  | [%hamlet.propagate_e errors] -> .)
+  | [%hamlet.propagate_e] -> .)
 ```
 
-The equivalent requirement boundary uses `%hamlet.ts` and
-`[%hamlet.propagate_s ...]`.
+`ppx_hamlet` implements both `[%hamlet.te ...]` and the plain
+`[%hamlet.propagate_e]` marker. The annotation expands to a closed error-row
+type, and the marker forwards the unhandled members of that declared row.
+Subtractor recognizes the closed type as an explicit boundary.
+
+`[%hamlet.propagate_e.auto]`, by contrast, belongs to
+`hamlet-subtractor.ppx`: it obtains the row from compiler evidence and
+generates the ordinary forwarding arms before the final Hamlet expansion. The
+requirement equivalents are `[%hamlet.ts ...]` and
+`[%hamlet.propagate_s]` for `ppx_hamlet`, and `[%hamlet.propagate_s.auto]` for
+Subtractor.
+
+This is different from `let[@hamlet.generic]`: a generic helper leaves its
+input row to the caller and receives generated evidence for that row. An
+explicit `[%hamlet.te ...]` annotation fixes the row to the errors named in the
+annotation. It cannot reveal a type that another module has made abstract or
+private; resolve or translate that error inside the module, or export a usable
+finite error type.
 
 ## Cross-module generated errors
 
@@ -249,6 +339,10 @@ for:
 - service requirement tags;
 - automatic propagation within the same compilation unit;
 - services whose errors are never automatically propagated downstream.
+
+The rule is the same when those errors occur while building a `Layer.t`: the
+catalogue belongs to the generated error declarations, not to the effect or
+Layer container that carries them.
 
 The module that declares the service may use ordinary `(pps ppx_hamlet)` if it
 contains no subtractor features. Only targets containing automatic markers or

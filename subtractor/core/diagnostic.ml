@@ -77,7 +77,9 @@ let message t =
   match t.code with
   | Open_row ->
       Printf.sprintf
-        "automatic propagation requires a finite closed row; add [%s]" fallback
+        "automatic propagation cannot prove all members of this open row; add \
+         [%s]"
+        fallback
   | Abstract_alias None ->
       Printf.sprintf
         "automatic propagation cannot inspect an abstract or hidden %s row \
@@ -95,8 +97,8 @@ let message t =
         fallback
   | Polymorphic_parameter ->
       Printf.sprintf
-        "automatic propagation cannot close a row rooted in a function \
-         parameter; add [%s]"
+        "automatic propagation row is chosen by a function parameter, so its \
+         complete universe is unknown here; add [%s]"
         fallback
   | Opaque_origin ->
       Printf.sprintf
@@ -110,8 +112,8 @@ let message t =
         fallback
   | Invalid_owner ->
       Printf.sprintf
-        "automatic propagation owner is not the canonical \
-         Hamlet.Combinators.catch or Hamlet.Combinators.provide; add [%s]"
+        "automatic propagation owner is not a supported direct Hamlet \
+         catch/provider; add [%s]"
         fallback
   | Invalid_error_catalogue reason ->
       Printf.sprintf

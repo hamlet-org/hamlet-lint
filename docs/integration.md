@@ -127,7 +127,8 @@ are mapped back to the nearest source construct.
 A refusal means one of three things:
 
 - the Dune target used the wrong PPX phase;
-- the effect row, handler, generic contract, or dependency flow was not exact;
+- the effect or Layer row, handler, generic contract, or dependency flow was
+  not exact;
 - the resolver could not run or its response did not match the request.
 
 The diagnostic names the failed condition and the available explicit boundary.
