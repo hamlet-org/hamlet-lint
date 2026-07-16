@@ -62,6 +62,16 @@ let recovered_pipe : (Logger.Tag.t, [ `Timeout ], never) Layer.t =
 let case_layer_catch_direct = recovered
 let case_layer_catch_pipeline = recovered_pipe
 
+let explicit_primary : (Logger.Tag.t, errors, never) Layer.t =
+  Layer.make Logger.Tag.key (Combinators.fail `Missing)
+
+let explicit_recovered : (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  Layer.catch explicit_primary ~handler:(function
+    | `Missing -> fallback
+    | [%hamlet.propagate_e.auto] -> .)
+
+let case_layer_explicit_boundary = explicit_recovered
+
 let recovered_after_fresh : (Logger.Tag.t, [ `Timeout ], never) Layer.t =
   Layer.catch (Layer.fresh primary) ~handler:(function
     | `Missing -> fallback

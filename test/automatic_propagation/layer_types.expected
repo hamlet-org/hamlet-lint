@@ -1,5 +1,6 @@
 case_layer_catch_direct result=Logger.Tag.t errors=closed[Timeout] requirements=Hamlet.never
 case_layer_catch_pipeline result=Logger.Tag.t errors=closed[Timeout] requirements=Hamlet.never
+case_layer_explicit_boundary result=Logger.Tag.t errors=closed[Timeout] requirements=Hamlet.never
 case_layer_structural result=Logger.Tag.t errors=Structural_errors.timeout requirements=Hamlet.never
 case_layer_cross_cu_catalogue result=Logger.Tag.t errors=closed[Read_error(string),Write_error(int)] requirements=Hamlet.never
 case_layer_generic_same_module result=Logger.Tag.t errors=closed[Offline,Timeout] requirements=Hamlet.never

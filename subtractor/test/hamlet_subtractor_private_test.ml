@@ -1380,6 +1380,187 @@ let caught =
     "Layer.catch subtracts handled errors" [ "write_error" ]
     (Hamlet_subtractor_core.Residual.residual residual |> leaf_names)
 
+let test_explicit_layer_boundary_is_the_declared_universe () =
+  let engine =
+    resolve_exact
+      {|
+let primary :
+    (Logger.Tag.t, [ `Missing | `Timeout ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.fail `Missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.fail `Timeout)
+
+let caught :
+    (Logger.Tag.t, [ `Timeout ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.catch primary ~handler:(function
+    | `Missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:explicit-layer-boundary"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "explicit Layer boundary defines the input universe"
+    [ "Missing"; "Timeout" ]
+    (Hamlet_subtractor_core.Residual.input residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check (list string))
+    "explicit Layer boundary retains the declared residual" [ "Timeout" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_labels)
+
+let test_context_widening_does_not_create_a_layer_boundary () =
+  let engine =
+    resolve_exact
+      {|
+let primary =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.fail `Missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.fail `Timeout)
+
+let caught =
+  Hamlet.Layer.catch primary ~handler:(function
+    | `Timeout -> fallback
+    | `Missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:context-widened-layer"]))
+|}
+  in
+  match refused_code engine with
+  | Hamlet_subtractor_core.Diagnostic.Leaf_outside_universe _ -> ()
+  | _ -> Alcotest.fail "handler context widened the unannotated Layer binding"
+
+let test_non_finite_explicit_layer_boundaries_are_refused () =
+  let open_boundary =
+    resolve_exact
+      {|
+let primary :
+    (Logger.Tag.t, [> `Missing ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.fail `Missing)
+
+let fallback = Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let caught =
+  Hamlet.Layer.catch primary ~handler:(function
+    | `Missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:open-layer-boundary"]))
+|}
+  in
+  (match refused_code open_boundary with
+  | Hamlet_subtractor_core.Diagnostic.Open_row
+  | Hamlet_subtractor_core.Diagnostic.Unresolved_row ->
+      ()
+  | _ -> Alcotest.fail "open explicit Layer boundary was accepted");
+  let polymorphic_boundary =
+    resolve_exact
+      {|
+let primary :
+    'e. (Logger.Tag.t, 'e, Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let fallback = Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let caught =
+  Hamlet.Layer.catch primary ~handler:(function
+    | `Missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:polymorphic-layer-boundary"]))
+|}
+  in
+  (match refused_code polymorphic_boundary with
+  | Hamlet_subtractor_core.Diagnostic.Polymorphic_parameter
+  | Hamlet_subtractor_core.Diagnostic.Open_row
+  | Hamlet_subtractor_core.Diagnostic.Unresolved_row ->
+      ()
+  | _ -> Alcotest.fail "polymorphic explicit Layer boundary was accepted");
+  let private_boundary =
+    resolve_exact
+      {|
+module Private_layer = struct
+  type error = private [ `Private_layer_error ]
+
+  let primary :
+      (Logger.Tag.t, error, Hamlet.never) Hamlet.Layer.t =
+    Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+  let fallback =
+    Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+  let caught =
+    Hamlet.Layer.catch primary ~handler:(function
+      | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:private-layer-boundary"]))
+end
+|}
+  in
+  match refused_code private_boundary with
+  | Hamlet_subtractor_core.Diagnostic.Abstract_alias _ -> ()
+  | _ -> Alcotest.fail "private explicit Layer boundary was accepted"
+
+let test_explicit_layer_boundary_keeps_marker_dependency () =
+  let source boundary =
+    Printf.sprintf
+      {|
+let source =
+  if Sys.opaque_identity true then Hamlet.Combinators.fail `Missing
+  else Hamlet.Combinators.fail `Timeout
+
+let recovered =
+  Hamlet.Combinators.catch source ~handler:(function
+    | `Missing -> Hamlet.Combinators.fail `Recovery
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:explicit-layer-inner"]))
+
+let inner %s =
+  Hamlet.Layer.make Logger.Tag.key recovered
+
+let clean = Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let outer =
+  Hamlet.Layer.catch inner ~handler:(function
+    | `Recovery -> clean
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:explicit-layer-outer"]))
+|}
+      boundary
+  in
+  let check label boundary =
+    let engine = resolve_exact (source boundary) in
+    let inner_marker, outer =
+      Hamlet_subtractor_engine.outcomes engine
+      |> List.sort (fun (left, _) (right, _) ->
+          Int.compare
+            (Hamlet_subtractor_core.Marker.span left
+            |> Hamlet_subtractor_core.Source_span.start_offset)
+            (Hamlet_subtractor_core.Marker.span right
+            |> Hamlet_subtractor_core.Source_span.start_offset))
+      |> function
+      | [ (inner_marker, _); (_, outer) ] -> (inner_marker, outer)
+      | outcomes ->
+          Alcotest.failf "%s: expected two dependent Layer markers, got %d"
+            label (List.length outcomes)
+    in
+    match outer with
+    | Hamlet_subtractor_core.Protocol.Resolved residual ->
+        begin match
+          Hamlet_subtractor_core.Residual.input residual
+          |> Hamlet_subtractor_core.Proof.origin
+        with
+        | Hamlet_subtractor_core.Proof.Composition
+            {
+              operation = Hamlet_subtractor_core.Proof.Catch;
+              inputs = [ input ];
+            }
+          when Hamlet_subtractor_core.Marker.compare_id input
+                 (Hamlet_subtractor_core.Marker.id inner_marker)
+               = 0 ->
+            ()
+        | _ -> Alcotest.failf "%s severed marker dependency" label
+        end
+    | Hamlet_subtractor_core.Protocol.Refused diagnostic ->
+        Alcotest.failf "%s: %s" label
+          (Hamlet_subtractor_core.Diagnostic.message diagnostic)
+  in
+  check "unannotated Layer baseline" "";
+  check "explicit Layer boundary"
+    ": (Logger.Tag.t, [ `Recovery | `Timeout ], Hamlet.never) Hamlet.Layer.t"
+
 let test_layer_provider_source_is_post_owner_contributor () =
   let engine =
     resolve_exact
@@ -2483,6 +2664,14 @@ let () =
             test_exact_local_catch;
           Alcotest.test_case "Layer.catch is exact" `Quick
             test_exact_layer_catch;
+          Alcotest.test_case "explicit Layer boundary is authoritative" `Quick
+            test_explicit_layer_boundary_is_the_declared_universe;
+          Alcotest.test_case "Layer use-site widening stays contextual" `Quick
+            test_context_widening_does_not_create_a_layer_boundary;
+          Alcotest.test_case "non-finite Layer boundaries are refused" `Quick
+            test_non_finite_explicit_layer_boundaries_are_refused;
+          Alcotest.test_case "Layer boundary keeps marker dependency" `Quick
+            test_explicit_layer_boundary_keeps_marker_dependency;
           Alcotest.test_case "Layer provider source is post-owner" `Quick
             test_layer_provider_source_is_post_owner_contributor;
           Alcotest.test_case "Layer.fail_like replaces only errors" `Quick

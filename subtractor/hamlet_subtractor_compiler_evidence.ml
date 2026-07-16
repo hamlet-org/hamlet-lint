@@ -1133,7 +1133,16 @@ type value_binding_origin = {
   uid : Shape.Uid.t;
   rhs : expression;
   attributes : Parsetree.attributes;
+  explicit_type_boundary : core_type option;
 }
+
+let simple_explicit_type_boundary pattern uid =
+  match pattern.pat_desc with
+  | Tpat_var (_, _, bound_uid) when Shape.Uid.equal uid bound_uid ->
+      List.find_map
+        (function Tpat_constraint type_, _, _ -> Some type_ | _ -> None)
+        pattern.pat_extra
+  | _ -> None
 
 let find_value_binding_origin bindings path uid =
   List.find_map
@@ -2226,6 +2235,8 @@ let collect_expression_nodes ?(generic_outputs = []) structure =
                   uid;
                   rhs = binding.vb_expr;
                   attributes = binding.vb_attributes;
+                  explicit_type_boundary =
+                    simple_explicit_type_boundary binding.vb_pat uid;
                 }
                 :: nodes.bindings)
             !bound;
@@ -2320,6 +2331,21 @@ let exact_certificate ~errors ~requirements =
   |> function
   | Ok certificate -> certificate
   | Error _ -> refuse (Core_validation_failed "invalid exact certificate")
+
+let certificate_for_explicit_type_boundary ~context_digest type_ =
+  let _, errors, requirements =
+    hamlet_channels_of_scheme type_.ctyp_env type_.ctyp_type
+  in
+  let errors, error_catalogues =
+    resolve_channel ~context_digest ~kind:Kind.Error ~origin:Proof.Closed_row
+      type_.ctyp_env errors
+  in
+  let requirements, requirement_catalogues =
+    resolve_channel ~context_digest ~kind:Kind.Requirement
+      ~origin:Proof.Closed_row type_.ctyp_env requirements
+  in
+  ( exact_certificate ~errors ~requirements,
+    error_catalogues @ requirement_catalogues )
 
 let structural_variant_leaf ~context_digest env label payload =
   let identity =
@@ -2807,22 +2833,44 @@ let rec source_plan_for_expression
                                     Option.is_some (canonical_layer_name callee)
                                 | _ -> false
                               in
+                              let rhs_generic_output =
+                                generic_call_output rhs
+                              in
+                              let explicit_boundary =
+                                if
+                                  recognized_layer_rhs
+                                  && dependencies = []
+                                  && Option.is_none generic_input
+                                  && Option.is_none rhs_generic_output
+                                then
+                                  Option.bind binding
+                                    (fun (binding : value_binding_origin) ->
+                                      binding.explicit_type_boundary)
+                                else None
+                              in
                               let follows_rhs =
                                 dependencies <> []
                                 || Option.is_some generic_input
-                                || Option.is_some (generic_call_output rhs)
+                                || Option.is_some rhs_generic_output
                                 || recognized_layer_rhs
                               in
-                              if not follows_rhs then known_source ()
-                              else begin
-                                (try ignore (known_source ()) with
-                                | Refuse (Abstract_or_hidden_alias _ as reason)
-                                  ->
-                                    refuse reason
-                                | Refuse _ -> ());
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input
-                                  ~seen:(uid :: seen) rhs
+                              begin match explicit_boundary with
+                              | Some type_ ->
+                                  let certificate, catalogues =
+                                    certificate_for_explicit_type_boundary
+                                      ~context_digest type_
+                                  in
+                                  (Known_source certificate, catalogues)
+                              | None when not follows_rhs -> known_source ()
+                              | None ->
+                                  (try ignore (known_source ()) with
+                                  | Refuse
+                                      (Abstract_or_hidden_alias _ as reason) ->
+                                      refuse reason
+                                  | Refuse _ -> ());
+                                  source_plan_for_expression ~context_digest
+                                    ~nodes ~marker_id ~kind ~generic_input
+                                    ~seen:(uid :: seen) rhs
                               end
                           | None -> known_source ()
                           end
@@ -4437,6 +4485,8 @@ let collect_generic_nodes structure =
                   uid;
                   rhs = binding.vb_expr;
                   attributes = binding.vb_attributes;
+                  explicit_type_boundary =
+                    simple_explicit_type_boundary binding.vb_pat uid;
                 }
                 :: nodes.bindings)
             !bound;

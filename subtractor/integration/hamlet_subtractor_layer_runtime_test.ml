@@ -24,6 +24,18 @@ let expect_counted_forwarding () =
   if !Fixture.upstream_evaluations <> 1 then
     failwith "Layer.catch evaluated its primary expression more than once"
 
+let expect_explicit_boundary_forwarding () =
+  let computation =
+    Layer.provide_to_effect ~source:Fixture.case_layer_explicit_boundary
+      ~handler:(fun logger -> function
+        | #Fixture.Logger.Tag.r as witness ->
+            Fixture.Logger.Tag.give witness logger)
+      Fixture.Logger.Tag.summon
+  in
+  match Interpreter.run computation with
+  | Error `Timeout -> ()
+  | Ok _ -> failwith "explicit Layer boundary swallowed the fallback Timeout"
+
 let expect_structural_forwarding () =
   let computation =
     Layer.provide_to_effect ~source:Fixture.case_layer_structural
@@ -121,6 +133,7 @@ let expect_generic_unwrap_and_optional_fresh () =
 
 let () =
   expect_counted_forwarding ();
+  expect_explicit_boundary_forwarding ();
   expect_structural_forwarding ();
   expect_cross_cu_forwarding ();
   expect_provider_matrix ();
