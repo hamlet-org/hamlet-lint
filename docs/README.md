@@ -3,7 +3,7 @@
 - [Automatic Propagation](./automatic-propagation.md) explains setup, ordinary
   markers, generic helpers, composition, and explicit fallbacks.
 - [Supported Patterns](./supported-patterns.md) contains small accepted
-  examples and their resulting rows.
+  examples for effects and layers, with their resulting rows.
 - [Refused Patterns](./refused-patterns.md) shows unsafe or ambiguous forms and
   how to make each boundary explicit.
 - [Architecture](./architecture.md) follows source code through the probe,

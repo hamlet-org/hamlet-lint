@@ -161,21 +161,79 @@ provide output requirements = input requirements - supplied requirements
 The actual implementation retains origin information and validates that every
 subtracted leaf belongs to the input universe.
 
+## Layer equations
+
+A Layer carries build errors and build requirements, so it uses the same
+`Effect_certificate`. Let `E(x)` and `R(x)` be its two finite proofs.
+
+Packaging preserves the visible build certificate:
+
+```text
+make, merge_all, merge_all_with_key:  result = build
+fresh:                                 result = input layer
+fail_like:                             E(result) = visible replacement error
+                                       R(result) = R(input layer)
+or_die:                                E(result) = empty
+                                       R(result) = R(input layer)
+```
+
+Recovery and observation combine the primary layer with visible callbacks:
+
+```text
+catch errors       = primary errors - handled errors + fallback errors
+catch requirements = primary requirements + fallback requirements
+
+catch_defect errors       = primary errors + fallback errors
+catch_defect requirements = primary requirements + fallback requirements
+
+catch_cause errors       = fallback errors
+catch_cause requirements = primary requirements + fallback requirements
+
+tap, tap_fail, tap_defect, tap_cause:
+  result = primary layer union callback effects
+```
+
+`Layer.catch` forwarding is special only at code generation. Its handler must
+return another Layer with the same hidden service key, so generated error
+branches call `Layer.fail_like` instead of `Combinators.fail`. This changes no
+proof equation.
+
+For `unwrap key selected`, the proof combines the effect that produces the
+inner layer with the returned layer's build certificate. Both stages must be
+visible or independently exact.
+
+Layer providers subtract target requirements, then add the effects needed to
+build the source layer or merged environment:
+
+```text
+provider errors = target errors + source errors
+provider requirements = (target requirements - supplied requirements)
+                        + source requirements
+```
+
+The provider handler sees only target requirements. Source requirements are
+post-owner contributors, not candidates for subtraction by that handler.
+
 ## Cross-module catalogues
 
 A generated error union can hide which named aliases formed it once only its
 `.cmi` is visible. `[@@rest_cross_cu]` generates `Errors.Cases`, a checked list
 of the union's fields and their declaration identities. A downstream resolver
-uses that catalogue to reconstruct complete leaves and the generator uses its
-dispatcher to emit one linear match.
+uses that catalogue to reconstruct complete leaves. Effect handlers may use
+its dispatcher to emit one linear match. Layer handlers emit the same verified
+leaves directly because the catalogue's callback result is `Hamlet.t`, not
+`Hamlet.Layer.t`.
+
+The same catalogue proves errors carried by an effect or by a Layer build. It
+describes the error declarations themselves, independently of their container.
 
 Service tags already contain a generated identity, key, and witness type, so
 they do not need an error catalogue.
 
 ## Generic symbolic contracts
 
-A generic helper is compiled before its caller chooses the input rows. Its
-contract therefore contains expressions such as:
+A generic helper is compiled before its caller chooses the input effect or
+Layer rows. Its contract therefore contains expressions such as:
 
 ```text
 slot 0 input  = input.errors

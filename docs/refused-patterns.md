@@ -29,10 +29,12 @@ module Source = struct
     type timeout = [ `Timeout ]
   end
 
-  let value = Hamlet.Combinators.fail `Missing
+  let value retry =
+    if retry then Hamlet.Combinators.fail `Timeout
+    else Hamlet.Combinators.fail `Missing
 
-  let handled_inside_source =
-    Hamlet.Combinators.catch value ~handler:(function
+  let handled_inside_source retry =
+    Hamlet.Combinators.catch (value retry) ~handler:(function
       | `Missing -> Hamlet.Combinators.return ()
       | `Timeout -> Hamlet.Combinators.return ())
 end
@@ -53,8 +55,9 @@ function argument:
 let build error = Hamlet.Combinators.fail error
 ```
 
-`[@hamlet.generic]` does not apply to this function: `error` is a value, not
-the final `Hamlet.t` parameter that generic helpers specialize.
+`[@hamlet.generic]` does not apply to this function: `error` is a raw value,
+not the final `Hamlet.t` or `Hamlet.Layer.t` parameter that generic helpers
+specialize.
 
 If `build` is meant to accept a fixed set of errors, make that set part of its
 own API:
@@ -71,9 +74,19 @@ The named type is a real contract of `build`, so the resolver can use it as a
 finite universe. If `build` is intentionally polymorphic in its error value,
 keep an automatic marker out of that function and place it where the error is
 concrete. The next section covers the different case where the caller supplies
-an entire `Hamlet.t` computation; that case can use `[@hamlet.generic]`.
+an entire `Hamlet.t` computation or `Hamlet.Layer.t`; that case can use
+`[@hamlet.generic]`.
 
-## Effect passed as a parameter
+The same rule applies to a Layer built from a caller-chosen error:
+
+```ocaml
+let failing_layer error = Hamlet.Layer.fail_like template_layer error
+```
+
+Use a named finite error type for `error`, or call `fail_like` where the error
+constructor is concrete.
+
+## Effect or Layer passed as a parameter
 
 ``[> `Missing ]`` is not itself a refusal. It is also the normal inferred shape
 of this concrete expression, which the resolver accepts because it can follow
@@ -254,6 +267,91 @@ inside unrelated control flow:
 
 Fix: put concrete cases and the final marker in one direct match. Guards on
 individual cases are supported.
+
+## Typed-error marker in a cause or defect Layer handler
+
+`propagate_e.auto` forwards values from a typed error row. These handlers
+receive a different value:
+
+```ocaml
+Hamlet.Layer.catch_cause layer ~handler:(function
+  | [%hamlet.propagate_e.auto] -> .)
+```
+
+`Layer.catch_cause` receives an `error Hamlet.Cause.t`, and
+`Layer.catch_defect` receives a `Hamlet.Die.t`. A generated typed-error branch
+would have the wrong input type and could lose cause information.
+
+Fix: use `Layer.catch` when the handler is meant to select typed errors:
+
+```ocaml
+Hamlet.Layer.catch layer ~handler:(function
+  | `Missing -> fallback_layer
+  | [%hamlet.propagate_e.auto] -> .)
+```
+
+Otherwise match the cause or defect explicitly and return a same-key fallback
+layer yourself.
+
+## Error marker inside `Layer.tap_fail`
+
+`Layer.tap_fail` observes a typed build failure; it does not handle or subtract
+that failure from the Layer. The original error is emitted again after a
+successful tap callback, so treating the callback as a `catch` owner would
+produce the wrong residual proof:
+
+```ocaml
+Hamlet.Layer.tap_fail layer ~f:(function
+  | `Missing -> record_missing ()
+  | [%hamlet.propagate_e.auto] -> .)
+```
+
+Fix: write the observer's remaining behavior explicitly. A no-op branch keeps
+the original Layer failure unchanged:
+
+```ocaml
+Hamlet.Layer.tap_fail layer ~f:(function
+  | `Missing -> record_missing ()
+  | _ -> Hamlet.Combinators.return ())
+```
+
+`tap`, `tap_defect`, and `tap_cause` are also traced transformations rather
+than automatic-marker owners. Their callback inputs are a built service, a
+defect, or a complete cause, not the Layer's typed-error row.
+
+## Opaque layer returned by `Layer.unwrap`
+
+`Layer.unwrap` runs one effect to obtain a layer and then runs that layer's
+build. An ordinary helper cannot prove the second stage when its caller chooses
+the returned layer:
+
+```ocaml
+let handle selected =
+  Hamlet.Layer.unwrap Service.Tag.key
+    (Hamlet.Combinators.return selected)
+  |> Hamlet.Layer.catch ~handler:(function
+       | `Missing -> fallback_layer
+       | [%hamlet.propagate_e.auto] -> .)
+```
+
+`selected` is a function parameter. Its Layer build may introduce any errors
+or requirements allowed by the parameter's type, so the resolver has no finite
+construction to inspect at the helper definition.
+
+Fix: apply `Layer.unwrap` where the concrete layer is known:
+
+```ocaml
+let layer =
+  Hamlet.Layer.unwrap Service.Tag.key
+    (Hamlet.Combinators.return fallback_layer)
+```
+
+A visible local selector such as `let choose () = return fallback_layer` is
+also supported. If abstraction is intentional, expose an independently
+generalized selector with a finite exact result. `[@hamlet.generic]` does not
+fix this particular helper: its symbolic Layer is wrapped inside the selection
+effect, rather than flowing directly through a supported Layer operation. Do
+not add an annotation that claims rows the implementation does not guarantee.
 
 ## Indirect `give` or `need`
 
