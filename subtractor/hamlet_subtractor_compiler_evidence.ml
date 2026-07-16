@@ -7,6 +7,7 @@ module Leaf = Core.Leaf
 module Proof = Core.Proof
 module Effect_certificate = Core.Effect_certificate
 module Residual = Core.Residual
+module Owner_descriptor = Core.Owner_descriptor
 
 open Typedtree
 open Asttypes
@@ -945,20 +946,34 @@ let canonical_hamlet_value
            || String.equal (Path.last path) (Path.last expected_path))
     | None -> false
 
-let verify_owner_callee kind expression =
+let canonical_owner_descriptor kind expression =
   match expression.exp_desc with
   | Texp_ident (path, _, description) ->
-      let valid =
-        match kind with
-        | Kind.Error ->
-            canonical_hamlet_value expression.exp_env ~loc:expression.exp_loc
-              ~module_name:"Combinators" ~value_name:"catch" path description
-        | Kind.Requirement ->
-            canonical_hamlet_value expression.exp_env ~loc:expression.exp_loc
-              ~module_name:"Combinators" ~value_name:"provide" path description
-      in
-      if not valid then refuse Fake_or_aliased_callee
+      begin match
+        Owner_descriptor.owners
+        |> List.find_opt (fun descriptor ->
+            let channel_matches =
+              match (kind, descriptor.Owner_descriptor.channel) with
+              | Kind.Error, Owner_descriptor.Error
+              | Kind.Requirement, Owner_descriptor.Requirement ->
+                  true
+              | Kind.Error, Owner_descriptor.Requirement
+              | Kind.Requirement, Owner_descriptor.Error ->
+                  false
+            in
+            channel_matches
+            && canonical_hamlet_value expression.exp_env ~loc:expression.exp_loc
+                 ~module_name:
+                   (Owner_descriptor.module_path descriptor.module_name)
+                 ~value_name:descriptor.value_name path description)
+      with
+      | Some descriptor -> descriptor
+      | None -> refuse Fake_or_aliased_callee
+      end
   | _ -> refuse Fake_or_aliased_callee
+
+let verify_owner_callee kind expression =
+  ignore (canonical_owner_descriptor kind expression)
 
 let hamlet_channels expression =
   let rec unwrap type_expression =
@@ -1188,6 +1203,15 @@ let canonical_combinator_name expression =
       |> List.find_opt (fun value_name ->
           canonical_hamlet_value expression.exp_env ~loc:expression.exp_loc
             ~module_name:"Combinators" ~value_name path description)
+  | _ -> None
+
+let canonical_layer_name expression =
+  match expression.exp_desc with
+  | Texp_ident (path, _, description) ->
+      Owner_descriptor.traced_layer_values
+      |> List.find_opt (fun value_name ->
+          canonical_hamlet_value expression.exp_env ~loc:expression.exp_loc
+            ~module_name:"Layer" ~value_name path description)
   | _ -> None
 
 let positional_arguments arguments =
@@ -2019,6 +2043,7 @@ type expression_nodes = {
   upstreams : (string, expression list) Hashtbl.t;
   callees : (string, expression list) Hashtbl.t;
   handlers : (string, expression list) Hashtbl.t;
+  contributors : (string, expression list) Hashtbl.t;
   markers : (string, expression list) Hashtbl.t;
   generic_outputs :
     ( string,
@@ -2037,6 +2062,7 @@ let collect_expression_nodes ?(generic_outputs = []) structure =
       upstreams = Hashtbl.create 16;
       callees = Hashtbl.create 16;
       handlers = Hashtbl.create 16;
+      contributors = Hashtbl.create 16;
       markers = Hashtbl.create 16;
       generic_outputs = Hashtbl.create (List.length generic_outputs);
       bindings = [];
@@ -2089,6 +2115,8 @@ let collect_expression_nodes ?(generic_outputs = []) structure =
           collect upstream_attribute nodes.upstreams;
           collect callee_attribute nodes.callees;
           collect handler_attribute nodes.handlers;
+          collect Hamlet_subtractor_probe.contributor_attribute
+            nodes.contributors;
           collect marker_attribute nodes.markers;
           default.expr self expression);
     }
@@ -2683,30 +2711,35 @@ let rec source_plan_for_expression
                           exp_desc = Texp_apply (callee, arguments);
                         }
                       in
-                      begin match canonical_combinator_name callee with
-                      | Some "chain" ->
+                      begin match canonical_layer_name callee with
+                      | Some ("make" | "merge_all" | "merge_all_with_key") ->
                           begin match
-                            ( positional_arguments arguments,
-                              labelled_argument "handler" arguments,
-                              labelled_argument "f" arguments )
+                            List.rev (positional_arguments arguments)
                           with
-                          | source :: _, Some handler, _
-                          | source :: _, None, Some handler ->
-                              let source_plan, source_catalogues =
+                          | build :: _ ->
+                              source_plan_for_expression ~context_digest ~nodes
+                                ~marker_id ~kind ~generic_input ~seen build
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some "fresh" ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              source_plan_for_expression ~context_digest ~nodes
+                                ~marker_id ~kind ~generic_input ~seen source
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some "or_die" ->
+                          begin match positional_arguments arguments with
+                          | source :: _ ->
+                              let source, catalogues =
                                 source_plan_for_expression ~context_digest
                                   ~nodes ~marker_id ~kind ~generic_input ~seen
                                   source
                               in
-                              let handler_plan, handler_catalogues =
-                                source_plan_for_function_result ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  handler
-                              in
-                              ( chain_source_plans [ source_plan; handler_plan ],
-                                source_catalogues @ handler_catalogues )
-                          | _ -> refuse Higher_order_flow
+                              (Cleared_errors source, catalogues)
+                          | [] -> refuse Higher_order_flow
                           end
-                      | Some ("catch" | "catch_cause") ->
+                      | Some (("catch" | "catch_cause") as name) ->
                           begin match
                             ( positional_arguments arguments,
                               labelled_argument "handler" arguments )
@@ -2718,7 +2751,7 @@ let rec source_plan_for_expression
                                   source
                               in
                               begin match generic_input with
-                              | Some _ ->
+                              | Some _ when String.equal name "catch" ->
                                   let classified =
                                     classify_generic_handler ~context_digest
                                       ~kind:Kind.Error handler
@@ -2756,7 +2789,7 @@ let rec source_plan_for_expression
                                       },
                                     source_catalogues
                                     @ List.concat recovery_catalogues )
-                              | None ->
+                              | Some _ | None ->
                                   let handler_plan, handler_catalogues =
                                     source_plan_for_function_result
                                       ~context_digest ~nodes ~marker_id ~kind
@@ -2769,237 +2802,6 @@ let rec source_plan_for_expression
                                       },
                                     source_catalogues @ handler_catalogues )
                               end
-                          | _ -> refuse Higher_order_flow
-                          end
-                      | Some ("catch_filter" | "catch_cause_filter") ->
-                          begin match
-                            ( positional_arguments arguments,
-                              labelled_argument "handler" arguments,
-                              labelled_argument "on_no_match" arguments )
-                          with
-                          | source :: _, Some handler, Some on_no_match ->
-                              let source_plan, source_catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  source
-                              in
-                              let handler_plan, handler_catalogues =
-                                source_plan_for_function_result ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  handler
-                              in
-                              let no_match_plan, no_match_catalogues =
-                                source_plan_for_function_result ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  on_no_match
-                              in
-                              ( Recovered_source
-                                  {
-                                    source = source_plan;
-                                    recoveries = [ handler_plan; no_match_plan ];
-                                  },
-                                source_catalogues @ handler_catalogues
-                                @ no_match_catalogues )
-                          | _ -> refuse Higher_order_flow
-                          end
-                      | Some "both" ->
-                          begin match positional_arguments arguments with
-                          | [ left; right ] ->
-                              source_plans_for_expressions ~context_digest
-                                ~nodes ~marker_id ~kind ~generic_input ~seen
-                                [ left; right ]
-                          | _ -> refuse Higher_order_flow
-                          end
-                      | Some "map" ->
-                          begin match positional_arguments arguments with
-                          | source :: _ ->
-                              source_plan_for_expression ~context_digest ~nodes
-                                ~marker_id ~kind ~generic_input ~seen source
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some "suspend" ->
-                          begin match positional_arguments arguments with
-                          | callback :: _ ->
-                              source_plan_for_function_result ~context_digest
-                                ~nodes ~marker_id ~kind ~generic_input ~seen
-                                callback
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some ("or_die" | "thaw" | "sandbox") ->
-                          begin match positional_arguments arguments with
-                          | source :: _ ->
-                              let source_plan, catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  source
-                              in
-                              (Cleared_errors source_plan, catalogues)
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some "map_fail" ->
-                          begin match positional_arguments arguments with
-                          | source :: _ ->
-                              let source_plan, source_catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  source
-                              in
-                              let output, output_catalogues =
-                                output_channel Kind.Error application
-                              in
-                              ( Errors_from_output
-                                  { source = source_plan; output },
-                                source_catalogues @ output_catalogues )
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some "sandbox_cause" ->
-                          begin match positional_arguments arguments with
-                          | source :: _ ->
-                              let source_plan, catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  source
-                              in
-                              (Opaque_errors source_plan, catalogues)
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some "scoped" ->
-                          begin match positional_arguments arguments with
-                          | source :: _ ->
-                              let source_plan, catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  source
-                              in
-                              (Cleared_requirements source_plan, catalogues)
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some ("provide" | "scoped_with") ->
-                          begin match positional_arguments arguments with
-                          | source :: _ ->
-                              let source_plan, source_catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  source
-                              in
-                              begin match
-                                ( generic_input,
-                                  labelled_argument "handler" arguments )
-                              with
-                              | Some _, Some handler ->
-                                  let classified =
-                                    classify_generic_handler ~context_digest
-                                      ~kind:Kind.Requirement handler
-                                  in
-                                  let leaves action =
-                                    classified
-                                    |> List.filter_map (fun arm ->
-                                        if
-                                          action = arm.action
-                                          && Residual.Unguarded
-                                             = Residual.guard arm.arm
-                                        then
-                                          Some
-                                            (source_plan_leaf Kind.Requirement
-                                               arm.identity arm.members)
-                                        else None)
-                                  in
-                                  ( Provided_source
-                                      {
-                                        source = source_plan;
-                                        handled = leaves Residual.Handle;
-                                        explicitly_forwarded =
-                                          leaves Residual.Forward;
-                                      },
-                                    source_catalogues )
-                              | _ ->
-                                  let output, output_catalogues =
-                                    output_channel Kind.Requirement application
-                                  in
-                                  ( Requirements_from_output
-                                      { source = source_plan; output },
-                                    source_catalogues @ output_catalogues )
-                              end
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some ("add_finalizer" | "add_finalizer_exit") ->
-                          begin match positional_arguments arguments with
-                          | finalizer :: _ ->
-                              let finalizer_plan, finalizer_catalogues =
-                                if
-                                  Option.equal String.equal
-                                    (canonical_combinator_name callee)
-                                    (Some "add_finalizer_exit")
-                                then
-                                  source_plan_for_function_result
-                                    ~context_digest ~nodes ~marker_id ~kind
-                                    ~generic_input ~seen finalizer
-                                else
-                                  source_plan_for_expression ~context_digest
-                                    ~nodes ~marker_id ~kind ~generic_input ~seen
-                                    finalizer
-                              in
-                              ( chain_source_plans
-                                  [
-                                    finalizer_plan;
-                                    scope_requirement_source ~context_digest
-                                      application;
-                                  ],
-                                finalizer_catalogues )
-                          | [] -> refuse Higher_order_flow
-                          end
-                      | Some "acquire_release" ->
-                          begin match
-                            ( positional_arguments arguments,
-                              labelled_argument "release" arguments )
-                          with
-                          | acquire :: _, Some release ->
-                              let acquire_plan, acquire_catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  acquire
-                              in
-                              let release_plan, release_catalogues =
-                                source_plan_for_function_result ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  release
-                              in
-                              ( chain_source_plans
-                                  [
-                                    acquire_plan;
-                                    release_plan;
-                                    scope_requirement_source ~context_digest
-                                      application;
-                                  ],
-                                acquire_catalogues @ release_catalogues )
-                          | _ -> refuse Higher_order_flow
-                          end
-                      | Some "acquire_use_release" ->
-                          begin match
-                            ( positional_arguments arguments,
-                              labelled_argument "use" arguments,
-                              labelled_argument "release" arguments )
-                          with
-                          | acquire :: _, Some use, Some release ->
-                              let acquire_plan, acquire_catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  acquire
-                              in
-                              let use_plan, use_catalogues =
-                                source_plan_for_function_result ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  use
-                              in
-                              let release_plan, release_catalogues =
-                                source_plan_for_function_result ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  release
-                              in
-                              ( chain_source_plans
-                                  [ acquire_plan; use_plan; release_plan ],
-                                acquire_catalogues @ use_catalogues
-                                @ release_catalogues )
                           | _ -> refuse Higher_order_flow
                           end
                       | Some
@@ -3026,20 +2828,466 @@ let rec source_plan_for_expression
                                 source_catalogues @ handler_catalogues )
                           | _ -> refuse Higher_order_flow
                           end
-                      | Some "ensuring" ->
+                      | Some
+                          ( "provide_to_effect" | "provide_to_layer"
+                          | "provide_merge_to_layer" ) ->
                           begin match
                             ( positional_arguments arguments,
-                              labelled_argument "f" arguments )
+                              labelled_argument "source" arguments,
+                              labelled_argument "handler" arguments )
                           with
-                          | source :: _, Some finalizer ->
-                              source_plans_for_expressions ~context_digest
-                                ~nodes ~marker_id ~kind ~generic_input ~seen
-                                [ source; finalizer ]
+                          | target :: _, Some source, Some handler ->
+                              let target_plan, target_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  target
+                              in
+                              let source_plan, source_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  source
+                              in
+                              let handler =
+                                match
+                                  Hamlet_subtractor_propagate.peel_outer handler
+                                    1
+                                with
+                                | Some handler -> handler
+                                | None -> refuse Unsupported_pattern
+                              in
+                              let classified =
+                                classify_generic_handler ~context_digest
+                                  ~kind:Kind.Requirement handler
+                              in
+                              let leaves action =
+                                classified
+                                |> List.filter_map (fun arm ->
+                                    if
+                                      action = arm.action
+                                      && Residual.Unguarded
+                                         = Residual.guard arm.arm
+                                    then
+                                      Some
+                                        (source_plan_leaf Kind.Requirement
+                                           arm.identity arm.members)
+                                    else None)
+                              in
+                              ( chain_source_plans
+                                  [
+                                    Provided_source
+                                      {
+                                        source = target_plan;
+                                        handled = leaves Residual.Handle;
+                                        explicitly_forwarded =
+                                          leaves Residual.Forward;
+                                      };
+                                    source_plan;
+                                  ],
+                                target_catalogues @ source_catalogues )
                           | _ -> refuse Higher_order_flow
                           end
-                      | Some _ | None ->
-                          if dependencies = [] then known_source ()
-                          else refuse Higher_order_flow
+                      | Some "unwrap" ->
+                          begin match
+                            List.rev (positional_arguments arguments)
+                          with
+                          | layer_effect :: _ ->
+                              let effect_plan, effect_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  layer_effect
+                              in
+                              let returned_layer =
+                                match layer_effect.exp_desc with
+                                | Texp_apply (producer, producer_arguments)
+                                  when Option.exists
+                                         (fun name ->
+                                           String.equal name "return"
+                                           || String.equal name "success")
+                                         (canonical_combinator_name producer) ->
+                                    begin match
+                                      positional_arguments producer_arguments
+                                    with
+                                    | [ layer ] -> layer
+                                    | _ -> refuse Higher_order_flow
+                                    end
+                                | _ -> refuse Higher_order_flow
+                              in
+                              let layer_plan, layer_catalogues =
+                                source_plan_for_expression ~context_digest
+                                  ~nodes ~marker_id ~kind ~generic_input ~seen
+                                  returned_layer
+                              in
+                              ( chain_source_plans [ effect_plan; layer_plan ],
+                                effect_catalogues @ layer_catalogues )
+                          | [] -> refuse Higher_order_flow
+                          end
+                      | Some _ -> refuse Higher_order_flow
+                      | None ->
+                          begin match canonical_combinator_name callee with
+                          | Some "chain" ->
+                              begin match
+                                ( positional_arguments arguments,
+                                  labelled_argument "handler" arguments,
+                                  labelled_argument "f" arguments )
+                              with
+                              | source :: _, Some handler, _
+                              | source :: _, None, Some handler ->
+                                  let source_plan, source_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  let handler_plan, handler_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen handler
+                                  in
+                                  ( chain_source_plans
+                                      [ source_plan; handler_plan ],
+                                    source_catalogues @ handler_catalogues )
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some ("catch" | "catch_cause") ->
+                              begin match
+                                ( positional_arguments arguments,
+                                  labelled_argument "handler" arguments )
+                              with
+                              | source :: _, Some handler ->
+                                  let source_plan, source_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  begin match generic_input with
+                                  | Some _ ->
+                                      let classified =
+                                        classify_generic_handler ~context_digest
+                                          ~kind:Kind.Error handler
+                                      in
+                                      let recoveries, recovery_catalogues =
+                                        classified
+                                        |> List.filter (fun arm ->
+                                            Residual.Forward <> arm.action)
+                                        |> List.map (fun arm ->
+                                            source_plan_for_expression
+                                              ~context_digest ~nodes ~marker_id
+                                              ~kind ~generic_input ~seen arm.rhs)
+                                        |> List.split
+                                      in
+                                      let leaves action =
+                                        classified
+                                        |> List.filter_map (fun arm ->
+                                            if
+                                              action = arm.action
+                                              && Residual.Unguarded
+                                                 = Residual.guard arm.arm
+                                            then
+                                              Some
+                                                (source_plan_leaf Kind.Error
+                                                   arm.identity arm.members)
+                                            else None)
+                                      in
+                                      ( Caught_source
+                                          {
+                                            source = source_plan;
+                                            handled = leaves Residual.Handle;
+                                            explicitly_forwarded =
+                                              leaves Residual.Forward;
+                                            recoveries;
+                                          },
+                                        source_catalogues
+                                        @ List.concat recovery_catalogues )
+                                  | None ->
+                                      let handler_plan, handler_catalogues =
+                                        source_plan_for_function_result
+                                          ~context_digest ~nodes ~marker_id
+                                          ~kind ~generic_input ~seen handler
+                                      in
+                                      ( Recovered_source
+                                          {
+                                            source = source_plan;
+                                            recoveries = [ handler_plan ];
+                                          },
+                                        source_catalogues @ handler_catalogues
+                                      )
+                                  end
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some ("catch_filter" | "catch_cause_filter") ->
+                              begin match
+                                ( positional_arguments arguments,
+                                  labelled_argument "handler" arguments,
+                                  labelled_argument "on_no_match" arguments )
+                              with
+                              | source :: _, Some handler, Some on_no_match ->
+                                  let source_plan, source_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  let handler_plan, handler_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen handler
+                                  in
+                                  let no_match_plan, no_match_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen on_no_match
+                                  in
+                                  ( Recovered_source
+                                      {
+                                        source = source_plan;
+                                        recoveries =
+                                          [ handler_plan; no_match_plan ];
+                                      },
+                                    source_catalogues @ handler_catalogues
+                                    @ no_match_catalogues )
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some "both" ->
+                              begin match positional_arguments arguments with
+                              | [ left; right ] ->
+                                  source_plans_for_expressions ~context_digest
+                                    ~nodes ~marker_id ~kind ~generic_input ~seen
+                                    [ left; right ]
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some "map" ->
+                              begin match positional_arguments arguments with
+                              | source :: _ ->
+                                  source_plan_for_expression ~context_digest
+                                    ~nodes ~marker_id ~kind ~generic_input ~seen
+                                    source
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some "suspend" ->
+                              begin match positional_arguments arguments with
+                              | callback :: _ ->
+                                  source_plan_for_function_result
+                                    ~context_digest ~nodes ~marker_id ~kind
+                                    ~generic_input ~seen callback
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some ("or_die" | "thaw" | "sandbox") ->
+                              begin match positional_arguments arguments with
+                              | source :: _ ->
+                                  let source_plan, catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  (Cleared_errors source_plan, catalogues)
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some "map_fail" ->
+                              begin match positional_arguments arguments with
+                              | source :: _ ->
+                                  let source_plan, source_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  let output, output_catalogues =
+                                    output_channel Kind.Error application
+                                  in
+                                  ( Errors_from_output
+                                      { source = source_plan; output },
+                                    source_catalogues @ output_catalogues )
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some "sandbox_cause" ->
+                              begin match positional_arguments arguments with
+                              | source :: _ ->
+                                  let source_plan, catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  (Opaque_errors source_plan, catalogues)
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some "scoped" ->
+                              begin match positional_arguments arguments with
+                              | source :: _ ->
+                                  let source_plan, catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  (Cleared_requirements source_plan, catalogues)
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some ("provide" | "scoped_with") ->
+                              begin match positional_arguments arguments with
+                              | source :: _ ->
+                                  let source_plan, source_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  begin match
+                                    ( generic_input,
+                                      labelled_argument "handler" arguments )
+                                  with
+                                  | Some _, Some handler ->
+                                      let classified =
+                                        classify_generic_handler ~context_digest
+                                          ~kind:Kind.Requirement handler
+                                      in
+                                      let leaves action =
+                                        classified
+                                        |> List.filter_map (fun arm ->
+                                            if
+                                              action = arm.action
+                                              && Residual.Unguarded
+                                                 = Residual.guard arm.arm
+                                            then
+                                              Some
+                                                (source_plan_leaf
+                                                   Kind.Requirement arm.identity
+                                                   arm.members)
+                                            else None)
+                                      in
+                                      ( Provided_source
+                                          {
+                                            source = source_plan;
+                                            handled = leaves Residual.Handle;
+                                            explicitly_forwarded =
+                                              leaves Residual.Forward;
+                                          },
+                                        source_catalogues )
+                                  | _ ->
+                                      let output, output_catalogues =
+                                        output_channel Kind.Requirement
+                                          application
+                                      in
+                                      ( Requirements_from_output
+                                          { source = source_plan; output },
+                                        source_catalogues @ output_catalogues )
+                                  end
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some ("add_finalizer" | "add_finalizer_exit") ->
+                              begin match positional_arguments arguments with
+                              | finalizer :: _ ->
+                                  let finalizer_plan, finalizer_catalogues =
+                                    if
+                                      Option.equal String.equal
+                                        (canonical_combinator_name callee)
+                                        (Some "add_finalizer_exit")
+                                    then
+                                      source_plan_for_function_result
+                                        ~context_digest ~nodes ~marker_id ~kind
+                                        ~generic_input ~seen finalizer
+                                    else
+                                      source_plan_for_expression ~context_digest
+                                        ~nodes ~marker_id ~kind ~generic_input
+                                        ~seen finalizer
+                                  in
+                                  ( chain_source_plans
+                                      [
+                                        finalizer_plan;
+                                        scope_requirement_source ~context_digest
+                                          application;
+                                      ],
+                                    finalizer_catalogues )
+                              | [] -> refuse Higher_order_flow
+                              end
+                          | Some "acquire_release" ->
+                              begin match
+                                ( positional_arguments arguments,
+                                  labelled_argument "release" arguments )
+                              with
+                              | acquire :: _, Some release ->
+                                  let acquire_plan, acquire_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen acquire
+                                  in
+                                  let release_plan, release_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen release
+                                  in
+                                  ( chain_source_plans
+                                      [
+                                        acquire_plan;
+                                        release_plan;
+                                        scope_requirement_source ~context_digest
+                                          application;
+                                      ],
+                                    acquire_catalogues @ release_catalogues )
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some "acquire_use_release" ->
+                              begin match
+                                ( positional_arguments arguments,
+                                  labelled_argument "use" arguments,
+                                  labelled_argument "release" arguments )
+                              with
+                              | acquire :: _, Some use, Some release ->
+                                  let acquire_plan, acquire_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen acquire
+                                  in
+                                  let use_plan, use_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen use
+                                  in
+                                  let release_plan, release_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen release
+                                  in
+                                  ( chain_source_plans
+                                      [ acquire_plan; use_plan; release_plan ],
+                                    acquire_catalogues @ use_catalogues
+                                    @ release_catalogues )
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some
+                              ( "catch_defect" | "tap" | "tap_fail"
+                              | "tap_defect" | "tap_cause" ) ->
+                              begin match
+                                ( positional_arguments arguments,
+                                  labelled_argument "handler" arguments,
+                                  labelled_argument "f" arguments )
+                              with
+                              | source :: _, Some handler, _
+                              | source :: _, None, Some handler ->
+                                  let source_plan, source_catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen source
+                                  in
+                                  let handler_plan, handler_catalogues =
+                                    source_plan_for_function_result
+                                      ~context_digest ~nodes ~marker_id ~kind
+                                      ~generic_input ~seen handler
+                                  in
+                                  ( chain_source_plans
+                                      [ source_plan; handler_plan ],
+                                    source_catalogues @ handler_catalogues )
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some "ensuring" ->
+                              begin match
+                                ( positional_arguments arguments,
+                                  labelled_argument "f" arguments )
+                              with
+                              | source :: _, Some finalizer ->
+                                  source_plans_for_expressions ~context_digest
+                                    ~nodes ~marker_id ~kind ~generic_input ~seen
+                                    [ source; finalizer ]
+                              | _ -> refuse Higher_order_flow
+                              end
+                          | Some _ | None ->
+                              if dependencies = [] then known_source ()
+                              else refuse Higher_order_flow
+                          end
                       end
                   | Texp_match (_, cases, _, _) ->
                       cases
@@ -3201,6 +3449,7 @@ type node = {
   marker : Core.Marker.t;
   dependencies : string list;
   source_plan : source_plan;
+  post_contributors : source_plan list;
   arms : Residual.arm list;
   arm_members : (Identity.t * Atom.t list) list;
   recoveries : Effect_certificate.t list;
@@ -3223,16 +3472,43 @@ let extract_node ~context_digest nodes marker_id marker_expression =
   let handler =
     require_node nodes.handlers ~marker_id ~attribute:handler_attribute
   in
-  verify_owner_callee kind callee;
-  let dependencies = marker_dependencies nodes marker_id upstream in
+  let owner_descriptor = canonical_owner_descriptor kind callee in
+  let upstream_dependencies = marker_dependencies nodes marker_id upstream in
   let source_plan, source_catalogues =
     source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind ~seen:[]
       ~generic_input:None upstream
   in
   if
-    source_plan_dependencies source_plan <> dependencies
+    source_plan_dependencies source_plan <> upstream_dependencies
     && not (Hashtbl.mem nodes.generic_outputs marker_id)
   then refuse Higher_order_flow;
+  let post_contributors, contributor_catalogues =
+    match owner_descriptor.contributor with
+    | Owner_descriptor.No_contributor -> ([], [])
+    | Owner_descriptor.Labelled_source ->
+        let contributor =
+          require_node nodes.contributors ~marker_id
+            ~attribute:Hamlet_subtractor_probe.contributor_attribute
+        in
+        let plan, catalogues =
+          source_plan_for_expression ~context_digest ~nodes ~marker_id ~kind
+            ~seen:[] ~generic_input:None contributor
+        in
+        ([ plan ], catalogues)
+  in
+  let dependencies =
+    upstream_dependencies
+    @ List.concat_map source_plan_dependencies post_contributors
+    |> List.sort_uniq String.compare
+  in
+  let handler =
+    match
+      Hamlet_subtractor_propagate.peel_outer handler
+        owner_descriptor.handler_peel
+    with
+    | Some handler -> handler
+    | None -> refuse Unsupported_pattern
+  in
   let classified_arms =
     classify_arms ~context_digest ~kind ~marker_id handler
   in
@@ -3252,13 +3528,17 @@ let extract_node ~context_digest nodes marker_id marker_expression =
     marker;
     dependencies;
     source_plan;
+    post_contributors;
     arms = List.map (fun classified -> classified.arm) classified_arms;
     arm_members =
       List.map
         (fun classified -> (classified.identity, classified.members))
         classified_arms;
     recoveries;
-    catalogues = source_catalogues @ List.concat recovery_catalogues;
+    catalogues =
+      source_catalogues
+      @ contributor_catalogues
+      @ List.concat recovery_catalogues;
   }
 
 let member_present atom members =
@@ -3388,56 +3668,89 @@ let align_input_with_arms (node : node) input =
     | Ok proof -> proof
     | Error _ -> refuse Unsupported_pattern
 
-let residual_for_node (node : node) source =
-  let kind = Core.Marker.kind node.marker in
-  let input = exact_evidence kind source |> align_input_with_arms node in
-  let recovery =
-    match kind with
-    | Kind.Error ->
-        node.recoveries
+let rec resolve_source_plan dependencies = function
+  | Known_source certificate -> (certificate, [])
+  | Generic_input_source -> refuse Higher_order_flow
+  | Caught_source { source; handled; explicitly_forwarded; recoveries } ->
+      let source, source_inputs = resolve_source_plan dependencies source in
+      let recoveries, recovery_inputs =
+        recoveries |> List.map (resolve_source_plan dependencies) |> List.split
+      in
+      let inputs =
+        source_inputs :: recovery_inputs
+        |> List.concat
+        |> List.sort_uniq Core.Marker.compare_id
+      in
+      let arms =
+        List.map
+          (fun leaf ->
+            Residual.arm
+              ~target:(Residual.Complete_leaf (Leaf.identity leaf))
+              ~guard:Residual.Unguarded ~action:Residual.Handle)
+          handled
+        @ List.map
+            (fun leaf ->
+              Residual.arm
+                ~target:(Residual.Complete_leaf (Leaf.identity leaf))
+                ~guard:Residual.Unguarded ~action:Residual.Forward)
+            explicitly_forwarded
+      in
+      let input = exact_evidence Kind.Error source in
+      let recovery =
+        recoveries
         |> List.concat_map (fun certificate ->
             match
-              certificate
-              |> Effect_certificate.errors
+              Effect_certificate.errors certificate
               |> Effect_certificate.evidence_view
             with
             | Exact_proof proof -> Proof.leaves proof
             | Opaque_reasons _ -> [])
-    | Kind.Requirement -> []
-  in
-  Residual.calculate ~input ~arms:node.arms ~recovery |> function
-  | Ok residual -> residual
-  | Error code -> refuse (Residual_refusal code)
-
-let output_certificate (node : node) source residual =
-  let input_id = Core.Marker.id node.marker in
-  let aligned = Effect_certificate.exact (Residual.input residual) in
-  let source =
-    let errors, requirements =
-      match Core.Marker.kind node.marker with
-      | Kind.Error -> (aligned, Effect_certificate.requirements source)
-      | Kind.Requirement -> (Effect_certificate.errors source, aligned)
-    in
-    Effect_certificate.create ~errors ~requirements |> function
-    | Ok source -> source
-    | Error _ ->
-        refuse (Core_validation_failed "cannot align source certificate")
-  in
-  (match Core.Marker.kind node.marker with
-    | Kind.Error ->
-        Effect_certificate.catch ~inputs:[ input_id ] ~source
-          ~error_result:residual ~recoveries:node.recoveries
-    | Kind.Requirement ->
-        Effect_certificate.provide ~inputs:[ input_id ] ~source
-          ~requirement_result:residual ~handlers:[])
-  |> function
-  | Ok certificate -> certificate
-  | Error _ -> refuse (Core_validation_failed "effect composition failed")
-
-let rec resolve_source_plan dependencies = function
-  | Known_source certificate -> (certificate, [])
-  | Generic_input_source -> refuse Higher_order_flow
-  | Caught_source _ | Provided_source _ -> refuse Higher_order_flow
+      in
+      let residual =
+        Residual.calculate ~input ~arms ~recovery |> function
+        | Ok residual -> residual
+        | Error code -> refuse (Residual_refusal code)
+      in
+      let certificate =
+        Effect_certificate.catch ~inputs ~source ~error_result:residual
+          ~recoveries
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "invalid traced Layer.catch")
+      in
+      (certificate, inputs)
+  | Provided_source { source; handled; explicitly_forwarded } ->
+      let source, inputs = resolve_source_plan dependencies source in
+      let arms =
+        List.map
+          (fun leaf ->
+            Residual.arm
+              ~target:(Residual.Complete_leaf (Leaf.identity leaf))
+              ~guard:Residual.Unguarded ~action:Residual.Handle)
+          handled
+        @ List.map
+            (fun leaf ->
+              Residual.arm
+                ~target:(Residual.Complete_leaf (Leaf.identity leaf))
+                ~guard:Residual.Unguarded ~action:Residual.Forward)
+            explicitly_forwarded
+      in
+      let input = exact_evidence Kind.Requirement source in
+      let residual =
+        Residual.calculate ~input ~arms ~recovery:[] |> function
+        | Ok residual -> residual
+        | Error code -> refuse (Residual_refusal code)
+      in
+      let certificate =
+        Effect_certificate.provide ~inputs ~source ~requirement_result:residual
+          ~handlers:[]
+        |> function
+        | Ok certificate -> certificate
+        | Error _ ->
+            refuse (Core_validation_failed "invalid traced Layer provider")
+      in
+      (certificate, inputs)
   | Dependency_source id -> (
       match
         List.find_map
@@ -3543,11 +3856,70 @@ let rec resolve_source_plan dependencies = function
       in
       (certificate, inputs)
 
+let residual_for_node dependencies (node : node) source =
+  let kind = Core.Marker.kind node.marker in
+  let input = exact_evidence kind source |> align_input_with_arms node in
+  let recovery =
+    match kind with
+    | Kind.Error ->
+        node.recoveries
+        |> List.concat_map (fun certificate ->
+            match
+              certificate
+              |> Effect_certificate.errors
+              |> Effect_certificate.evidence_view
+            with
+            | Exact_proof proof -> Proof.leaves proof
+            | Opaque_reasons _ -> [])
+    | Kind.Requirement -> []
+  in
+  let contributors =
+    node.post_contributors
+    |> List.concat_map (fun contributor ->
+        let certificate, _ = resolve_source_plan dependencies contributor in
+        exact_evidence kind certificate |> Proof.leaves)
+  in
+  let recovery = recovery @ contributors |> List.sort_uniq Leaf.compare in
+  Residual.calculate ~input ~arms:node.arms ~recovery |> function
+  | Ok residual -> residual
+  | Error code -> refuse (Residual_refusal code)
+
+let output_certificate dependencies (node : node) source residual =
+  let input_id = Core.Marker.id node.marker in
+  let contributors =
+    node.post_contributors
+    |> List.map (fun contributor ->
+        resolve_source_plan dependencies contributor |> fst)
+  in
+  let aligned = Effect_certificate.exact (Residual.input residual) in
+  let source =
+    let errors, requirements =
+      match Core.Marker.kind node.marker with
+      | Kind.Error -> (aligned, Effect_certificate.requirements source)
+      | Kind.Requirement -> (Effect_certificate.errors source, aligned)
+    in
+    Effect_certificate.create ~errors ~requirements |> function
+    | Ok source -> source
+    | Error _ ->
+        refuse (Core_validation_failed "cannot align source certificate")
+  in
+  (match Core.Marker.kind node.marker with
+    | Kind.Error ->
+        Effect_certificate.catch ~inputs:[ input_id ] ~source
+          ~error_result:residual
+          ~recoveries:(node.recoveries @ contributors)
+    | Kind.Requirement ->
+        Effect_certificate.provide ~inputs:[ input_id ] ~source
+          ~requirement_result:residual ~handlers:contributors)
+  |> function
+  | Ok certificate -> certificate
+  | Error _ -> refuse (Core_validation_failed "effect composition failed")
+
 let resolve_node_without_dependencies (node : node) =
   if node.dependencies <> [] then refuse Higher_order_flow;
   let source, _ = resolve_source_plan [] node.source_plan in
-  let residual = residual_for_node node source in
-  let certificate = output_certificate node source residual in
+  let residual = residual_for_node [] node source in
+  let certificate = output_certificate [] node source residual in
   {
     marker = node.marker;
     input = Residual.input residual;
@@ -3664,8 +4036,10 @@ let engine_backend =
               let source, _ =
                 resolve_source_plan dependencies node.source_plan
               in
-              let residual = residual_for_node node source in
-              let certificate = output_certificate node source residual in
+              let residual = residual_for_node dependencies node source in
+              let certificate =
+                output_certificate dependencies node source residual
+              in
               Ok Hamlet_subtractor_engine.{ residual; certificate }
             with Refuse reason -> Error (diagnostic_code reason)))
   in
@@ -4174,6 +4548,7 @@ let symbolic_input_for_expression
       upstreams = Hashtbl.create 0;
       callees = Hashtbl.create 0;
       handlers = Hashtbl.create 0;
+      contributors = Hashtbl.create 0;
       markers = Hashtbl.create 0;
       generic_outputs = Hashtbl.create 0;
       bindings = nodes.bindings;
@@ -4462,6 +4837,7 @@ let generic_contract_for_binding ~context_digest ~definitions nodes binding =
       upstreams = Hashtbl.create 0;
       callees = Hashtbl.create 0;
       handlers = Hashtbl.create 0;
+      contributors = Hashtbl.create 0;
       markers = Hashtbl.create 0;
       generic_outputs = Hashtbl.create 0;
       bindings = nodes.bindings;

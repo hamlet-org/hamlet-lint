@@ -7,6 +7,8 @@ type error =
   | Conflicting_catalogue of Identity.t
   | Invalid_materialization of Leaf.t
 
+type forwarding = Default | Layer_fail_like of string
+
 let error_message = function
   | Missing_catalogue identity ->
       Printf.sprintf
@@ -59,18 +61,33 @@ let structural_pattern ~loc atom name =
   in
   alias ~loc (A.ppat_variant ~loc:nested_loc (Atom.label atom) argument) name
 
-let forwarding_rhs ~loc = function
+let forwarding_rhs ~loc forwarding = function
   | Kind.Error ->
-      A.pexp_apply ~loc
-        (A.pexp_ident ~loc
-           {
-             txt =
-               Longident.Ldot
-                 ( Longident.Ldot (Longident.Lident "Hamlet", "Combinators"),
-                   "fail" );
-             loc;
-           })
-        [ (Nolabel, A.evar ~loc "error") ]
+      let callee, arguments =
+        match forwarding with
+        | Default ->
+            ( A.pexp_ident ~loc
+                {
+                  txt =
+                    Longident.Ldot
+                      ( Longident.Ldot (Longident.Lident "Hamlet", "Combinators"),
+                        "fail" );
+                  loc;
+                },
+              [ (Nolabel, A.evar ~loc "error") ] )
+        | Layer_fail_like primary ->
+            ( A.pexp_ident ~loc
+                {
+                  txt =
+                    Longident.Ldot
+                      ( Longident.Ldot (Longident.Lident "Hamlet", "Layer"),
+                        "fail_like" );
+                  loc;
+                },
+              [ (Nolabel, A.evar ~loc primary); (Nolabel, A.evar ~loc "error") ]
+            )
+      in
+      A.pexp_apply ~loc callee arguments
   | Kind.Requirement ->
       A.pexp_apply ~loc
         (A.pexp_ident ~loc
@@ -82,21 +99,21 @@ let forwarding_rhs ~loc = function
            })
         [ (Nolabel, A.evar ~loc "witness") ]
 
-let direct_case ~loc leaf =
+let direct_case ~loc ~forwarding leaf =
   let kind = Leaf.kind leaf in
   let name =
     match kind with Kind.Error -> "error" | Requirement -> "witness"
   in
   let lhs = named_pattern ~loc (Leaf.identity leaf) name in
-  A.case ~lhs ~guard:None ~rhs:(forwarding_rhs ~loc:(ghost loc) kind)
+  A.case ~lhs ~guard:None ~rhs:(forwarding_rhs ~loc:(ghost loc) forwarding kind)
 
-let structural_case ~loc leaf atom =
+let structural_case ~loc ~forwarding leaf atom =
   let kind = Leaf.kind leaf in
   let name =
     match kind with Kind.Error -> "error" | Requirement -> "witness"
   in
   let lhs = structural_pattern ~loc atom name in
-  A.case ~lhs ~guard:None ~rhs:(forwarding_rhs ~loc:(ghost loc) kind)
+  A.case ~lhs ~guard:None ~rhs:(forwarding_rhs ~loc:(ghost loc) forwarding kind)
 
 let warning_attribute ~loc value =
   A.attribute ~loc ~name:{ txt = "warning"; loc }
@@ -196,7 +213,12 @@ let cases_function ~loc catalogue name =
 let unreachable ~loc =
   A.pexp_fun ~loc Nolabel None (A.ppat_any ~loc) [%expr assert false]
 
-let cases_record ~loc residual catalogue =
+let forwarding_callback ~loc forwarding =
+  A.pexp_fun ~loc Nolabel None
+    (A.ppat_var ~loc { txt = "error"; loc })
+    (forwarding_rhs ~loc forwarding Kind.Error)
+
+let cases_record ~loc ~forwarding residual catalogue =
   let propagate =
     A.pexp_apply ~loc
       (cases_function ~loc catalogue "propagate")
@@ -207,20 +229,41 @@ let cases_record ~loc residual catalogue =
     |> List.filter (fun (field : Hamlet_subtractor_catalogue.field) ->
         not (residual_contains residual field.leaf))
   in
-  match missing with
-  | [] -> propagate
-  | _ ->
+  match forwarding with
+  | Default ->
+      begin match missing with
+      | [] -> propagate
+      | _ ->
+          let fields =
+            List.map
+              (fun (field : Hamlet_subtractor_catalogue.field) ->
+                ( {
+                    txt = Longident.Ldot (cases_module catalogue, field.name);
+                    loc;
+                  },
+                  unreachable ~loc ))
+              missing
+          in
+          let record = A.pexp_record ~loc fields (Some propagate) in
+          { record with pexp_attributes = [ warning_attribute ~loc "-23" ] }
+      end
+  | Layer_fail_like _ ->
       let fields =
         List.map
           (fun (field : Hamlet_subtractor_catalogue.field) ->
+            let rhs =
+              if residual_contains residual field.leaf then
+                forwarding_callback ~loc forwarding
+              else unreachable ~loc
+            in
             ( { txt = Longident.Ldot (cases_module catalogue, field.name); loc },
-              unreachable ~loc ))
-          missing
+              rhs ))
+          (Hamlet_subtractor_catalogue.fields catalogue)
       in
-      let record = A.pexp_record ~loc fields (Some propagate) in
+      let record = A.pexp_record ~loc fields None in
       { record with pexp_attributes = [ warning_attribute ~loc "-23" ] }
 
-let cases_dispatch ~loc residual catalogue =
+let cases_dispatch ~loc ~forwarding residual catalogue =
   let nested_loc = ghost loc in
   let union = Hamlet_subtractor_catalogue.union catalogue in
   let lhs = named_pattern ~loc union "error" in
@@ -228,7 +271,7 @@ let cases_dispatch ~loc residual catalogue =
     A.pexp_apply ~loc:nested_loc
       (cases_function ~loc:nested_loc catalogue "dispatch")
       [
-        (Nolabel, cases_record ~loc:nested_loc residual catalogue);
+        (Nolabel, cases_record ~loc:nested_loc ~forwarding residual catalogue);
         (Nolabel, A.evar ~loc:nested_loc "error");
       ]
   in
@@ -246,17 +289,17 @@ let refutation_case ~loc =
     ~guard:None
     ~rhs:(A.pexp_unreachable ~loc:nested_loc)
 
-let generate_leaf ~loc leaf =
+let generate_leaf ~loc ~forwarding leaf =
   match Leaf.materialization leaf with
   | Leaf.Direct | Leaf.Requirement_tag | Leaf.Error_cases _ ->
-      Ok (direct_case ~loc leaf)
+      Ok (direct_case ~loc ~forwarding leaf)
   | Leaf.Structural_variant -> (
       match Leaf.members leaf with
-      | [ atom ] -> Ok (structural_case ~loc leaf atom)
+      | [ atom ] -> Ok (structural_case ~loc ~forwarding leaf atom)
       | _ -> Error (Invalid_materialization leaf))
   | Leaf.Unavailable _ -> Error (Invalid_materialization leaf)
 
-let cases ~loc ~catalogues residual =
+let cases ~loc ~catalogues ?(forwarding = Default) residual =
   let residual_leaves = Residual.residual residual in
   match residual_leaves with
   | [] -> Ok [ refutation_case ~loc; exhausted_case ~loc ]
@@ -265,7 +308,7 @@ let cases ~loc ~catalogues residual =
       | Error _ as error -> error
       | Ok full_catalogues ->
           let generated_cases =
-            List.map (cases_dispatch ~loc residual) full_catalogues
+            List.map (cases_dispatch ~loc ~forwarding residual) full_catalogues
           in
           let belongs_to_full_catalogue leaf =
             match Leaf.materialization leaf with
@@ -284,7 +327,7 @@ let cases ~loc ~catalogues residual =
           let rec loop generated = function
             | [] -> Ok (List.rev generated)
             | leaf :: rest -> (
-                match generate_leaf ~loc leaf with
+                match generate_leaf ~loc ~forwarding leaf with
                 | Error _ as error -> error
                 | Ok case -> loop (case :: generated) rest)
           in

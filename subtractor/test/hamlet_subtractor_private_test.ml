@@ -15,7 +15,12 @@ open Ppxlib
 let parse ?(source_file = "probe.ml") source =
   let lexbuf = Lexing.from_string source in
   Location.init lexbuf source_file;
-  Parse.implementation lexbuf
+  try Parse.implementation lexbuf
+  with Syntaxerr.Error _ ->
+    let position = lexbuf.lex_curr_p in
+    Alcotest.failf "parse failed at %s:%d:%d" position.pos_fname
+      position.pos_lnum
+      (position.pos_cnum - position.pos_bol)
 
 let inspect ?(source_file = "probe.ml") structure =
   Hamlet_subtractor_compiler_compat.inspect_probe ~tool_name:"ocamlopt"
@@ -413,6 +418,63 @@ let test_direct_and_pipe_owners () =
     "pipe base owner attr" 1
     (attribute_count "hamlet.subtractor.owner.v1" pipe.base_structure)
 
+let test_layer_owner_descriptors () =
+  let prepared =
+    parse
+      "let caught =\n\
+       Hamlet.Layer.catch ~fresh:true primary ~handler:(function\n\
+       | `Handled -> fallback\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"e:layer-catch\"]))\n\
+       let provided_effect =\n\
+       Hamlet.Layer.provide_to_effect ~source:source\n\
+       ~handler:(fun service request -> match request with\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:layer-effect\"]))\n\
+       target\n\
+       let layer =\n\
+       Hamlet.Layer.provide_to_layer ~source:source\n\
+       ~handler:(fun service request -> match request with\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:layer-layer\"]))\n\
+       target_layer\n\
+       let merged =\n\
+       Hamlet.Layer.provide_merge_to_layer ~source:environment\n\
+       ~handler:(fun environment request -> match request with\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"s:layer-merge\"]))\n\
+       target_layer"
+    |> Hamlet_subtractor_probe.prepare
+  in
+  Alcotest.(check int) "four Layer owners" 4 (List.length prepared.owners);
+  Alcotest.(check int)
+    "no Layer owner refusals" 0
+    (List.length prepared.refusals);
+  Alcotest.(check int)
+    "all Layer owners marked" 4
+    (attribute_count "hamlet.subtractor.owner.v1" prepared.base_structure);
+  Alcotest.(check int)
+    "only Layer.catch uses fail_like forwarding" 1
+    (attribute_count "hamlet.subtractor.layer_forwarding.v1"
+       prepared.base_structure);
+  Alcotest.(check int)
+    "three provider contributors in probe" 3
+    (attribute_count "hamlet.subtractor.contributor.v1" prepared.probe_structure)
+
+let test_non_typed_layer_callbacks_are_not_owners () =
+  let prepared =
+    parse
+      "let cause =\n\
+       Hamlet.Layer.catch_cause source ~handler:(function\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"e:layer-cause\"]))\n\
+       let defect =\n\
+       Hamlet.Layer.catch_defect source ~handler:(function\n\
+       | _ -> (assert false [@hamlet.subtractor.marker.v1 \"e:layer-defect\"]))"
+    |> Hamlet_subtractor_probe.prepare
+  in
+  Alcotest.(check int)
+    "no non-typed Layer owners" 0
+    (List.length prepared.owners);
+  Alcotest.(check int)
+    "both direct markers refused" 2
+    (List.length prepared.refusals)
+
 let test_nested_owners_keep_distinct_ids () =
   let prepared =
     parse
@@ -701,6 +763,13 @@ let resolved_residual engine =
   | _, Hamlet_subtractor_core.Protocol.Resolved residual -> residual
   | _, Refused diagnostic ->
       Alcotest.fail (Hamlet_subtractor_core.Diagnostic.message diagnostic)
+
+let resolved_certificate engine =
+  match Hamlet_subtractor_engine.resolved_values engine with
+  | [ (_, resolved) ] -> resolved.certificate
+  | resolved ->
+      Alcotest.failf "expected one resolved certificate, got %d"
+        (List.length resolved)
 
 let leaf_names leaves =
   List.map
@@ -1246,6 +1315,64 @@ let caught =
   Alcotest.(check int)
     "local union does not fabricate Cases" 0
     (Hamlet_subtractor_engine.catalogues engine |> List.length)
+
+let test_exact_layer_catch () =
+  let engine =
+    resolve_exact
+      {|
+let primary =
+  Hamlet.Layer.make Logger.Tag.key
+    (Hamlet.Combinators.fail (`Write "layer" : Local_io.Errors.error))
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.success ())
+
+let caught =
+  Hamlet.Layer.catch primary ~handler:(fun error ->
+    match error with
+    | #Local_io.Errors.read_error -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-catch-exact"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "Layer.catch subtracts handled errors" [ "write_error" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_names)
+
+let test_layer_provider_source_is_post_owner_contributor () =
+  let engine =
+    resolve_exact
+      {|
+let target : (unit, Hamlet.never, Logger.Tag.r) Hamlet.t =
+  Hamlet.Combinators.summon Logger.Tag.key Logger.Tag.tag
+
+let provided =
+  Hamlet.Layer.provide_to_effect
+    ~source:
+      (Hamlet.Layer.make Logger.Tag.key
+         (Hamlet.Combinators.summon Clock.Tag.key Clock.Tag.tag))
+    ~handler:(fun service request ->
+      match request with
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness service
+      | _ -> (assert false [@hamlet.subtractor.marker.v1 "s:layer-provider-exact"]))
+    target
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check int)
+    "provider marker input excludes source requirements" 0
+    (Hamlet_subtractor_core.Residual.residual residual |> List.length);
+  Alcotest.(check (list string))
+    "provider residual output includes source requirements" [ "Clock" ]
+    (Hamlet_subtractor_core.Residual.output residual |> leaf_labels);
+  let requirements =
+    resolved_certificate engine
+    |> Hamlet_subtractor_core.Effect_certificate.requirements
+    |> symbolic_exact_leaves
+    |> leaf_labels
+  in
+  Alcotest.(check (list string))
+    "provider output includes source requirements" [ "Clock" ] requirements
 
 let test_exact_cases_subset () =
   let engine =
@@ -2007,6 +2134,10 @@ let () =
             test_wrong_channel_is_refused_before_typing;
           Alcotest.test_case "direct and pipe owners are recognized" `Quick
             test_direct_and_pipe_owners;
+          Alcotest.test_case "Layer owner descriptors are recognized" `Quick
+            test_layer_owner_descriptors;
+          Alcotest.test_case "non-typed Layer callbacks are not owners" `Quick
+            test_non_typed_layer_callbacks_are_not_owners;
           Alcotest.test_case "nested owners keep distinct IDs" `Quick
             test_nested_owners_keep_distinct_ids;
           Alcotest.test_case "refused markers stay outside typed lookup" `Quick
@@ -2016,6 +2147,10 @@ let () =
         [
           Alcotest.test_case "closed local catch is exact" `Quick
             test_exact_local_catch;
+          Alcotest.test_case "Layer.catch is exact" `Quick
+            test_exact_layer_catch;
+          Alcotest.test_case "Layer provider source is post-owner" `Quick
+            test_layer_provider_source_is_post_owner_contributor;
           Alcotest.test_case "Cases subsets stay nominal" `Quick
             test_exact_cases_subset;
           Alcotest.test_case "transparent aliases stay structural" `Quick
