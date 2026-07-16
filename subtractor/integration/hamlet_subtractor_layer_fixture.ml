@@ -62,6 +62,16 @@ let recovered_pipe : (Logger.Tag.t, [ `Timeout ], never) Layer.t =
 let case_layer_catch_direct = recovered
 let case_layer_catch_pipeline = recovered_pipe
 
+let explicit_primary : (Logger.Tag.t, errors, never) Layer.t =
+  Layer.make Logger.Tag.key (Combinators.fail `Missing)
+
+let explicit_recovered : (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  Layer.catch explicit_primary ~handler:(function
+    | `Missing -> fallback
+    | [%hamlet.propagate_e.auto] -> .)
+
+let case_layer_explicit_boundary = explicit_recovered
+
 let recovered_after_fresh : (Logger.Tag.t, [ `Timeout ], never) Layer.t =
   Layer.catch (Layer.fresh primary) ~handler:(function
     | `Missing -> fallback
@@ -175,6 +185,68 @@ let case_layer_generic_same_module :
 
 let case_layer_generic_nested : (Logger.Tag.t, [ `Offline ], never) Layer.t =
   recover_missing_then_timeout generic_nested_source
+
+let[@hamlet.generic] recover_unwrapped_missing source =
+  Layer.unwrap Logger.Tag.key (Combinators.success source)
+  |> Layer.catch ~handler:(function
+    | `Missing ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let same_module_unwrapped_source =
+  Layer.make Logger.Tag.key
+    (match Sys.opaque_identity 2 with
+    | 0 -> Combinators.fail `Missing
+    | 1 -> Combinators.fail `Offline
+    | _ -> Combinators.fail `Timeout)
+
+let case_layer_generic_unwrap_same_module :
+    (Logger.Tag.t, [ `Offline | `Timeout ], never) Layer.t =
+  recover_unwrapped_missing same_module_unwrapped_source
+
+let case_layer_generic_unwrap_output_to_later_marker :
+    (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  case_layer_generic_unwrap_same_module
+  |> Layer.catch ~handler:(function
+    | `Offline ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let optional_direct_evaluations = ref 0
+let optional_pipeline_evaluations = ref 0
+
+let optional_source counter =
+  incr counter;
+  Layer.make Logger.Tag.key
+    (if Sys.opaque_identity false then Combinators.fail `Missing
+     else Combinators.fail `Timeout)
+
+let[@hamlet.generic] recover_optional_direct ?fresh source =
+  Layer.catch ?fresh source ~handler:(function
+    | `Missing ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let[@hamlet.generic] recover_optional_pipeline ?fresh source =
+  source
+  |> Layer.catch ?fresh ~handler:(function
+    | `Missing ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let case_layer_optional_fresh_direct :
+    (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  recover_optional_direct ~fresh:true
+    (optional_source optional_direct_evaluations)
+
+let case_layer_optional_fresh_pipeline :
+    (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  recover_optional_pipeline ~fresh:true
+    (optional_source optional_pipeline_evaluations)
 
 let target =
   let open Combinators in
@@ -407,6 +479,22 @@ let case_layer_trace_unwrap_builder :
     | `Trace_missing -> trace_fallback
     | [%hamlet.propagate_e.auto] -> .)
 
+exception Try_catch_build_failed
+
+let try_catch_layer =
+  Layer.make Logger.Tag.key
+    (Combinators.try_catch
+       ~thunk:(fun () -> raise Try_catch_build_failed)
+       ~handler:(function
+         | Try_catch_build_failed -> `Try_catch_build | _ -> `Try_catch_other))
+
+let case_layer_trace_unwrap_try_catch :
+    (Logger.Tag.t, [ `Try_catch_other ], never) Layer.t =
+  Layer.unwrap Logger.Tag.key (Combinators.return try_catch_layer)
+  |> Layer.catch ~handler:(function
+    | `Try_catch_build -> trace_fallback
+    | [%hamlet.propagate_e.auto] -> .)
+
 let effect_marker_inside_layer =
   (if Sys.opaque_identity true then Combinators.fail `Trace_timeout
    else Combinators.fail `Trace_missing)
@@ -421,23 +509,112 @@ let case_mixed_effect_marker_then_layer_marker :
     | `Recovery_missing -> trace_fallback
     | [%hamlet.propagate_e.auto] -> .)
 
-let mixed_layer_source :
+let mixed_layer_source choose :
     ( Logger.Tag.t,
       [ Trace_errors.source | Trace_errors.recovery_missing ],
-      never )
+      Clock.Tag.r )
     Layer.t =
   Layer.make Logger.Tag.key
-    (match Sys.opaque_identity 0 with
-    | 0 -> Combinators.fail `Trace_missing
-    | 1 -> Combinators.fail `Trace_timeout
-    | _ -> Combinators.fail `Recovery_missing)
+    (let open Combinators in
+     let* _clock = Clock.Tag.summon in
+     match Sys.opaque_identity choose with
+     | 0 -> fail `Trace_missing
+     | 1 -> fail `Trace_timeout
+     | _ -> fail `Recovery_missing)
 
-let mixed_after_layer_marker :
-    ( Logger.Tag.t,
-      [ `Trace_timeout | Trace_errors.recovery_missing ],
-      never )
-    Layer.t =
-  mixed_layer_source
-  |> Layer.catch ~handler:(function
-    | `Trace_missing -> trace_fallback
+let mixed_target =
+  let open Combinators in
+  let* _logger = Logger.Tag.summon in
+  let* _clock = Clock.Tag.summon in
+  return ()
+
+let mixed_source_marker_then_effect_marker_direct choose =
+  let source =
+    mixed_layer_source choose
+    |> Layer.catch ~handler:(function
+      | `Trace_missing -> trace_fallback
+      | [%hamlet.propagate_e.auto] -> .)
+  in
+  Layer.provide_to_effect ~source
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | #Clock.Tag.r as witness -> Hamlet.Dispatch.need witness)
+    mixed_target
+  |> Combinators.catch ~handler:(function
+    | `Trace_timeout -> Combinators.return ()
     | [%hamlet.propagate_e.auto] -> .)
+
+let mixed_source_marker_then_effect_marker_pipeline choose =
+  let source =
+    mixed_layer_source choose
+    |> Layer.catch ~handler:(function
+      | `Trace_missing -> trace_fallback
+      | [%hamlet.propagate_e.auto] -> .)
+  in
+  mixed_target
+  |> Layer.provide_to_effect ~source ~handler:(fun logger -> function
+    | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+    | #Clock.Tag.r as witness -> Hamlet.Dispatch.need witness)
+  |> Combinators.catch ~handler:(function
+    | `Trace_timeout -> Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
+let case_mixed_layer_marker_then_effect_marker_direct :
+    (unit, [ `Recovery_missing ], Clock.Tag.r) Hamlet.t =
+  mixed_source_marker_then_effect_marker_direct 2
+
+let case_mixed_layer_marker_then_effect_marker_pipeline :
+    (unit, [ `Recovery_missing ], Clock.Tag.r) Hamlet.t =
+  mixed_source_marker_then_effect_marker_pipeline 2
+
+let concrete_complete_source :
+    (Logger.Tag.t, [ `Complete_a | `Complete_b ], Clock.Tag.r) Layer.t =
+  Layer.make Logger.Tag.key
+    (let open Combinators in
+     let* _clock = Clock.Tag.summon in
+     if Sys.opaque_identity true then fail `Complete_a else fail `Complete_b)
+
+let case_layer_complete_provider_handler :
+    (unit, [ `Complete_b ], Clock.Tag.r) Hamlet.t =
+  Layer.provide_to_effect ~source:concrete_complete_source
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | #Clock.Tag.r as witness -> Hamlet.Dispatch.need witness)
+    mixed_target
+  |> Combinators.catch ~handler:(function
+    | `Complete_a -> Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
+let mixed_target_marker_then_effect_marker choose =
+  let errors =
+    let open Combinators in
+    let* _logger = Logger.Tag.summon in
+    let* _clock = Clock.Tag.summon in
+    match Sys.opaque_identity choose with
+    | 0 -> fail `Target_a
+    | 1 -> fail `Target_b
+    | _ -> fail `Target_c
+  in
+  let target =
+    Combinators.catch errors ~handler:(function
+      | `Target_a -> Combinators.return (module Logger_live : Logger.S)
+      | [%hamlet.propagate_e.auto] -> .)
+  in
+  let source =
+    Layer.make Logger.Tag.key
+      (let open Combinators in
+       let* _clock = Clock.Tag.summon in
+       return (module Logger_live : Logger.S))
+  in
+  Layer.provide_to_effect ~source
+    ~handler:(fun logger -> function
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | #Clock.Tag.r as witness -> Hamlet.Dispatch.need witness)
+    target
+  |> Combinators.catch ~handler:(function
+    | `Target_b -> Combinators.return (module Logger_live : Logger.S)
+    | [%hamlet.propagate_e.auto] -> .)
+
+let case_mixed_target_marker_then_effect_marker :
+    ((module Logger.S), [ `Target_c ], Clock.Tag.r) Hamlet.t =
+  mixed_target_marker_then_effect_marker 2

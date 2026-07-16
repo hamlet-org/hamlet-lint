@@ -39,11 +39,17 @@ The suite verifies:
 
 Layer cases lock exact rows for direct and pipeline catches, every provider
 form, primitive tracing, mixed effect flows, and same-module, cross-module, and
-nested generic helpers. Runtime checks cover residual forwarding, once-only
-source evaluation, provider wiring, and installed-package elaboration. Refused
-fixtures cover opaque unwrapping, malformed handlers, wrong marker channels,
-noncanonical owners, and direct markers in cause, defect, and `tap_fail`
-handlers.
+nested generic helpers. They also cover transparent generic `Layer.unwrap`,
+forwarded optional `?fresh`, and a later marker consuming the specialized
+output. Mixed-flow cases carry a Layer marker's residual through direct and
+pipeline providers into an effect marker, including complete concrete
+dispatchers. Transparent unwrap coverage also includes exact inline
+`try_catch` handlers and opaque-handler refusal. Runtime checks cover residual
+forwarding, once-only source evaluation, provider wiring, and installed-package
+elaboration. Refused fixtures cover opaque unwrapping, incomplete provider
+dispatchers, independent marker predecessors, malformed handlers, wrong marker
+channels, noncanonical owners, and direct markers in cause, defect, and
+`tap_fail` handlers.
 
 Expected type and expansion files are committed. Update them only after
 reviewing why the observable output changed.

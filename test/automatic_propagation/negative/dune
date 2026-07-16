@@ -26,10 +26,16 @@
   multiple_marker_sources
   exhausted_warning
   generic_alias
+  generic_catch_cause_opaque_handler
+  generic_scoped_with_opaque_handler
+  generic_scoped_with_opaque_source
   layer_opaque_unwrap
+  layer_unwrap_try_catch_opaque_handler
   layer_wrong_marker_channel
   layer_provider_wrong_marker_channel
   layer_provider_wrong_arity
+  layer_provider_incomplete_handler
+  layer_provider_two_marker_sources
   layer_fake_owner
   layer_aliased_owner
   layer_cause_direct_marker

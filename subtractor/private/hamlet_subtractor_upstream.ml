@@ -94,10 +94,11 @@ let extract_handler ~(label : string) args =
 
     Returns [Some (ident_callee, combined_args)] when:
     - The outer apply's callee is itself a [Texp_apply] whose callee is a
-      [Texp_ident], and at least one positional slot in the inner apply is
-      [Omitted] (signal that this is a partial waiting for upstream).
-    - We can splice the outer's positional [Arg]s into the [Omitted] slots of
-      the inner, producing a canonical full-arg list.
+      [Texp_ident], and the inner apply is waiting for the outer positional
+      argument. Depending on the compiler shape, that position is either an
+      explicit [Omitted] slot or absent after labelled partial application.
+    - We can splice the outer's positional [Arg]s into [Omitted] slots, or
+      append them when the inner apply has only labelled arguments.
 
     Returns [None] for the direct form (no unstaging needed) or for shapes that
     don't fit (multi-level partial chains, named-arg-only outer call, etc.). The
@@ -143,6 +144,23 @@ let unstage_apply (e : Typedtree.expression) :
                             (lbl, next))
                     | _ -> (lbl, a))
                   inner_args
+              in
+              let spliced =
+                if
+                  !cursor <> []
+                  && not
+                       (List.exists
+                          (fun (label, _) -> label = Asttypes.Nolabel)
+                          inner_args)
+                then (
+                  let positional =
+                    List.map
+                      (fun argument -> (Asttypes.Nolabel, argument))
+                      !cursor
+                  in
+                  cursor := [];
+                  spliced @ positional)
+                else spliced
               in
               if !cursor = [] && outer_named_args = [] then
                 Some (inner_callee, spliced)

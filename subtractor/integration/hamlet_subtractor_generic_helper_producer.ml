@@ -8,6 +8,15 @@ let[@hamlet.generic] recover_missing_to_unit source =
     | `Missing -> Hamlet.Combinators.return ()
     | [%hamlet.propagate_e.auto] -> .)
 
+let[@hamlet.generic] recover_cause replacement source =
+  source
+  |> Hamlet.Combinators.catch_cause ~handler:(fun _cause ->
+      if replacement then Hamlet.Combinators.fail `Cause_recovered
+      else Hamlet.Combinators.fail `Cause_residual)
+  |> Hamlet.Combinators.catch ~handler:(function
+    | `Cause_recovered -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
 [%%hamlet.service
 module type Logger = sig
   val log : string -> (unit, 'e, 'r) Hamlet.t
@@ -41,6 +50,14 @@ let[@hamlet.generic] recover_layer_missing source =
 let[@hamlet.generic] recover_layer_missing_and_offline source =
   Hamlet.Layer.catch (recover_layer_missing source) ~handler:(function
     | `Offline ->
+        Hamlet.Layer.make Logger.Tag.key
+          (Hamlet.Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let[@hamlet.generic] recover_unwrapped_layer_missing source =
+  Hamlet.Layer.unwrap Logger.Tag.key (Hamlet.Combinators.return source)
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Missing ->
         Hamlet.Layer.make Logger.Tag.key
           (Hamlet.Combinators.return (module Logger_live : Logger.S))
     | [%hamlet.propagate_e.auto] -> .)
@@ -80,6 +97,29 @@ let[@hamlet.generic] provide_logger logger source =
   Hamlet.Combinators.provide source ~handler:(function
     | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
     | [%hamlet.propagate_s.auto] -> .)
+
+let[@hamlet.generic] scoped_then_provide_metrics logger source =
+  Hamlet.Combinators.provide
+    (Hamlet.Combinators.scoped_with source ~handler:(fun scope -> function
+      | #Hamlet.Scope.Tag.r as witness -> Hamlet.Scope.Tag.give witness scope
+      | #Logger.Tag.r as witness -> Logger.Tag.give witness logger
+      | requirement -> Hamlet.Dispatch.need requirement))
+    ~handler:(function
+      | #Metrics.Tag.r as witness ->
+          Metrics.Tag.give witness (module Metrics_live)
+      | [%hamlet.propagate_s.auto] -> .)
+
+let same_module_scoped_source =
+  let open Hamlet.Combinators in
+  let* () = add_finalizer (return ()) in
+  let* _logger = Logger.Tag.summon in
+  let* _metrics = Metrics.Tag.summon in
+  let* _clock = Clock.Tag.summon in
+  return ()
+
+let case_generic_scoped_with_same_module :
+    (unit, Hamlet.never, Clock.Tag.r) Hamlet.t =
+  scoped_then_provide_metrics (module Logger_live) same_module_scoped_source
 
 module Ordinary = struct
   let add left right = left + right

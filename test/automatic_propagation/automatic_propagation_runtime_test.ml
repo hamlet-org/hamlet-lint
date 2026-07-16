@@ -12,6 +12,12 @@ module Provision_live = Automatic_propagation_external.Provision.Make (struct
   let fetch () = Hamlet.Combinators.fail (`Provision_error "failed")
 end)
 
+module Layer_clock_live = Hamlet_subtractor_layer_fixture.Clock.Make (struct
+  let now () = Hamlet.Combinators.return 42
+end)
+
+module Layer_fixture = Hamlet_subtractor_layer_fixture
+
 let expect_ok name expected eff =
   Alcotest.(check (result string reject))
     name (Ok expected)
@@ -385,6 +391,20 @@ let generic_output_feeds_following_marker () =
   Alcotest.(check (result unit reject))
     "the marker forwards Timeout" (Ok ()) (run `Timeout)
 
+let generic_catch_cause_clears_source_errors () =
+  let run replacement =
+    let source : (unit, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t =
+      Hamlet.Combinators.fail `Missing
+    in
+    Hamlet_subtractor_generic_helper_producer.recover_cause replacement source
+    |> Hamlet.Interpreter.run
+  in
+  Alcotest.(check (result unit reject))
+    "the later marker handles the visible cause recovery" (Ok ()) (run true);
+  match run false with
+  | Error `Cause_residual -> ()
+  | Ok () -> Alcotest.fail "the visible cause handler error disappeared"
+
 let ordinary_qualified_calls_are_unchanged () =
   Alcotest.(check int)
     "ordinary qualified application" 42
@@ -459,6 +479,16 @@ Hamlet_subtractor_generic_helper_producer.Clock.Make (struct
   let now () = Hamlet.Combinators.return 42
 end)
 
+let generic_scoped_cross_module_source =
+  let open Hamlet.Combinators in
+  let* () = add_finalizer (return ()) in
+  let* _logger = Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon in
+  let* _metrics =
+    Hamlet_subtractor_generic_helper_producer.Metrics.Tag.summon
+  in
+  let* _clock = Hamlet_subtractor_generic_helper_producer.Clock.Tag.summon in
+  return ()
+
 let generic_helper_provides_requirement () =
   let source =
     let open Hamlet.Combinators in
@@ -521,6 +551,67 @@ let generic_output_to_requirement_marker () =
   |> Alcotest.(check (result unit reject))
        "generic output marker provides residual Clock" (Ok ())
 
+let provide_layer_clock computation =
+  computation
+  |> Combinators.provide ~handler:(function
+      | #Hamlet_subtractor_layer_fixture.Clock.Tag.r as witness ->
+      Hamlet_subtractor_layer_fixture.Clock.Tag.give witness
+        (module Layer_clock_live))
+
+let mixed_layer_source_handles_first_error () =
+  Layer_fixture.mixed_source_marker_then_effect_marker_direct 0
+  |> provide_layer_clock
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "Layer marker handles first error" (Ok ())
+
+let mixed_layer_source_handles_second_error () =
+  Layer_fixture.mixed_source_marker_then_effect_marker_direct 1
+  |> provide_layer_clock
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "effect marker handles second error" (Ok ())
+
+let mixed_layer_source_forwards_third_error () =
+  let result =
+    Layer_fixture.mixed_source_marker_then_effect_marker_pipeline 2
+    |> provide_layer_clock
+    |> Hamlet.Interpreter.run
+  in
+  match result with
+  | Error `Recovery_missing -> ()
+  | Ok () -> Alcotest.fail "third error disappeared"
+
+let mixed_layer_target_forwards_third_error () =
+  let result =
+    Layer_fixture.mixed_target_marker_then_effect_marker 2
+    |> provide_layer_clock
+    |> Hamlet.Interpreter.run
+  in
+  match result with
+  | Error `Target_c -> ()
+  | Ok _ -> Alcotest.fail "target error disappeared"
+
+let generic_scoped_with_forwards_residual_requirement () =
+  Hamlet_subtractor_generic_helper_producer.case_generic_scoped_with_same_module
+  |> Combinators.provide ~handler:(function
+      | #Hamlet_subtractor_generic_helper_producer.Clock.Tag.r as witness ->
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.give witness
+        (module Generic_clock_live))
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "same-module generic scoped_with forwards Clock" (Ok ());
+  Hamlet_subtractor_generic_helper_producer.scoped_then_provide_metrics
+    (module Generic_logger_live)
+    generic_scoped_cross_module_source
+  |> Combinators.provide ~handler:(function
+      | #Hamlet_subtractor_generic_helper_producer.Clock.Tag.r as witness ->
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.give witness
+        (module Generic_clock_live))
+  |> Hamlet.Interpreter.run
+  |> Alcotest.(check (result unit reject))
+       "cross-module generic scoped_with forwards Clock" (Ok ())
+
 let () =
   Alcotest.run "automatic propagation"
     [
@@ -543,6 +634,14 @@ let () =
             chain_handles_recovery_added_later;
           Alcotest.test_case "provision error crosses provide" `Quick
             provision_error_crosses_provide;
+          Alcotest.test_case "Layer marker handles first error" `Quick
+            mixed_layer_source_handles_first_error;
+          Alcotest.test_case "effect marker handles second Layer error" `Quick
+            mixed_layer_source_handles_second_error;
+          Alcotest.test_case "Layer source forwards third error" `Quick
+            mixed_layer_source_forwards_third_error;
+          Alcotest.test_case "Layer target forwards third error" `Quick
+            mixed_layer_target_forwards_third_error;
           Alcotest.test_case "generic helper handles claimed error" `Quick
             generic_helper_handles_claimed_error;
           Alcotest.test_case "generic helper forwards residual error" `Quick
@@ -557,6 +656,8 @@ let () =
             generic_output_to_error_marker;
           Alcotest.test_case "generic output feeds a following marker" `Quick
             generic_output_feeds_following_marker;
+          Alcotest.test_case "generic catch_cause replaces source errors" `Quick
+            generic_catch_cause_clears_source_errors;
           Alcotest.test_case "ordinary qualified calls remain ordinary" `Quick
             ordinary_qualified_calls_are_unchanged;
           Alcotest.test_case "generic helper infers concrete source" `Quick
@@ -583,5 +684,7 @@ let () =
             `Quick generic_helper_forwards_residual_requirement;
           Alcotest.test_case "generic output feeds a requirement marker" `Quick
             generic_output_to_requirement_marker;
+          Alcotest.test_case "generic scoped_with forwards requirement" `Quick
+            generic_scoped_with_forwards_residual_requirement;
         ] );
     ]

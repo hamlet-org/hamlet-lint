@@ -16,10 +16,16 @@ external_no_cases|external error union has no|%hamlet.te
 multiple_marker_sources|higher-order effect flow|%hamlet.te
 exhausted_warning|warning 11|unused
 generic_alias|Evidence.slot|Hamlet.t
+generic_catch_cause_opaque_handler|cannot trace automatic marker source|%hamlet.te
+generic_scoped_with_opaque_handler|support this handler pattern|%hamlet.te
+generic_scoped_with_opaque_source|higher-order effect flow|%hamlet.te
 layer_opaque_unwrap|chosen by a function parameter|%hamlet.te
+layer_unwrap_try_catch_opaque_handler|chosen by a function parameter|%hamlet.te
 layer_wrong_marker_channel|kind mismatch|propagate_e.auto
 layer_provider_wrong_marker_channel|kind mismatch|propagate_s.auto
 layer_provider_wrong_arity|not support this preceding pattern|%hamlet.ts
+layer_provider_incomplete_handler|not support this preceding pattern|%hamlet.te
+layer_provider_two_marker_sources|higher-order effect flow|%hamlet.te
 layer_fake_owner|marker is not owned by|%hamlet.te
 layer_aliased_owner|marker is not owned by|%hamlet.te
 layer_cause_direct_marker|marker is not owned by|%hamlet.te

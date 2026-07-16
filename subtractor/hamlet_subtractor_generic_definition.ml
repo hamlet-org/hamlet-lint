@@ -572,6 +572,41 @@ let nested_source expression =
               | Some _ | None -> None)
       | _ -> None)
 
+let direct_symbolic_source source expression =
+  match expression.pexp_desc with
+  | Pexp_ident { txt = Lident name; _ } -> String.equal source name
+  | _ -> false
+
+let positional_with_only_loc arguments =
+  let rec loop positional = function
+    | [] -> Some (List.rev positional)
+    | (Nolabel, argument) :: rest -> loop (argument :: positional) rest
+    | ((Labelled "loc" | Optional "loc"), _) :: rest -> loop positional rest
+    | ((Labelled _ | Optional _), _) :: _ -> None
+  in
+  loop [] arguments
+
+let transparent_returned_layer expression =
+  match expression.pexp_desc with
+  | Pexp_apply (producer, arguments) ->
+      begin match primitive_name producer with
+      | Some (Descriptor.Combinators, ("return" | "success")) ->
+          begin match positional_with_only_loc arguments with
+          | Some [ layer ] -> Some layer
+          | Some [] | Some (_ :: _ :: _) | None -> None
+          end
+      | Some _ | None -> None
+      end
+  | _ -> None
+
+let transparent_symbolic_unwrap source arguments =
+  match positional_with_only_loc arguments with
+  | Some [ _key; selector ] ->
+      Option.exists
+        (direct_symbolic_source source)
+        (transparent_returned_layer selector)
+  | Some [] | Some [ _ ] | Some (_ :: _ :: _ :: _) | None -> false
+
 let rec supported_source_flow source expression =
   match nested_source expression with
   | Some nested -> supported_source_flow source nested
@@ -600,8 +635,10 @@ let rec supported_source_flow source expression =
           | _ -> false
           end
       | Pexp_apply (callee, arguments) ->
-          begin match combinator_name callee with
-          | Some name when row_preserving_combinator name ->
+          begin match primitive_name callee with
+          | Some (Descriptor.Layer, "unwrap") ->
+              transparent_symbolic_unwrap source arguments
+          | Some (_, name) when row_preserving_combinator name ->
               let effects = effect_arguments name arguments in
               let carrying = List.filter (contains_identifier source) effects in
               begin match carrying with
@@ -658,8 +695,14 @@ let other_symbolic_roots ~source ~parameters expression =
             inspect left;
             ignore right
         | Pexp_apply (callee, arguments) ->
-            begin match combinator_name callee with
-            | Some name when row_preserving_combinator name ->
+            begin match primitive_name callee with
+            | Some (Descriptor.Layer, "unwrap") ->
+                begin match positional_with_only_loc arguments with
+                | Some [ _key; selector ] ->
+                    Option.iter inspect (transparent_returned_layer selector)
+                | Some [] | Some [ _ ] | Some (_ :: _ :: _ :: _) | None -> ()
+                end
+            | Some (_, name) when row_preserving_combinator name ->
                 List.iter inspect (effect_arguments name arguments)
             | Some _ | None -> ()
             end

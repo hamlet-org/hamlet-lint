@@ -252,7 +252,9 @@ let direct_candidate call callee args descriptor =
           when Option.equal String.equal descriptor.required_label (Some actual)
           ->
             true
-        | Labelled "fresh", _ when descriptor.bind_upstream_once -> true
+        | (Labelled "fresh" | Optional "fresh"), _
+          when descriptor.bind_upstream_once ->
+            true
         | argument -> is_loc_argument argument)
       args
   in
@@ -301,7 +303,9 @@ let pipe_candidate call pipe left right =
                   when Option.equal String.equal descriptor.required_label
                          (Some actual) ->
                     true
-                | Labelled "fresh", _ when descriptor.bind_upstream_once -> true
+                | (Labelled "fresh" | Optional "fresh"), _
+                  when descriptor.bind_upstream_once ->
+                    true
                 | argument -> is_loc_argument argument)
               args
           in
