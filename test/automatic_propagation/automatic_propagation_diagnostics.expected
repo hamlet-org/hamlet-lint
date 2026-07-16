@@ -1,5 +1,5 @@
 fast_pipeline|requires Dune's classic PPX pipeline|%hamlet.te
-parameter_row|row rooted in a function parameter|%hamlet.te
+parameter_row|chosen by a function parameter|%hamlet.te
 named_handler|inline handler|%hamlet.te
 user_or_pattern|not support this preceding pattern|%hamlet.te
 partial_payload|not support this preceding pattern|%hamlet.te
@@ -16,3 +16,12 @@ external_no_cases|external error union has no|%hamlet.te
 multiple_marker_sources|higher-order effect flow|%hamlet.te
 exhausted_warning|warning 11|unused
 generic_alias|Evidence.slot|Hamlet.t
+layer_opaque_unwrap|chosen by a function parameter|%hamlet.te
+layer_wrong_marker_channel|kind mismatch|propagate_e.auto
+layer_provider_wrong_marker_channel|kind mismatch|propagate_s.auto
+layer_provider_wrong_arity|not support this preceding pattern|%hamlet.ts
+layer_fake_owner|marker is not owned by|%hamlet.te
+layer_aliased_owner|marker is not owned by|%hamlet.te
+layer_cause_direct_marker|marker is not owned by|%hamlet.te
+layer_defect_direct_marker|marker is not owned by|%hamlet.te
+layer_tap_fail_direct_marker|marker is not owned by|%hamlet.te

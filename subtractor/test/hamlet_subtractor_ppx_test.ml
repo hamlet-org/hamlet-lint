@@ -256,7 +256,7 @@ let test_diagnostics_are_actionable_and_marker_local () =
   in
   Alcotest.(check bool)
     "replacement keeps reason" true
-    (contains replacement_message "finite closed row");
+    (contains replacement_message "prove all members of this open row");
   Alcotest.(check bool)
     "replacement requirement annotation" true
     (contains replacement_message "%hamlet.ts");

@@ -24,6 +24,86 @@ let cross_module_layer_generic :
     Hamlet.Layer.t =
   Hamlet_subtractor_generic_helper_producer.recover_layer_missing layer_source
 
+let case_layer_generic_cross_module = cross_module_layer_generic
+
+type extended_layer_errors = [ `Missing | `Offline | `Timeout ]
+
+let extended_layer_source :
+    ( Hamlet_subtractor_generic_helper_producer.Logger.Tag.t,
+      extended_layer_errors,
+      Hamlet.never )
+    Hamlet.Layer.t =
+  Hamlet.Layer.make Hamlet_subtractor_generic_helper_producer.Logger.Tag.key
+    (match Sys.opaque_identity 0 with
+    | 0 -> Hamlet.Combinators.fail `Missing
+    | 1 -> Hamlet.Combinators.fail `Offline
+    | _ -> Hamlet.Combinators.fail `Timeout)
+
+let case_layer_generic_nested_cross_module :
+    ( Hamlet_subtractor_generic_helper_producer.Logger.Tag.t,
+      [ `Timeout ],
+      Hamlet.never )
+    Hamlet.Layer.t =
+  Hamlet_subtractor_generic_helper_producer.recover_layer_missing_and_offline
+    extended_layer_source
+
+let case_layer_generic_output_to_later_marker :
+    ( Hamlet_subtractor_generic_helper_producer.Logger.Tag.t,
+      [ `Timeout ],
+      Hamlet.never )
+    Hamlet.Layer.t =
+  Hamlet_subtractor_generic_helper_producer.recover_layer_missing
+    extended_layer_source
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Offline ->
+        Hamlet.Layer.make
+          Hamlet_subtractor_generic_helper_producer.Logger.Tag.key
+          (Hamlet.Combinators.return
+             (module Hamlet_subtractor_generic_helper_producer.Logger_live
+             : Hamlet_subtractor_generic_helper_producer.Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let generic_layer_provider_target =
+  let open Hamlet.Combinators in
+  let* _logger = Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon in
+  let* _clock = Hamlet_subtractor_generic_helper_producer.Clock.Tag.summon in
+  return ()
+
+let case_layer_generic_provide_to_effect :
+    ( unit,
+      Hamlet.never,
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.r )
+    Hamlet.t =
+  Hamlet_subtractor_generic_helper_producer.provide_logger_layer_to_effect
+    generic_layer_provider_target
+
+let generic_layer_provider_target_layer =
+  Hamlet.Layer.make Hamlet_subtractor_generic_helper_producer.Metrics.Tag.key
+    (let open Hamlet.Combinators in
+     let* _logger =
+       Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon
+     in
+     let* _clock = Hamlet_subtractor_generic_helper_producer.Clock.Tag.summon in
+     return
+       (module Hamlet_subtractor_generic_helper_producer.Metrics_live
+       : Hamlet_subtractor_generic_helper_producer.Metrics.S))
+
+let case_layer_generic_provide_to_layer :
+    ( Hamlet_subtractor_generic_helper_producer.Metrics.Tag.t,
+      Hamlet.never,
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.r )
+    Hamlet.Layer.t =
+  Hamlet_subtractor_generic_helper_producer.provide_logger_layer_to_layer
+    generic_layer_provider_target_layer
+
+let case_layer_generic_provide_merge_to_layer :
+    ( Hamlet_subtractor_generic_helper_producer.Metrics.Tag.t,
+      Hamlet.never,
+      Hamlet_subtractor_generic_helper_producer.Clock.Tag.r )
+    Hamlet.Layer.t =
+  Hamlet_subtractor_generic_helper_producer.provide_logger_merge_to_layer
+    generic_layer_provider_target_layer
+
 let case_generic_first =
   Hamlet_subtractor_generic_helper_producer.recover_missing first_source
 
