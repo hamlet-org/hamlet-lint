@@ -64,16 +64,18 @@ let arms_of_handler (h : expression) : arm list option =
 
 (** Strip leading [Texp_function] parameters off a curried handler. OCaml may
     fuse [fun service -> function cases] into one [Tfunction_cases] node with
-    [service] in its parameter list; when the requested prefix is already in
-    that list, keep the node so [arms] can read the request cases. Returns
-    [None] when the handler does not expose enough leading parameters. *)
+    [service] in its parameter list, or [fun service request -> match request]
+    into a [Tfunction_body] node with the peeled prefix plus the matched request
+    parameter. Keep those exact shapes so [arms] can read the request cases;
+    reject extra parameters rather than classifying an over-curried handler. *)
 let rec peel_outer (h : expression) (n : int) : expression option =
   if n = 0 then Some h
   else
     match h.exp_desc with
     | Texp_function (params, Tfunction_body inner) ->
         let count = List.length params in
-        if count > n then Some h else peel_outer inner (n - count)
+        if count > n then if count = n + 1 then Some h else None
+        else peel_outer inner (n - count)
     | Texp_function (params, Tfunction_cases _) ->
         if List.length params = n then Some h else None
     | _ -> None

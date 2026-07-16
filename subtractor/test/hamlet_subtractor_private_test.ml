@@ -2108,9 +2108,15 @@ let test_fused_handler_peel_arity () =
 let fused (_service : unit) = function
   | `Logger -> 1
   | `Clock -> 2
+
+let over_curried (_service : unit) (_extra : unit) request =
+  match request with
+  | `Logger -> 1
+  | `Clock -> 2
 |}
   @@ fun structure ->
-  let found = ref None in
+  let fused = ref None in
+  let over_curried = ref None in
   let iterator =
     let default = Compiler_tast_iterator.default_iterator in
     {
@@ -2119,19 +2125,51 @@ let fused (_service : unit) = function
         (fun self binding ->
           (match binding.vb_pat.pat_desc with
           | Tpat_var (_, { txt = "fused"; _ }, _) ->
-              found := Some binding.vb_expr
+              fused := Some binding.vb_expr
+          | Tpat_var (_, { txt = "over_curried"; _ }, _) ->
+              over_curried := Some binding.vb_expr
           | _ -> ());
           default.value_binding self binding);
     }
   in
   iterator.structure iterator structure;
-  let handler = Option.get !found in
+  let handler = Option.get !fused in
   Alcotest.(check bool)
     "one fused leading parameter peels" true
     (Option.is_some (Hamlet_subtractor_propagate.peel_outer handler 1));
   Alcotest.(check bool)
     "extra peel is rejected" true
-    (Option.is_none (Hamlet_subtractor_propagate.peel_outer handler 2))
+    (Option.is_none (Hamlet_subtractor_propagate.peel_outer handler 2));
+  Alcotest.(check bool)
+    "too few peels reject an over-curried body" true
+    (Option.is_none
+       (Hamlet_subtractor_propagate.peel_outer (Option.get !over_curried) 1))
+
+let test_legacy_owner_classifier_alignment () =
+  let module Descriptor = Hamlet_subtractor_core.Owner_descriptor in
+  List.iter
+    (fun (descriptor : Descriptor.t) ->
+      let name = Descriptor.display_name descriptor in
+      match List.assoc_opt name Hamlet_subtractor_classify.paths with
+      | None -> Alcotest.failf "missing legacy classifier for %s" name
+      | Some (info : Hamlet_subtractor_classify.info) ->
+          let expected_slot =
+            match descriptor.channel with
+            | Descriptor.Error -> `Catch
+            | Descriptor.Requirement -> `Provide
+          in
+          Alcotest.(check bool)
+            (name ^ " channel") true
+            (info.slot = expected_slot);
+          Alcotest.(check int)
+            (name ^ " handler peel") descriptor.handler_peel info.peel;
+          Alcotest.(check string)
+            (name ^ " handler label") descriptor.handler_label
+            info.handler_label)
+    Descriptor.owners;
+  Alcotest.(check bool)
+    "Layer.fail_like is canonicalized for deliberate refusal" true
+    (List.mem "fail_like" Descriptor.traced_layer_values)
 
 let () =
   Alcotest.run "hamlet elaboration private bridge"
@@ -2171,6 +2209,8 @@ let () =
             test_non_typed_layer_callbacks_are_not_owners;
           Alcotest.test_case "fused handler peel checks arity" `Quick
             test_fused_handler_peel_arity;
+          Alcotest.test_case "legacy owner classifier stays aligned" `Quick
+            test_legacy_owner_classifier_alignment;
           Alcotest.test_case "nested owners keep distinct IDs" `Quick
             test_nested_owners_keep_distinct_ids;
           Alcotest.test_case "refused markers stay outside typed lookup" `Quick

@@ -2924,6 +2924,13 @@ let rec source_plan_for_expression
                                 effect_catalogues @ layer_catalogues )
                           | [] -> refuse Higher_order_flow
                           end
+                      | Some "fail_like" ->
+                          (* [fail_like] is a nominal forwarding constructor
+                             used by generated Layer.catch handlers. Its public
+                             error argument may itself be widened, so source
+                             tracing deliberately refuses it instead of
+                             guessing an exact replacement error row. *)
+                          refuse Higher_order_flow
                       | Some _ -> refuse Higher_order_flow
                       | None ->
                           begin match canonical_combinator_name callee with

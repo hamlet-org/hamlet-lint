@@ -73,6 +73,7 @@ let traced_layer_values =
     "merge_all_with_key";
     "provide_merge_to_layer";
     "fresh";
+    "fail_like";
     "or_die";
     "catch";
     "catch_defect";

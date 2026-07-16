@@ -46,18 +46,27 @@ type info = {
 (** Result of classifying a callee. *)
 type classification = Match of info | Other
 
-(** All combinators we monitor. Full canonical path → descriptor. *)
-let paths : (string * info) list =
+module Owner_descriptor = Hamlet_subtractor_core.Owner_descriptor
+
+let info_of_owner (descriptor : Owner_descriptor.t) =
+  {
+    slot =
+      (match descriptor.channel with
+      | Owner_descriptor.Error -> `Catch
+      | Owner_descriptor.Requirement -> `Provide);
+    peel = descriptor.handler_peel;
+    handler_label = descriptor.handler_label;
+    wraps_in_cause = false;
+    match_probe = false;
+    implicit_upstream_tags = [];
+  }
+
+(** All combinators monitored only by the compatibility residual walker. The
+    automatic-owner entries come from [Owner_descriptor.owners] below, so
+    handler labels and peel counts cannot drift between the exact and legacy
+    paths. *)
+let legacy_paths : (string * info) list =
   [
-    ( "Hamlet.Combinators.catch",
-      {
-        slot = `Catch;
-        peel = 0;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
     ( "Hamlet.Combinators.map_fail",
       {
         slot = `Catch;
@@ -94,15 +103,6 @@ let paths : (string * info) list =
         match_probe = true;
         implicit_upstream_tags = [];
       } );
-    ( "Hamlet.Combinators.provide",
-      {
-        slot = `Provide;
-        peel = 0;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
     ( "Hamlet.Combinators.scoped_with",
       {
         slot = `Provide;
@@ -111,15 +111,6 @@ let paths : (string * info) list =
         wraps_in_cause = false;
         match_probe = false;
         implicit_upstream_tags = [ "Scope" ];
-      } );
-    ( "Hamlet.Layer.catch",
-      {
-        slot = `Catch;
-        peel = 0;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
       } );
     ( "Hamlet.Layer.catch_cause",
       {
@@ -130,133 +121,29 @@ let paths : (string * info) list =
         match_probe = false;
         implicit_upstream_tags = [];
       } );
-    ( "Hamlet.Layer.provide_to_effect",
-      {
-        slot = `Provide;
-        peel = 1;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "Hamlet.Layer.provide_to_layer",
-      {
-        slot = `Provide;
-        peel = 1;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "Hamlet.Layer.provide_merge_to_layer",
-      {
-        slot = `Provide;
-        peel = 1;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
   ]
 
-(** Structural-fingerprint fallback: bare [Path.last] → descriptor.
-    [Layer.catch] / [Layer.catch_cause] share the bare names ["catch"] /
-    ["catch_cause"] with their [Combinators.*] siblings : the
-    [mentions_hamlet_t] gate (applied in [classify_path]) is sufficient to
-    distinguish them from unrelated APIs; the descriptors are identical. *)
+let owner_paths =
+  Owner_descriptor.owners
+  |> List.map (fun descriptor ->
+      (Owner_descriptor.display_name descriptor, info_of_owner descriptor))
+
+(** Canonical paths and structural-fingerprint fallbacks share one source of
+    truth. [Layer.catch] and [Layer.catch_cause] have the same bare names and
+    compatibility shape as their [Combinators] siblings, so duplicate bare
+    entries are intentionally collapsed. *)
+let paths = owner_paths @ legacy_paths
+
 let lasts : (string * info) list =
-  [
-    ( "catch",
-      {
-        slot = `Catch;
-        peel = 0;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "map_fail",
-      {
-        slot = `Catch;
-        peel = 0;
-        handler_label = "f";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "catch_filter",
-      {
-        slot = `Catch;
-        peel = 0;
-        handler_label = "filter";
-        wraps_in_cause = false;
-        match_probe = true;
-        implicit_upstream_tags = [];
-      } );
-    ( "catch_cause",
-      {
-        slot = `Catch;
-        peel = 0;
-        handler_label = "handler";
-        wraps_in_cause = true;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "catch_cause_filter",
-      {
-        slot = `Catch;
-        peel = 0;
-        handler_label = "filter";
-        wraps_in_cause = true;
-        match_probe = true;
-        implicit_upstream_tags = [];
-      } );
-    ( "provide",
-      {
-        slot = `Provide;
-        peel = 0;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "scoped_with",
-      {
-        slot = `Provide;
-        peel = 1;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [ "Scope" ];
-      } );
-    ( "provide_to_effect",
-      {
-        slot = `Provide;
-        peel = 1;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "provide_to_layer",
-      {
-        slot = `Provide;
-        peel = 1;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-    ( "provide_merge_to_layer",
-      {
-        slot = `Provide;
-        peel = 1;
-        handler_label = "handler";
-        wraps_in_cause = false;
-        match_probe = false;
-        implicit_upstream_tags = [];
-      } );
-  ]
+  List.fold_left
+    (fun entries (path, info) ->
+      let last = List.hd (List.rev (String.split_on_char '.' path)) in
+      match List.assoc_opt last entries with
+      | None -> (last, info) :: entries
+      | Some existing when existing = info -> entries
+      | Some _ -> invalid_arg ("conflicting Hamlet classifier for " ^ last))
+    [] paths
+  |> List.rev
 
 (** Walk a [Path.t] up to its root identifier and check whether that identifier
     is exactly the Hamlet library : either [Hamlet] (the canonical name) or
