@@ -289,11 +289,17 @@ combines the source and finalizer effects. `scoped` removes the `Scope`
 requirement, while `scoped_with` subtracts whichever requirement arms its
 inline handler supplies.
 
-The `Scope` rule is explicit because these combinators return an open
-requirement row: “at least `Scope`, and possibly more.” An open row cannot be
-enumerated as a finite proof. The resolver therefore verifies the real
-generated `Hamlet.Scope.Tag.r`, adds that one exact leaf, and separately keeps
-the exact requirements of the cleanup, acquire, and release computations.
+This does not mean that ordinary inferred row variables are rejected. The
+resolver can prove a row from a supported construction, and it can close a
+fresh private copy when doing so does not constrain anything outside that copy.
+
+Cleanup registration is different: its type says only that the result includes
+`Scope`; the same row variable may also contain requirements from the cleanup,
+acquire, or release computation. The type therefore proves a lower bound, not
+the complete set of requirements. From the resolved combinator identity, the
+resolver applies the semantic rule instead: add the verified `Scope` leaf to
+the separately proven requirements of those computations. If one of those
+computations is opaque, it still cannot guess the missing requirements.
 
 `or_die` and `sandbox` clear the typed-error channel; `thaw` widens a proven
 empty error channel. `sandbox_cause` is deliberately more limited because it
