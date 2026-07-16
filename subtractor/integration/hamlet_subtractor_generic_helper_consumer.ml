@@ -63,6 +63,40 @@ let case_layer_generic_output_to_later_marker :
              : Hamlet_subtractor_generic_helper_producer.Logger.S))
     | [%hamlet.propagate_e.auto] -> .)
 
+let unwrapped_layer_source :
+    ( Hamlet_subtractor_generic_helper_producer.Logger.Tag.t,
+      extended_layer_errors,
+      Hamlet.never )
+    Hamlet.Layer.t =
+  Hamlet.Layer.make Hamlet_subtractor_generic_helper_producer.Logger.Tag.key
+    (match Sys.opaque_identity 2 with
+    | 0 -> Hamlet.Combinators.fail `Missing
+    | 1 -> Hamlet.Combinators.fail `Offline
+    | _ -> Hamlet.Combinators.fail `Timeout)
+
+let case_layer_generic_unwrap_cross_module :
+    ( Hamlet_subtractor_generic_helper_producer.Logger.Tag.t,
+      [ `Offline | `Timeout ],
+      Hamlet.never )
+    Hamlet.Layer.t =
+  Hamlet_subtractor_generic_helper_producer.recover_unwrapped_layer_missing
+    unwrapped_layer_source
+
+let case_layer_generic_unwrap_output_to_later_marker :
+    ( Hamlet_subtractor_generic_helper_producer.Logger.Tag.t,
+      [ `Timeout ],
+      Hamlet.never )
+    Hamlet.Layer.t =
+  case_layer_generic_unwrap_cross_module
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Offline ->
+        Hamlet.Layer.make
+          Hamlet_subtractor_generic_helper_producer.Logger.Tag.key
+          (Hamlet.Combinators.return
+             (module Hamlet_subtractor_generic_helper_producer.Logger_live
+             : Hamlet_subtractor_generic_helper_producer.Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
 let generic_layer_provider_target =
   let open Hamlet.Combinators in
   let* _logger = Hamlet_subtractor_generic_helper_producer.Logger.Tag.summon in

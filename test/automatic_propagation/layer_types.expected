@@ -4,6 +4,10 @@ case_layer_structural result=Logger.Tag.t errors=Structural_errors.timeout requi
 case_layer_cross_cu_catalogue result=Logger.Tag.t errors=closed[Read_error(string),Write_error(int)] requirements=Hamlet.never
 case_layer_generic_same_module result=Logger.Tag.t errors=closed[Offline,Timeout] requirements=Hamlet.never
 case_layer_generic_nested result=Logger.Tag.t errors=closed[Offline] requirements=Hamlet.never
+case_layer_generic_unwrap_same_module result=Logger.Tag.t errors=closed[Offline,Timeout] requirements=Hamlet.never
+case_layer_generic_unwrap_output_to_later_marker result=Logger.Tag.t errors=closed[Timeout] requirements=Hamlet.never
+case_layer_optional_fresh_direct result=Logger.Tag.t errors=closed[Timeout] requirements=Hamlet.never
+case_layer_optional_fresh_pipeline result=Logger.Tag.t errors=closed[Timeout] requirements=Hamlet.never
 case_layer_provide_to_effect_direct result=Logger.Tag.t errors=Hamlet.never requirements=Clock.Tag.r
 case_layer_provide_to_effect_pipeline result=Logger.Tag.t errors=Hamlet.never requirements=Clock.Tag.r
 case_layer_provide_to_layer_direct result=Metrics.Tag.t errors=Hamlet.never requirements=Clock.Tag.r

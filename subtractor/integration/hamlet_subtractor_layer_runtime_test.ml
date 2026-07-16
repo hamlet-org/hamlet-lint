@@ -82,8 +82,46 @@ let expect_provider_matrix () =
   |> run_metrics_layer
   |> expect_success "pipeline provide_merge_to_layer"
 
+let run_logger_layer layer =
+  Layer.provide_to_effect ~source:layer
+    ~handler:(fun logger -> function
+      | #Fixture.Logger.Tag.r as witness ->
+          Fixture.Logger.Tag.give witness logger)
+    Fixture.Logger.Tag.summon
+
+let expect_generic_unwrap_and_optional_fresh () =
+  begin match
+    Fixture.case_layer_generic_unwrap_output_to_later_marker
+    |> run_logger_layer
+    |> Interpreter.run
+  with
+  | Error `Timeout -> ()
+  | Ok _ -> failwith "generic Layer.unwrap swallowed Timeout"
+  end;
+  begin match
+    Fixture.case_layer_optional_fresh_direct
+    |> run_logger_layer
+    |> Interpreter.run
+  with
+  | Error `Timeout -> ()
+  | Ok _ -> failwith "direct optional fresh swallowed Timeout"
+  end;
+  begin match
+    Fixture.case_layer_optional_fresh_pipeline
+    |> run_logger_layer
+    |> Interpreter.run
+  with
+  | Error `Timeout -> ()
+  | Ok _ -> failwith "pipeline optional fresh swallowed Timeout"
+  end;
+  if !Fixture.optional_direct_evaluations <> 1 then
+    failwith "direct optional fresh evaluated its upstream more than once";
+  if !Fixture.optional_pipeline_evaluations <> 1 then
+    failwith "pipeline optional fresh evaluated its upstream more than once"
+
 let () =
   expect_counted_forwarding ();
   expect_structural_forwarding ();
   expect_cross_cu_forwarding ();
-  expect_provider_matrix ()
+  expect_provider_matrix ();
+  expect_generic_unwrap_and_optional_fresh ()

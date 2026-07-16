@@ -176,6 +176,68 @@ let case_layer_generic_same_module :
 let case_layer_generic_nested : (Logger.Tag.t, [ `Offline ], never) Layer.t =
   recover_missing_then_timeout generic_nested_source
 
+let[@hamlet.generic] recover_unwrapped_missing source =
+  Layer.unwrap Logger.Tag.key (Combinators.success source)
+  |> Layer.catch ~handler:(function
+    | `Missing ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let same_module_unwrapped_source =
+  Layer.make Logger.Tag.key
+    (match Sys.opaque_identity 2 with
+    | 0 -> Combinators.fail `Missing
+    | 1 -> Combinators.fail `Offline
+    | _ -> Combinators.fail `Timeout)
+
+let case_layer_generic_unwrap_same_module :
+    (Logger.Tag.t, [ `Offline | `Timeout ], never) Layer.t =
+  recover_unwrapped_missing same_module_unwrapped_source
+
+let case_layer_generic_unwrap_output_to_later_marker :
+    (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  case_layer_generic_unwrap_same_module
+  |> Layer.catch ~handler:(function
+    | `Offline ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let optional_direct_evaluations = ref 0
+let optional_pipeline_evaluations = ref 0
+
+let optional_source counter =
+  incr counter;
+  Layer.make Logger.Tag.key
+    (if Sys.opaque_identity false then Combinators.fail `Missing
+     else Combinators.fail `Timeout)
+
+let[@hamlet.generic] recover_optional_direct ?fresh source =
+  Layer.catch ?fresh source ~handler:(function
+    | `Missing ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let[@hamlet.generic] recover_optional_pipeline ?fresh source =
+  source
+  |> Layer.catch ?fresh ~handler:(function
+    | `Missing ->
+        Layer.make Logger.Tag.key
+          (Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
+let case_layer_optional_fresh_direct :
+    (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  recover_optional_direct ~fresh:true
+    (optional_source optional_direct_evaluations)
+
+let case_layer_optional_fresh_pipeline :
+    (Logger.Tag.t, [ `Timeout ], never) Layer.t =
+  recover_optional_pipeline ~fresh:true
+    (optional_source optional_pipeline_evaluations)
+
 let target =
   let open Combinators in
   let* logger = Logger.Tag.summon in

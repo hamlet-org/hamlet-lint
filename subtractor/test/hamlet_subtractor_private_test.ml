@@ -1301,6 +1301,41 @@ let helper source =
     |> symbolic_exact_leaves
     |> leaf_labels)
 
+let test_symbolic_layer_unwrap_identity () =
+  List.iter
+    (fun constructor ->
+      let symbolic =
+        resolve_symbolic_helper
+          (Printf.sprintf
+             {|
+let helper source =
+  Hamlet.Layer.unwrap Logger.Tag.key (Hamlet.Combinators.%s source)
+|}
+             constructor)
+      in
+      let input_error =
+        symbolic_identity Hamlet_subtractor_core.Kind.Error "Input"
+      in
+      let input_requirement =
+        symbolic_identity Hamlet_subtractor_core.Kind.Requirement "Logger"
+      in
+      let output =
+        evaluate_symbolic symbolic [ input_error ] [ input_requirement ]
+      in
+      Alcotest.(check (list string))
+        (constructor ^ " unwrap preserves symbolic Layer flow")
+        [ "Input" ]
+        (Hamlet_subtractor_core.Effect_certificate.errors output
+        |> symbolic_exact_leaves
+        |> leaf_labels);
+      Alcotest.(check (list string))
+        (constructor ^ " unwrap preserves symbolic requirements")
+        [ "Logger" ]
+        (Hamlet_subtractor_core.Effect_certificate.requirements output
+        |> symbolic_exact_leaves
+        |> leaf_labels))
+    [ "return"; "success" ]
+
 let test_exact_local_catch () =
   let engine =
     resolve_exact
@@ -2510,6 +2545,8 @@ let () =
             test_symbolic_sandbox;
           Alcotest.test_case "symbolic prior owners compose" `Quick
             test_symbolic_prior_owner_dependency;
+          Alcotest.test_case "symbolic Layer unwrap identity" `Quick
+            test_symbolic_layer_unwrap_identity;
           Alcotest.test_case "parameter-dependent builder is refused" `Quick
             test_parameter_dependent_builder_is_refused;
           Alcotest.test_case "parameter aliases are refused" `Quick

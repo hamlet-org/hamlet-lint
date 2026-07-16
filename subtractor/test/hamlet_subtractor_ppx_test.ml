@@ -486,6 +486,49 @@ let test_generic_layer_owners () =
   check_rendered "Layer provider dispatch forwarding" "Hamlet.Dispatch.need"
     provider
 
+let test_generic_layer_unwrap_identity () =
+  List.iter
+    (fun constructor ->
+      let rendered =
+        generic_transform
+          (Printf.sprintf
+             "let[@hamlet.generic] recover_layer source =\n\
+              Hamlet.Layer.unwrap Logger.Tag.key\n\
+              (Hamlet.Combinators.%s source)\n\
+              |> Hamlet.Layer.catch ~handler:(function\n\
+              | `Missing -> fallback\n\
+              | [%%hamlet.propagate_e.auto] -> .)"
+             constructor)
+        |> render_structure
+      in
+      check_rendered
+        (constructor ^ " unwrap retains generic dispatch")
+        "Hamlet_subtractor.Evidence.dispatch" rendered)
+    [ "return"; "success" ]
+
+let test_generic_layer_optional_fresh () =
+  let render body =
+    generic_transform
+      (Printf.sprintf "let[@hamlet.generic] recover_layer ?fresh source =\n%s"
+         body)
+    |> render_structure
+  in
+  let direct =
+    render
+      "Hamlet.Layer.catch ?fresh source ~handler:(function\n\
+       | `Missing -> fallback\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+  in
+  check_rendered "direct optional fresh is preserved" "?fresh" direct;
+  let pipeline =
+    render
+      "source\n\
+       |> Hamlet.Layer.catch ?fresh ~handler:(function\n\
+       | `Missing -> fallback\n\
+       | [%hamlet.propagate_e.auto] -> .)"
+  in
+  check_rendered "pipeline optional fresh is preserved" "?fresh" pipeline
+
 let test_generic_two_alternating_slots () =
   let rendered =
     generic_transform
@@ -783,6 +826,25 @@ let test_generic_refusals () =
      ~handler:(function | [%hamlet.propagate_e.auto] -> .)" (function
     | Generic_definition.Multiple_symbolic_inputs [ "left" ] -> true
     | _ -> false);
+  expect_generic_refusal "opaque Layer.unwrap selector"
+    "let[@hamlet.generic] helper choose source =\n\
+     Hamlet.Layer.unwrap Logger.Tag.key (choose source)\n\
+     |> Hamlet.Layer.catch ~handler:(function\n\
+     | `Missing -> fallback\n\
+     | [%hamlet.propagate_e.auto] -> .)" (function
+    | Generic_definition.Unsupported_source_flow -> true
+    | _ -> false);
+  expect_generic_refusal "competing Layer.unwrap root"
+    "let[@hamlet.generic] helper choose other source =\n\
+     Hamlet.Layer.unwrap Logger.Tag.key\n\
+     (Hamlet.Combinators.return (choose source other))\n\
+     |> Hamlet.Layer.catch ~handler:(function\n\
+     | `Missing -> fallback\n\
+     | [%hamlet.propagate_e.auto] -> .)" (function
+    | Generic_definition.Unsupported_source_flow
+    | Generic_definition.Multiple_symbolic_inputs _ ->
+        true
+    | _ -> false);
   expect_generic_refusal "marker owner"
     "let[@hamlet.generic] helper source =\n\
      match source with | [%hamlet.propagate_e.auto] -> ." (function
@@ -847,6 +909,10 @@ let () =
           Alcotest.test_case "requirement pipeline" `Quick
             test_generic_requirement_pipeline;
           Alcotest.test_case "Layer owners" `Quick test_generic_layer_owners;
+          Alcotest.test_case "Layer unwrap identity" `Quick
+            test_generic_layer_unwrap_identity;
+          Alcotest.test_case "Layer optional fresh" `Quick
+            test_generic_layer_optional_fresh;
           Alcotest.test_case "alternating slots" `Quick
             test_generic_two_alternating_slots;
           Alcotest.test_case "two pipeline slots" `Quick

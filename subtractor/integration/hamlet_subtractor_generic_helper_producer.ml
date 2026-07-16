@@ -45,6 +45,14 @@ let[@hamlet.generic] recover_layer_missing_and_offline source =
           (Hamlet.Combinators.return (module Logger_live : Logger.S))
     | [%hamlet.propagate_e.auto] -> .)
 
+let[@hamlet.generic] recover_unwrapped_layer_missing source =
+  Hamlet.Layer.unwrap Logger.Tag.key (Hamlet.Combinators.return source)
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Missing ->
+        Hamlet.Layer.make Logger.Tag.key
+          (Hamlet.Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
 let logger_layer =
   Hamlet.Layer.make Logger.Tag.key
     (Hamlet.Combinators.return (module Logger_live : Logger.S))

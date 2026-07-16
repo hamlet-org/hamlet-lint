@@ -1250,6 +1250,12 @@ let rec transparent_returned_layer bindings seen expression =
       end
   | _ -> None
 
+let expression_is_uid uid expression =
+  match expression.exp_desc with
+  | Texp_ident (_, _, description) ->
+      Shape.Uid.equal uid description.Types.val_uid
+  | _ -> false
+
 let rec failure_argument_has_independent_origin bindings seen expression =
   match expression.exp_desc with
   | Texp_variant _ -> true
@@ -3046,6 +3052,13 @@ let rec source_plan_for_expression
                                 transparent_returned_layer nodes.bindings []
                                   layer_effect
                               with
+                              | Some layer
+                                when Option.exists
+                                       (fun uid -> expression_is_uid uid layer)
+                                       generic_input ->
+                                  source_plan_for_expression ~context_digest
+                                    ~nodes ~marker_id ~kind ~generic_input ~seen
+                                    layer
                               | Some layer
                                 when expression_has_independent_origin
                                        nodes.bindings [] [] layer ->
