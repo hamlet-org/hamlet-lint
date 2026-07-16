@@ -177,6 +177,10 @@ let generic_output_feeds_following_marker :
     | `Offline -> Hamlet.Combinators.return ()
     | [%hamlet.propagate_e.auto] -> .)
 
+let case_generic_catch_cause_cross_module :
+    (unit, [ `Cause_residual ], Hamlet.never) Hamlet.t =
+  Hamlet_subtractor_generic_helper_producer.recover_cause false third_source
+
 let ordinary_qualified_call =
   Hamlet_subtractor_generic_helper_producer.Ordinary.add 20 22
 

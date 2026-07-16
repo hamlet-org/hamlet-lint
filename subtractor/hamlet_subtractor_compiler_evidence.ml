@@ -3191,7 +3191,7 @@ let rec source_plan_for_expression
                                     source_catalogues @ handler_catalogues )
                               | _ -> refuse Higher_order_flow
                               end
-                          | Some ("catch" | "catch_cause") ->
+                          | Some (("catch" | "catch_cause") as name) ->
                               begin match
                                 ( positional_arguments arguments,
                                   labelled_argument "handler" arguments )
@@ -3203,7 +3203,7 @@ let rec source_plan_for_expression
                                       ~seen source
                                   in
                                   begin match generic_input with
-                                  | Some _ ->
+                                  | Some _ when String.equal name "catch" ->
                                       let classified =
                                         classify_generic_handler ~context_digest
                                           ~kind:Kind.Error handler
@@ -3241,17 +3241,24 @@ let rec source_plan_for_expression
                                           },
                                         source_catalogues
                                         @ List.concat recovery_catalogues )
-                                  | None ->
+                                  | Some _ | None ->
                                       let handler_plan, handler_catalogues =
                                         source_plan_for_function_result
                                           ~context_digest ~nodes ~marker_id
                                           ~kind ~generic_input ~seen handler
                                       in
-                                      ( Recovered_source
-                                          {
-                                            source = source_plan;
-                                            recoveries = [ handler_plan ];
-                                          },
+                                      ( (if String.equal name "catch_cause" then
+                                           chain_source_plans
+                                             [
+                                               Cleared_errors source_plan;
+                                               handler_plan;
+                                             ]
+                                         else
+                                           Recovered_source
+                                             {
+                                               source = source_plan;
+                                               recoveries = [ handler_plan ];
+                                             }),
                                         source_catalogues @ handler_catalogues
                                       )
                                   end

@@ -43,6 +43,15 @@ let[@hamlet.generic] recover_labelled ~value source =
     | `Missing -> Hamlet.Combinators.return value
     | [%hamlet.propagate_e.auto] -> .)
 
+let[@hamlet.generic] recover_cause_same_module replacement source =
+  source
+  |> Hamlet.Combinators.catch_cause ~handler:(fun _cause ->
+      if replacement then Hamlet.Combinators.fail `Cause_recovered
+      else Hamlet.Combinators.fail `Cause_residual)
+  |> Hamlet.Combinators.catch ~handler:(function
+    | `Cause_recovered -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
 let[@hamlet.generic] nested_and_local logger source =
   Hamlet.Combinators.catch
     (recover_timeout
@@ -100,6 +109,10 @@ let twice_nested_specialization :
 
 let labelled_specialization : (string, [ `Offline ], Hamlet.never) Hamlet.t =
   recover_labelled ~value:"missing" labelled_source
+
+let catch_cause_same_module_specialization :
+    (unit, [ `Cause_residual ], Hamlet.never) Hamlet.t =
+  recover_cause_same_module false third_source
 
 let nested_and_local_specialization :
     (unit, [ `Offline ], Hamlet.never) Hamlet.t =

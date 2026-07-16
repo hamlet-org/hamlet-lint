@@ -385,6 +385,20 @@ let generic_output_feeds_following_marker () =
   Alcotest.(check (result unit reject))
     "the marker forwards Timeout" (Ok ()) (run `Timeout)
 
+let generic_catch_cause_clears_source_errors () =
+  let run replacement =
+    let source : (unit, [ `Missing | `Timeout ], Hamlet.never) Hamlet.t =
+      Hamlet.Combinators.fail `Missing
+    in
+    Hamlet_subtractor_generic_helper_producer.recover_cause replacement source
+    |> Hamlet.Interpreter.run
+  in
+  Alcotest.(check (result unit reject))
+    "the later marker handles the visible cause recovery" (Ok ()) (run true);
+  match run false with
+  | Error `Cause_residual -> ()
+  | Ok () -> Alcotest.fail "the visible cause handler error disappeared"
+
 let ordinary_qualified_calls_are_unchanged () =
   Alcotest.(check int)
     "ordinary qualified application" 42
@@ -557,6 +571,8 @@ let () =
             generic_output_to_error_marker;
           Alcotest.test_case "generic output feeds a following marker" `Quick
             generic_output_feeds_following_marker;
+          Alcotest.test_case "generic catch_cause replaces source errors" `Quick
+            generic_catch_cause_clears_source_errors;
           Alcotest.test_case "ordinary qualified calls remain ordinary" `Quick
             ordinary_qualified_calls_are_unchanged;
           Alcotest.test_case "generic helper infers concrete source" `Quick

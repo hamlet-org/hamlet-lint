@@ -8,6 +8,15 @@ let[@hamlet.generic] recover_missing_to_unit source =
     | `Missing -> Hamlet.Combinators.return ()
     | [%hamlet.propagate_e.auto] -> .)
 
+let[@hamlet.generic] recover_cause replacement source =
+  source
+  |> Hamlet.Combinators.catch_cause ~handler:(fun _cause ->
+      if replacement then Hamlet.Combinators.fail `Cause_recovered
+      else Hamlet.Combinators.fail `Cause_residual)
+  |> Hamlet.Combinators.catch ~handler:(function
+    | `Cause_recovered -> Hamlet.Combinators.return ()
+    | [%hamlet.propagate_e.auto] -> .)
+
 [%%hamlet.service
 module type Logger = sig
   val log : string -> (unit, 'e, 'r) Hamlet.t
