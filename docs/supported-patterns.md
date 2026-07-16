@@ -7,6 +7,22 @@ Each example below is intentionally small. Assume its Dune target uses:
  (staged_pps hamlet-subtractor.ppx))
 ```
 
+## What “exact” means
+
+The PPX does not require you to annotate every effect with a closed row. OCaml
+normally keeps rows flexible so later expressions can unify with them; that is
+expected and works.
+
+For automatic propagation, “exact” means something narrower: the resolver can
+account for every error or requirement introduced by the computation it is
+following. For example, it knows that `Hamlet.Combinators.fail \`Missing`
+introduces `Missing`, even though OCaml may keep the surrounding row flexible.
+It combines such facts as it follows supported calls.
+
+It stops only when part of the computation is genuinely unknown, such as an
+opaque API result or a function parameter in an ordinary helper. In that case,
+use an explicit Hamlet boundary or make the helper generic.
+
 ## Inline error handler
 
 The handler must be written at the `catch` call and the marker must be last.
@@ -284,22 +300,16 @@ cleanup computation's own requirements:
 Hamlet.Combinators.add_finalizer cleanup
 ```
 
-The same rule applies to `add_finalizer_exit` and `acquire_release`. `ensuring`
-combines the source and finalizer effects. `scoped` removes the `Scope`
-requirement, while `scoped_with` subtracts whichever requirement arms its
-inline handler supplies.
+The same rule applies to `add_finalizer_exit` and `acquire_release`. The
+signature tells OCaml that `Scope` is required, but it does not list the other
+requirements. Subtractor recognizes these particular combinators and applies
+their known rule: add `Scope` to the requirements proven for their visible
+cleanup, acquire, and release computations. If one of those computations is
+unknown, the normal exactness rule still applies and the PPX refuses to guess.
 
-This does not mean that ordinary inferred row variables are rejected. The
-resolver can prove a row from a supported construction, and it can close a
-fresh private copy when doing so does not constrain anything outside that copy.
-
-Cleanup registration is different: its type says only that the result includes
-`Scope`; the same row variable may also contain requirements from the cleanup,
-acquire, or release computation. The type therefore proves a lower bound, not
-the complete set of requirements. From the resolved combinator identity, the
-resolver applies the semantic rule instead: add the verified `Scope` leaf to
-the separately proven requirements of those computations. If one of those
-computations is opaque, it still cannot guess the missing requirements.
+`ensuring` combines the source and finalizer effects. `scoped` removes the
+`Scope` requirement, while `scoped_with` subtracts whichever requirement arms
+its inline handler supplies.
 
 `or_die` and `sandbox` clear the typed-error channel; `thaw` widens a proven
 empty error channel. `sandbox_cause` is deliberately more limited because it
