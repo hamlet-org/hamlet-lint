@@ -1507,6 +1507,70 @@ let recover_selected selected =
   in
   ignore (refused_code engine)
 
+let test_layer_unwrap_exact_local_selection_builder () =
+  let engine =
+    resolve_exact
+      {|
+let trace_source =
+  Hamlet.Layer.make Logger.Tag.key
+    (if Sys.opaque_identity true then
+       Hamlet.Combinators.fail `Trace_timeout
+     else Hamlet.Combinators.fail `Trace_missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let choose () :
+    ((Logger.Tag.t, [ `Trace_missing | `Trace_timeout ], Hamlet.never)
+       Hamlet.Layer.t,
+     [ `Trace_missing | `Trace_timeout ],
+     Hamlet.never)
+    Hamlet.t =
+  Hamlet.Combinators.return trace_source
+
+let caught :
+    (Logger.Tag.t, [ `Trace_timeout ], Hamlet.never) Hamlet.Layer.t =
+  Hamlet.Layer.unwrap Logger.Tag.key (choose ())
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Trace_missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-unwrap-local-builder"]))
+|}
+  in
+  let residual = resolved_residual engine in
+  Alcotest.(check (list string))
+    "local selection builder exposes its exact errors"
+    [ "Trace_missing"; "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.input residual
+    |> Hamlet_subtractor_core.Proof.leaves
+    |> leaf_labels);
+  Alcotest.(check (list string))
+    "local selection builder preserves the forwarded error" [ "Trace_timeout" ]
+    (Hamlet_subtractor_core.Residual.residual residual |> leaf_labels)
+
+let test_layer_unwrap_parameter_selection_builder_is_refused () =
+  let engine =
+    resolve_exact
+      {|
+let choose selected = Hamlet.Combinators.return selected
+
+let trace_source =
+  Hamlet.Layer.make Logger.Tag.key
+    (if Sys.opaque_identity true then
+       Hamlet.Combinators.fail `Trace_timeout
+     else Hamlet.Combinators.fail `Trace_missing)
+
+let fallback =
+  Hamlet.Layer.make Logger.Tag.key (Hamlet.Combinators.return ())
+
+let caught =
+  Hamlet.Layer.unwrap Logger.Tag.key (choose trace_source)
+  |> Hamlet.Layer.catch ~handler:(function
+    | `Trace_missing -> fallback
+    | _ -> (assert false [@hamlet.subtractor.marker.v1 "e:layer-unwrap-parameter-builder"]))
+|}
+  in
+  ignore (refused_code engine)
+
 let test_named_layer_catch_cause_result_is_traced () =
   let engine =
     resolve_exact
@@ -2330,7 +2394,7 @@ let test_legacy_owner_classifier_alignment () =
             info.handler_label)
     Descriptor.owners;
   Alcotest.(check bool)
-    "Layer.fail_like is canonicalized for deliberate refusal" true
+    "Layer.fail_like is canonicalized for source planning" true
     (List.mem "fail_like" Descriptor.traced_layer_values)
 
 let () =
@@ -2392,6 +2456,10 @@ let () =
             test_layer_unwrap_transparent_return_is_exact;
           Alcotest.test_case "Layer.unwrap opaque effect is refused" `Quick
             test_layer_unwrap_opaque_effect_is_refused;
+          Alcotest.test_case "Layer.unwrap local builder is exact" `Quick
+            test_layer_unwrap_exact_local_selection_builder;
+          Alcotest.test_case "Layer.unwrap parameter builder is refused" `Quick
+            test_layer_unwrap_parameter_selection_builder_is_refused;
           Alcotest.test_case "named Layer.catch_cause result is traced" `Quick
             test_named_layer_catch_cause_result_is_traced;
           Alcotest.test_case "Cases subsets stay nominal" `Quick

@@ -1250,24 +1250,6 @@ let rec transparent_returned_layer bindings seen expression =
       end
   | _ -> None
 
-let rec independently_exact_selection_effect bindings seen expression =
-  match expression.exp_desc with
-  | Texp_ident (path, _, description) ->
-      let uid = description.Types.val_uid in
-      if List.exists (Shape.Uid.equal uid) seen then false
-      else
-        begin match find_value_binding bindings path uid with
-        | Some rhs ->
-            independently_exact_selection_effect bindings (uid :: seen) rhs
-        | None ->
-            begin match (uid_compilation_unit uid, current_unit_name ()) with
-            | Some owner, Some current -> not (String.equal owner current)
-            | Some _, None -> true
-            | None, _ -> false
-            end
-        end
-  | _ -> false
-
 let rec failure_argument_has_independent_origin bindings seen expression =
   match expression.exp_desc with
   | Texp_variant _ -> true
@@ -1651,7 +1633,8 @@ and layer_application_has_independent_origin
                   && expression_has_independent_origin bindings seen
                        service_modules layer
               | None ->
-                  independently_exact_selection_effect bindings [] layer_effect
+                  expression_has_independent_origin bindings seen
+                    service_modules layer_effect
               end
           | [] -> false
           end
@@ -3056,43 +3039,35 @@ let rec source_plan_for_expression
                             List.rev (positional_arguments arguments)
                           with
                           | layer_effect :: _ ->
-                              let returned_layer =
-                                match
-                                  transparent_returned_layer nodes.bindings []
+                              begin match
+                                transparent_returned_layer nodes.bindings []
+                                  layer_effect
+                              with
+                              | Some layer
+                                when expression_has_independent_origin
+                                       nodes.bindings [] [] layer ->
+                                  let layer_plan, catalogues =
+                                    source_plan_for_expression ~context_digest
+                                      ~nodes ~marker_id ~kind ~generic_input
+                                      ~seen layer
+                                  in
+                                  let empty =
+                                    Known_source
+                                      (exact_certificate
+                                         ~errors:
+                                           (empty_proof Kind.Error Proof.Return)
+                                         ~requirements:
+                                           (empty_proof Kind.Requirement
+                                              Proof.Return))
+                                  in
+                                  ( chain_source_plans [ empty; layer_plan ],
+                                    catalogues )
+                              | Some _ -> refuse Polymorphic_parameter
+                              | None ->
+                                  source_plan_for_expression ~context_digest
+                                    ~nodes ~marker_id ~kind ~generic_input ~seen
                                     layer_effect
-                                with
-                                | Some layer
-                                  when expression_has_independent_origin
-                                         nodes.bindings [] [] layer ->
-                                    layer
-                                | Some _ -> refuse Polymorphic_parameter
-                                | None ->
-                                    if
-                                      independently_exact_selection_effect
-                                        nodes.bindings [] layer_effect
-                                    then layer_effect
-                                    else
-                                      refuse
-                                        (Core_validation_failed
-                                           "unwrap selection is not \
-                                            independently exact")
-                              in
-                              let layer_plan, catalogues =
-                                source_plan_for_expression ~context_digest
-                                  ~nodes ~marker_id ~kind ~generic_input ~seen
-                                  returned_layer
-                              in
-                              let empty =
-                                Known_source
-                                  (exact_certificate
-                                     ~errors:
-                                       (empty_proof Kind.Error Proof.Return)
-                                     ~requirements:
-                                       (empty_proof Kind.Requirement
-                                          Proof.Return))
-                              in
-                              ( chain_source_plans [ empty; layer_plan ],
-                                catalogues )
+                              end
                           | [] -> refuse Higher_order_flow
                           end
                       | Some "fail_like" ->
