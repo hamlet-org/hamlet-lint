@@ -12,6 +12,18 @@ let second_source : (unit, second_errors, Hamlet.never) Hamlet.t = assert false
 
 let third_source : (unit, third_errors, Hamlet.never) Hamlet.t = assert false
 
+let layer_source =
+  Hamlet.Layer.make Hamlet_subtractor_generic_helper_producer.Logger.Tag.key
+    (if Sys.opaque_identity true then Hamlet.Combinators.fail `Missing
+     else Hamlet.Combinators.fail `Timeout)
+
+let cross_module_layer_generic :
+    ( Hamlet_subtractor_generic_helper_producer.Logger.Tag.t,
+      [ `Timeout ],
+      Hamlet.never )
+    Hamlet.Layer.t =
+  Hamlet_subtractor_generic_helper_producer.recover_layer_missing layer_source
+
 let case_generic_first =
   Hamlet_subtractor_generic_helper_producer.recover_missing first_source
 

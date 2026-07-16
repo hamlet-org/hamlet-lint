@@ -18,6 +18,17 @@ module type Clock = sig
   val now : unit -> (int, 'e, 'r) Hamlet.t
 end]
 
+module Logger_live = Logger.Make (struct
+  let log _ = Hamlet.Combinators.return ()
+end)
+
+let[@hamlet.generic] recover_layer_missing source =
+  Hamlet.Layer.catch source ~handler:(function
+    | `Missing ->
+        Hamlet.Layer.make Logger.Tag.key
+          (Hamlet.Combinators.return (module Logger_live : Logger.S))
+    | [%hamlet.propagate_e.auto] -> .)
+
 let[@hamlet.generic] provide_logger logger source =
   Hamlet.Combinators.provide source ~handler:(function
     | #Logger.Tag.r as witness -> Logger.Tag.give witness logger

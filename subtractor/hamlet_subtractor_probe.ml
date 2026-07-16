@@ -15,6 +15,7 @@ let handler_attribute = "hamlet.subtractor.handler.v1"
 let owner_attribute = "hamlet.subtractor.owner.v1"
 let generic_output_link_attribute = "hamlet.subtractor.generic_output_link.v1"
 let layer_forwarding_attribute = "hamlet.subtractor.layer_forwarding.v1"
+let layer_type_attribute = "hamlet.subtractor.layer_type.v1"
 let contributor_attribute = "hamlet.subtractor.contributor.v1"
 
 type propagation_kind = Error_propagation | Requirement_propagation
@@ -450,6 +451,15 @@ let add_upstream_attribute ~kind ~id expression =
     ~value:(upstream_attribute_value kind id)
     expression
 
+let descriptor_uses_layer_type descriptor =
+  descriptor.Descriptor.module_name = Descriptor.Layer
+  && not (String.equal descriptor.value_name "provide_to_effect")
+
+let add_layer_type_attribute descriptor ~id expression =
+  if descriptor_uses_layer_type descriptor then
+    add_string_attribute ~name:layer_type_attribute ~value:id expression
+  else expression
+
 let add_evidence_attribute ~name ~id expression =
   add_string_attribute ~name ~value:id expression
 
@@ -476,7 +486,10 @@ let mark_base_candidate candidate marker =
   match candidate with
   | Direct_candidate
       { descriptor; call; callee; args; upstream_index; upstream; _ } ->
-      let upstream = add_upstream_attribute ~kind ~id upstream in
+      let upstream =
+        add_upstream_attribute ~kind ~id upstream
+        |> add_layer_type_attribute descriptor ~id
+      in
       if descriptor.bind_upstream_once then
         let name = once_binding_name id in
         let binding =
@@ -496,14 +509,21 @@ let mark_base_candidate candidate marker =
           }
         in
         A.pexp_let ~loc:call.pexp_loc Nonrecursive [ binding ] call
+        |> add_layer_type_attribute descriptor ~id
         |> add_evidence_attribute ~name:owner_attribute ~id
         |> add_evidence_attribute ~name:layer_forwarding_attribute ~id
       else
         let args = replace_direct_upstream upstream_index upstream args in
-        let call = add_evidence_attribute ~name:owner_attribute ~id call in
+        let call =
+          add_evidence_attribute ~name:owner_attribute ~id call
+          |> add_layer_type_attribute descriptor ~id
+        in
         { call with pexp_desc = Pexp_apply (callee, args) }
   | Pipe_candidate { descriptor; call; pipe; left; right; _ } ->
-      let left = add_upstream_attribute ~kind ~id left in
+      let left =
+        add_upstream_attribute ~kind ~id left
+        |> add_layer_type_attribute descriptor ~id
+      in
       if descriptor.bind_upstream_once then
         let name = once_binding_name id in
         let binding =
@@ -522,10 +542,14 @@ let mark_base_candidate candidate marker =
           }
         in
         A.pexp_let ~loc:call.pexp_loc Nonrecursive [ binding ] call
+        |> add_layer_type_attribute descriptor ~id
         |> add_evidence_attribute ~name:owner_attribute ~id
         |> add_evidence_attribute ~name:layer_forwarding_attribute ~id
       else
-        let call = add_evidence_attribute ~name:owner_attribute ~id call in
+        let call =
+          add_evidence_attribute ~name:owner_attribute ~id call
+          |> add_layer_type_attribute descriptor ~id
+        in
         {
           call with
           pexp_desc = Pexp_apply (pipe, [ (Nolabel, left); (Nolabel, right) ]);
@@ -538,7 +562,10 @@ let isolate_candidate candidate marker =
   let digest = Digest.to_hex (Digest.string marker.id) in
   let binding_name = "_hamlet_subtractor_upstream_" ^ digest in
   let pattern = A.ppat_var ~loc:upstream.pexp_loc { txt = binding_name; loc } in
-  let marked_upstream = add_upstream_attribute ~kind ~id:marker.id upstream in
+  let marked_upstream =
+    add_upstream_attribute ~kind ~id:marker.id upstream
+    |> add_layer_type_attribute (candidate_descriptor candidate) ~id:marker.id
+  in
   let binding =
     A.value_binding ~loc ~pat:pattern ~expr:marked_upstream
     |> add_value_binding_attribute ~name:generic_output_link_attribute
@@ -645,6 +672,7 @@ let isolate_candidate candidate marker =
     A.pexp_let ~loc Nonrecursive [ handler_binding ] isolated_call
   in
   { call with pexp_desc = Pexp_let (Nonrecursive, [ binding ], isolated_call) }
+  |> add_layer_type_attribute (candidate_descriptor candidate) ~id:marker.id
   |> add_evidence_attribute ~name:owner_attribute ~id:marker.id
 
 let prepare structure =

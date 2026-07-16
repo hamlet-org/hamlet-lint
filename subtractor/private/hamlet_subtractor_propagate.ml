@@ -62,11 +62,11 @@ let arms_of_handler (h : expression) : arm list option =
   | Texp_match (_, cases, _, _) -> Some (of_comp_cases cases)
   | _ -> None
 
-(** Strip [Texp_function] layers off a curried handler. Mirrors
-    [Handler.peel_outer]: each stripped layer must have one parameter and a
-    [Tfunction_body] (not [Tfunction_cases], which would consume the annotated
-    parameter). Returns [None] when the layers cannot be peeled (handler shape
-    doesn't match), so the caller falls back. *)
+(** Strip leading [Texp_function] parameters off a curried handler. OCaml may
+    fuse [fun service -> function cases] into one [Tfunction_cases] node with
+    [service] in its parameter list; when the requested prefix is already in
+    that list, keep the node so [arms] can read the request cases. Returns
+    [None] when the handler does not expose enough leading parameters. *)
 let rec peel_outer (h : expression) (n : int) : expression option =
   if n = 0 then Some h
   else
@@ -74,6 +74,8 @@ let rec peel_outer (h : expression) (n : int) : expression option =
     | Texp_function (params, Tfunction_body inner) ->
         let count = List.length params in
         if count > n then Some h else peel_outer inner (n - count)
+    | Texp_function (params, Tfunction_cases _) ->
+        if List.length params = n then Some h else None
     | _ -> None
 
 (** Collect the variant tags reachable from a pattern, descending [Tpat_or]

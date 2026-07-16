@@ -47,6 +47,7 @@ let callee_attribute = "hamlet.subtractor.callee.v1"
 let handler_attribute = "hamlet.subtractor.handler.v1"
 let owner_attribute = "hamlet.subtractor.owner.v1"
 let layer_forwarding_attribute = "hamlet.subtractor.layer_forwarding.v1"
+let layer_type_attribute = "hamlet.subtractor.layer_type.v1"
 
 let is_probe_attribute attribute =
   String.equal attribute.attr_name.txt marker_attribute
@@ -55,6 +56,7 @@ let is_probe_attribute attribute =
   || String.equal attribute.attr_name.txt handler_attribute
   || String.equal attribute.attr_name.txt owner_attribute
   || String.equal attribute.attr_name.txt layer_forwarding_attribute
+  || String.equal attribute.attr_name.txt layer_type_attribute
 
 let remove_probe_attributes attributes =
   List.filter (fun attribute -> not (is_probe_attribute attribute)) attributes
@@ -219,7 +221,7 @@ let materialize_evidence ~loc evidence =
       Ok (Ast_builder.Default.ptyp_any ~loc)
   | Effect_certificate.Exact_proof proof -> materialize_proof ~loc proof
 
-let materialize_certificate ~loc certificate =
+let materialize_certificate ?(layer = false) ~loc certificate =
   match materialize_evidence ~loc (Effect_certificate.errors certificate) with
   | Error _ as error -> error
   | Ok errors -> (
@@ -230,7 +232,14 @@ let materialize_certificate ~loc certificate =
       | Ok requirements ->
           Ok
             (Ast_builder.Default.ptyp_constr ~loc
-               { txt = Longident.Ldot (Lident "Hamlet", "t"); loc }
+               {
+                 txt =
+                   (if layer then
+                      Longident.Ldot
+                        (Longident.Ldot (Lident "Hamlet", "Layer"), "t")
+                    else Longident.Ldot (Lident "Hamlet", "t"));
+                 loc;
+               }
                [ Ast_builder.Default.ptyp_any ~loc; errors; requirements ]))
 
 let source_certificate marker (resolved : Hamlet_subtractor_engine.resolved) =
@@ -265,6 +274,7 @@ let strip_probe_attributes input =
 
 let structure ~catalogues ~outcomes ~resolved_values input =
   let layer_forwarding = Hashtbl.create (List.length outcomes) in
+  let layer_types = Hashtbl.create (List.length outcomes) in
   let forwarding_iterator =
     object
       inherit Ast_traverse.iter as super
@@ -273,6 +283,9 @@ let structure ~catalogues ~outcomes ~resolved_values input =
         List.iter
           (fun id -> Hashtbl.replace layer_forwarding id ())
           (attribute_ids layer_forwarding_attribute expression);
+        List.iter
+          (fun id -> Hashtbl.replace layer_types id ())
+          (attribute_ids layer_type_attribute expression);
         super#expression expression
     end
   in
@@ -340,7 +353,9 @@ let structure ~catalogues ~outcomes ~resolved_values input =
           raise (Replacement_error (Duplicate_upstream (Marker.id marker)));
         let loc = { expression.pexp_loc with loc_ghost = true } in
         begin match
-          materialize_certificate ~loc (source_certificate marker resolved)
+          materialize_certificate ~loc
+            ~layer:(Hashtbl.mem layer_types id)
+            (source_certificate marker resolved)
         with
         | Error leaf ->
             raise
@@ -425,7 +440,9 @@ let structure ~catalogues ~outcomes ~resolved_values input =
             | Some (marker, resolved) ->
                 let loc = { expression.pexp_loc with loc_ghost = true } in
                 begin match
-                  materialize_certificate ~loc resolved.certificate
+                  materialize_certificate ~loc
+                    ~layer:(Hashtbl.mem layer_types id)
+                    resolved.certificate
                 with
                 | Error leaf ->
                     raise

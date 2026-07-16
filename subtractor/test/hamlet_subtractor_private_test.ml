@@ -2102,6 +2102,37 @@ let caught =
     (Hamlet_subtractor_engine.catalogues byte
     = Hamlet_subtractor_engine.catalogues native)
 
+let test_fused_handler_peel_arity () =
+  with_typed_exact
+    {|
+let fused (_service : unit) = function
+  | `Logger -> 1
+  | `Clock -> 2
+|}
+  @@ fun structure ->
+  let found = ref None in
+  let iterator =
+    let default = Compiler_tast_iterator.default_iterator in
+    {
+      default with
+      value_binding =
+        (fun self binding ->
+          (match binding.vb_pat.pat_desc with
+          | Tpat_var (_, { txt = "fused"; _ }, _) ->
+              found := Some binding.vb_expr
+          | _ -> ());
+          default.value_binding self binding);
+    }
+  in
+  iterator.structure iterator structure;
+  let handler = Option.get !found in
+  Alcotest.(check bool)
+    "one fused leading parameter peels" true
+    (Option.is_some (Hamlet_subtractor_propagate.peel_outer handler 1));
+  Alcotest.(check bool)
+    "extra peel is rejected" true
+    (Option.is_none (Hamlet_subtractor_propagate.peel_outer handler 2))
+
 let () =
   Alcotest.run "hamlet elaboration private bridge"
     [
@@ -2138,6 +2169,8 @@ let () =
             test_layer_owner_descriptors;
           Alcotest.test_case "non-typed Layer callbacks are not owners" `Quick
             test_non_typed_layer_callbacks_are_not_owners;
+          Alcotest.test_case "fused handler peel checks arity" `Quick
+            test_fused_handler_peel_arity;
           Alcotest.test_case "nested owners keep distinct IDs" `Quick
             test_nested_owners_keep_distinct_ids;
           Alcotest.test_case "refused markers stay outside typed lookup" `Quick

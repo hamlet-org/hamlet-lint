@@ -1154,18 +1154,21 @@ let canonical_simple_producer expression =
   | Texp_apply
       (({ exp_desc = Texp_ident (path, _, description); _ } as callee), _) ->
       List.exists
-        (fun value_name ->
-          canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc
-            ~module_name:"Combinators" ~value_name path description)
+        (fun (module_name, value_name) ->
+          canonical_hamlet_value callee.exp_env ~loc:callee.exp_loc ~module_name
+            ~value_name path description)
         [
-          "success";
-          "return";
-          "fail";
-          "summon";
-          "defect";
-          "defect_with_bt";
-          "defect_die";
-          "thunk";
+          ("Combinators", "success");
+          ("Combinators", "return");
+          ("Combinators", "fail");
+          ("Combinators", "summon");
+          ("Combinators", "defect");
+          ("Combinators", "defect_with_bt");
+          ("Combinators", "defect_die");
+          ("Combinators", "thunk");
+          ("Layer", "make");
+          ("Layer", "merge_all");
+          ("Layer", "merge_all_with_key");
         ]
   | _ -> false
 
@@ -4565,11 +4568,114 @@ let symbolic_input_for_expression
   in
   (symbolic_certificate_of_source_plan dependencies plan, catalogues)
 
+let rec concrete_certificate_for_expression
+    ~context_digest
+    ~bindings
+    ~seen
+    expression =
+  let direct () =
+    let _, errors, error_catalogues =
+      certificate_for_input ~context_digest ~bindings ~kind:Kind.Error
+        expression
+    in
+    let _, requirements, requirement_catalogues =
+      certificate_for_input ~context_digest ~bindings ~kind:Kind.Requirement
+        expression
+    in
+    let certificate =
+      Effect_certificate.create
+        ~errors:(Effect_certificate.errors errors)
+        ~requirements:(Effect_certificate.requirements requirements)
+      |> function
+      | Ok certificate -> certificate
+      | Error _ ->
+          refuse (Core_validation_failed "invalid concrete effect certificate")
+    in
+    (certificate, error_catalogues @ requirement_catalogues)
+  in
+  let exact evidence =
+    match Effect_certificate.evidence_view evidence with
+    | Exact_proof _ -> true
+    | Opaque_reasons _ -> false
+  in
+  match intrinsic_certificate ~context_digest expression with
+  | Some result -> result
+  | None ->
+      begin match expression.exp_desc with
+      | Texp_apply (callee, arguments)
+        when Option.exists
+               (fun name ->
+                 String.equal name "make"
+                 || String.equal name "merge_all"
+                 || String.equal name "merge_all_with_key")
+               (canonical_layer_name callee) ->
+          begin match List.rev (positional_arguments arguments) with
+          | build :: _ ->
+              concrete_certificate_for_expression ~context_digest ~bindings
+                ~seen build
+          | [] -> refuse Higher_order_flow
+          end
+      | Texp_ident (path, _, description)
+        when not (List.exists (Shape.Uid.equal description.Types.val_uid) seen)
+        ->
+          let certificate, catalogues = direct () in
+          if
+            exact (Effect_certificate.errors certificate)
+            && exact (Effect_certificate.requirements certificate)
+          then (certificate, catalogues)
+          else
+            begin match
+              find_value_binding bindings path description.Types.val_uid
+            with
+            | Some rhs ->
+                concrete_certificate_for_expression ~context_digest ~bindings
+                  ~seen:(description.Types.val_uid :: seen)
+                  rhs
+            | None -> (certificate, catalogues)
+            end
+      | Texp_ifthenelse (_, if_true, Some if_false) ->
+          let certificates, catalogues =
+            [ if_true; if_false ]
+            |> List.map (fun branch ->
+                concrete_certificate_for_expression ~context_digest ~bindings
+                  ~seen branch)
+            |> List.split
+          in
+          let certificate =
+            Effect_certificate.chain ~inputs:[] certificates |> function
+            | Ok certificate -> certificate
+            | Error _ ->
+                refuse
+                  (Core_validation_failed
+                     "invalid conditional effect certificate")
+          in
+          (certificate, List.concat catalogues)
+      | Texp_match (_, cases, _, _) ->
+          let certificates, catalogues =
+            cases
+            |> List.map (fun (case : computation case) ->
+                concrete_certificate_for_expression ~context_digest ~bindings
+                  ~seen case.c_rhs)
+            |> List.split
+          in
+          let certificate =
+            Effect_certificate.chain ~inputs:[] certificates |> function
+            | Ok certificate -> certificate
+            | Error _ ->
+                refuse
+                  (Core_validation_failed "invalid match effect certificate")
+          in
+          (certificate, List.concat catalogues)
+      | _ -> direct ()
+      end
+
 let generic_recoveries ~context_digest ~bindings classified =
   classified
   |> List.filter (fun arm ->
       match arm.action with Residual.Handle -> true | Forward -> false)
-  |> List.map (recovery_certificate ~context_digest ~bindings)
+  |> List.map (fun classified ->
+      concrete_certificate_for_expression ~context_digest ~bindings ~seen:[]
+        classified.rhs)
   |> List.split
 
 let generic_recovery_expression kind recoveries =
@@ -4922,22 +5028,7 @@ let contract_for_call ~definitions callee =
   | _ -> refuse Fake_or_aliased_callee
 
 let exact_generic_call_input ~context_digest ~bindings source =
-  let _, error_certificate, error_catalogues =
-    certificate_for_input ~context_digest ~bindings ~kind:Kind.Error source
-  in
-  let _, requirement_certificate, requirement_catalogues =
-    certificate_for_input ~context_digest ~bindings ~kind:Kind.Requirement
-      source
-  in
-  let input =
-    Effect_certificate.create
-      ~errors:(Effect_certificate.errors error_certificate)
-      ~requirements:(Effect_certificate.requirements requirement_certificate)
-    |> function
-    | Ok input -> input
-    | Error _ -> refuse (Core_validation_failed "invalid generic caller input")
-  in
-  (input, error_catalogues @ requirement_catalogues)
+  concrete_certificate_for_expression ~context_digest ~bindings ~seen:[] source
 
 let validate_call_source_position _contract call source =
   match call.exp_desc with

@@ -1,6 +1,7 @@
 open Ppxlib
 module A = Ast_builder.Default
 module Contract = Hamlet_subtractor_generic_contract
+module Descriptor = Hamlet_subtractor_core.Owner_descriptor
 
 let generic_attribute = "hamlet.generic"
 let marker_attribute = "hamlet.subtractor.marker.v1"
@@ -175,7 +176,7 @@ let markers_in_expression expression =
 let simple_name pattern =
   match pattern.ppat_desc with Ppat_var { txt; _ } -> Some txt | _ -> None
 
-let combinator_name expression =
+let primitive_name expression =
   match expression.pexp_desc with
   | Pexp_ident
       {
@@ -184,8 +185,22 @@ let combinator_name expression =
           | Ldot (Ldot (Lident "Hamlet", "Combinators"), name) );
         _;
       } ->
-      Some name
+      Some (Descriptor.Combinators, name)
+  | Pexp_ident
+      {
+        txt =
+          ( Longident.Ldot (Lident "Layer", name)
+          | Ldot (Ldot (Lident "Hamlet", "Layer"), name) );
+        _;
+      } ->
+      Some (Descriptor.Layer, name)
   | _ -> None
+
+let combinator_name expression = Option.map snd (primitive_name expression)
+
+let owner_descriptor expression =
+  Option.bind (primitive_name expression) (fun (module_name, value_name) ->
+      Descriptor.find ~module_name ~value_name)
 
 let is_pipe expression =
   match expression.pexp_desc with
@@ -196,23 +211,29 @@ type owner_kind = Error_owner | Requirement_owner
 
 type candidate = {
   kind : owner_kind;
+  descriptor : Descriptor.t;
   form : Contract.owner_form;
   upstream : expression;
   handler : expression;
 }
 
-let owner_kind = function
-  | "catch" -> Some Error_owner
-  | "provide" -> Some Requirement_owner
-  | _ -> None
+let owner_kind descriptor =
+  match descriptor.Descriptor.channel with
+  | Descriptor.Error -> Error_owner
+  | Descriptor.Requirement -> Requirement_owner
 
 let direct_candidate callee arguments =
-  match Option.bind (combinator_name callee) owner_kind with
+  match owner_descriptor callee with
   | None -> None
-  | Some kind ->
+  | Some descriptor ->
+      let kind = owner_kind descriptor in
       let handlers =
         List.filter_map
-          (function Labelled "handler", value -> Some value | _ -> None)
+          (function
+            | Labelled actual, value
+              when String.equal actual descriptor.handler_label ->
+                Some value
+            | _ -> None)
           arguments
       in
       let upstreams =
@@ -222,7 +243,7 @@ let direct_candidate callee arguments =
       in
       begin match (handlers, upstreams) with
       | [ handler ], [ upstream ] ->
-          Some { kind; form = Contract.Direct; upstream; handler }
+          Some { kind; descriptor; form = Contract.Direct; upstream; handler }
       | _ -> None
       end
 
@@ -232,13 +253,17 @@ let candidate expression =
     -> (
       match right.pexp_desc with
       | Pexp_apply (callee, arguments) -> (
-          match Option.bind (combinator_name callee) owner_kind with
+          match owner_descriptor callee with
           | None -> None
-          | Some kind ->
+          | Some descriptor ->
+              let kind = owner_kind descriptor in
               let handlers =
                 List.filter_map
                   (function
-                    | Labelled "handler", value -> Some value | _ -> None)
+                    | Labelled actual, value
+                      when String.equal actual descriptor.handler_label ->
+                        Some value
+                    | _ -> None)
                   arguments
               in
               let upstreams =
@@ -248,7 +273,14 @@ let candidate expression =
               in
               begin match (handlers, upstreams) with
               | [ handler ], [] ->
-                  Some { kind; form = Contract.Pipe; upstream = left; handler }
+                  Some
+                    {
+                      kind;
+                      descriptor;
+                      form = Contract.Pipe;
+                      upstream = left;
+                      handler;
+                    }
               | _ -> None
               end)
       | _ -> None)
@@ -404,6 +436,7 @@ type owner = {
   marker_id : string;
   marker_loc : Location.t;
   kind : owner_kind;
+  descriptor : Descriptor.t;
   form : Contract.owner_form;
   upstream : expression;
   preceding : case list;
@@ -458,6 +491,7 @@ let collect_owners expression =
                         marker_id;
                         marker_loc = marker.pc_lhs.ppat_loc;
                         kind = candidate.kind;
+                        descriptor = candidate.descriptor;
                         form = candidate.form;
                         upstream = candidate.upstream;
                         preceding;
@@ -499,6 +533,9 @@ let row_preserving_combinator = function
   | "catch_cause_filter" | "or_die" | "thaw" | "sandbox" | "scoped"
   | "scoped_with" | "suspend" | "ensuring" | "add_finalizer"
   | "add_finalizer_exit" | "acquire_release" | "acquire_use_release" | "both" ->
+      true
+  | "make" | "provide_to_effect" | "provide_to_layer" | "merge_all"
+  | "merge_all_with_key" | "provide_merge_to_layer" | "fresh" | "unwrap" ->
       true
   | _ -> false
 
@@ -656,13 +693,22 @@ let evidence_parameter ~loc helper owners =
   | [ pattern ] -> pattern
   | _ -> A.ppat_tuple ~loc patterns
 
-let forward_expression ~loc = function
-  | Error_owner ->
+let primary_binding_name marker_id =
+  "_hamlet_subtractor_layer_primary_" ^ Digest.to_hex (Digest.string marker_id)
+
+let forward_expression ~loc ~descriptor ~marker_id =
+  match descriptor.Descriptor.forwarding with
+  | Descriptor.Effect_fail ->
       A.pexp_ident ~loc
         { txt = Ldot (Ldot (Lident "Hamlet", "Combinators"), "fail"); loc }
-  | Requirement_owner ->
+  | Descriptor.Dispatch_need ->
       A.pexp_ident ~loc
         { txt = Ldot (Ldot (Lident "Hamlet", "Dispatch"), "need"); loc }
+  | Descriptor.Layer_fail_like ->
+      A.pexp_apply ~loc
+        (A.pexp_ident ~loc
+           { txt = Ldot (Ldot (Lident "Hamlet", "Layer"), "fail_like"); loc })
+        [ (Nolabel, A.evar ~loc (primary_binding_name marker_id)) ]
 
 let slot_dispatch ~loc slot =
   A.pexp_field ~loc (A.evar ~loc slot)
@@ -697,9 +743,9 @@ let handled_callback ~loc ~forward_name cases =
   in
   A.pexp_function ~loc [] None (Pfunction_cases (cases, loc, []))
 
-let dispatch_expression ~loc ~marker_id ~slot ~kind input cases =
+let dispatch_expression ~loc ~marker_id ~slot ~descriptor input cases =
   let forward_name = "_hamlet_subtractor_forward" in
-  let forward = forward_expression ~loc kind in
+  let forward = forward_expression ~loc ~descriptor ~marker_id in
   let handled = handled_callback ~loc ~forward_name cases in
   let dispatch =
     A.pexp_apply ~loc (slot_dispatch ~loc slot)
@@ -717,7 +763,7 @@ let dispatch_expression ~loc ~marker_id ~slot ~kind input cases =
   in
   A.pexp_let ~loc Nonrecursive [ binding ] dispatch
 
-let rewrite_handler ~marker_id ~slot ~kind handler =
+let rewrite_handler ~marker_id ~slot ~descriptor handler =
   let rewritten = ref false in
   let mapper =
     object
@@ -745,8 +791,8 @@ let rewrite_handler ~marker_id ~slot ~kind handler =
                         ( parameters @ [ parameter ],
                           constraint_,
                           Pfunction_body
-                            (dispatch_expression ~loc ~marker_id ~slot ~kind
-                               (A.evar ~loc argument) preceding) );
+                            (dispatch_expression ~loc ~marker_id ~slot
+                               ~descriptor (A.evar ~loc argument) preceding) );
                   }
               | Some (_, marker, _ :: _) ->
                   refuse ~loc:marker.pc_lhs.ppat_loc Unsupported_handler
@@ -757,7 +803,7 @@ let rewrite_handler ~marker_id ~slot ~kind handler =
               | Some (preceding, _, []) ->
                   rewritten := true;
                   dispatch_expression ~loc:expression.pexp_loc ~marker_id ~slot
-                    ~kind (super#expression input) preceding
+                    ~descriptor (super#expression input) preceding
               | Some (_, marker, _ :: _) ->
                   refuse ~loc:marker.pc_lhs.ppat_loc Unsupported_handler
               | None -> super#expression expression
@@ -769,35 +815,29 @@ let rewrite_handler ~marker_id ~slot ~kind handler =
   if not !rewritten then refuse ~loc:handler.pexp_loc Unsupported_handler;
   handler
 
-let replace_handler_argument marker_id slot kind arguments =
+let replace_handler_argument marker_id slot descriptor arguments =
   List.map
     (fun (label, expression) ->
       match label with
-      | Labelled "handler" ->
+      | Labelled actual
+        when String.equal actual descriptor.Descriptor.handler_label ->
           ( label,
-            rewrite_handler ~marker_id ~slot ~kind expression
+            rewrite_handler ~marker_id ~slot ~descriptor expression
             |> mark_expression ~name:handler_attribute ~value:marker_id )
-      | Nolabel | Labelled _ | Optional _ -> (label, expression))
-    arguments
-
-let mark_direct_upstream marker_id arguments =
-  let marked = ref false in
-  List.map
-    (fun (label, expression) ->
-      match (label, !marked) with
-      | Nolabel, false ->
-          marked := true;
+      | Labelled actual
+        when Option.equal String.equal descriptor.required_label (Some actual)
+        ->
           ( label,
-            mark_expression ~name:upstream_attribute ~value:marker_id expression
-          )
-      | (Nolabel | Labelled _ | Optional _), _ -> (label, expression))
+            mark_expression ~name:Hamlet_subtractor_probe.contributor_attribute
+              ~value:marker_id expression )
+      | Nolabel | Labelled _ | Optional _ -> (label, expression))
     arguments
 
 let rewrite_markers helper owners expression =
   let slots = Hashtbl.create (List.length owners) in
   List.iteri
     (fun ordinal owner ->
-      Hashtbl.add slots owner.marker_id (slot_name helper ordinal, owner.kind))
+      Hashtbl.add slots owner.marker_id (slot_name helper ordinal, owner))
     owners;
   let mapper =
     object
@@ -812,7 +852,8 @@ let rewrite_markers helper owners expression =
             | [ marker_id ] ->
                 begin match Hashtbl.find_opt slots marker_id with
                 | None -> expression
-                | Some (slot, kind) ->
+                | Some (slot, owner) ->
+                    let descriptor = owner.descriptor in
                     let replace right =
                       match right.pexp_desc with
                       | Pexp_apply (callee, arguments) ->
@@ -825,47 +866,103 @@ let rewrite_markers helper owners expression =
                             pexp_desc =
                               Pexp_apply
                                 ( callee,
-                                  replace_handler_argument marker_id slot kind
-                                    arguments );
+                                  replace_handler_argument marker_id slot
+                                    descriptor arguments );
                           }
                       | _ -> right
                     in
                     begin match expression.pexp_desc with
                     | Pexp_apply (pipe, [ (Nolabel, left); (Nolabel, right) ])
                       when is_pipe pipe ->
-                        let expression =
+                        let left =
+                          mark_expression ~name:upstream_attribute
+                            ~value:marker_id left
+                        in
+                        let left, binding =
+                          if descriptor.bind_upstream_once then
+                            let name = primary_binding_name marker_id in
+                            ( A.evar ~loc:left.pexp_loc name,
+                              Some
+                                (A.value_binding ~loc:left.pexp_loc
+                                   ~pat:
+                                     (A.ppat_var ~loc:left.pexp_loc
+                                        { txt = name; loc = left.pexp_loc })
+                                   ~expr:left) )
+                          else (left, None)
+                        in
+                        let rewritten =
                           {
                             expression with
                             pexp_desc =
                               Pexp_apply
                                 ( pipe,
-                                  [
-                                    ( Nolabel,
-                                      mark_expression ~name:upstream_attribute
-                                        ~value:marker_id left );
-                                    (Nolabel, replace right);
-                                  ] );
+                                  [ (Nolabel, left); (Nolabel, replace right) ]
+                                );
                           }
                         in
+                        let rewritten =
+                          match binding with
+                          | Some binding ->
+                              A.pexp_let ~loc:expression.pexp_loc Nonrecursive
+                                [ binding ] rewritten
+                          | None -> rewritten
+                        in
                         mark_expression ~name:owner_attribute ~value:marker_id
-                          expression
+                          rewritten
                     | Pexp_apply (callee, arguments) ->
                         let callee =
                           mark_expression ~name:callee_attribute
                             ~value:marker_id callee
                         in
                         let arguments =
-                          replace_handler_argument marker_id slot kind arguments
-                          |> mark_direct_upstream marker_id
+                          replace_handler_argument marker_id slot descriptor
+                            arguments
                         in
-                        let expression =
+                        let binding = ref None in
+                        let marked = ref false in
+                        let arguments =
+                          List.map
+                            (fun (label, argument) ->
+                              match (label, !marked) with
+                              | Nolabel, false ->
+                                  marked := true;
+                                  let argument =
+                                    mark_expression ~name:upstream_attribute
+                                      ~value:marker_id argument
+                                  in
+                                  if descriptor.bind_upstream_once then (
+                                    let name = primary_binding_name marker_id in
+                                    binding :=
+                                      Some
+                                        (A.value_binding ~loc:argument.pexp_loc
+                                           ~pat:
+                                             (A.ppat_var ~loc:argument.pexp_loc
+                                                {
+                                                  txt = name;
+                                                  loc = argument.pexp_loc;
+                                                })
+                                           ~expr:argument);
+                                    (label, A.evar ~loc:argument.pexp_loc name))
+                                  else (label, argument)
+                              | (Nolabel | Labelled _ | Optional _), _ ->
+                                  (label, argument))
+                            arguments
+                        in
+                        let rewritten =
                           {
                             expression with
                             pexp_desc = Pexp_apply (callee, arguments);
                           }
                         in
+                        let rewritten =
+                          match !binding with
+                          | Some binding ->
+                              A.pexp_let ~loc:expression.pexp_loc Nonrecursive
+                                [ binding ] rewritten
+                          | None -> rewritten
+                        in
                         mark_expression ~name:owner_attribute ~value:marker_id
-                          expression
+                          rewritten
                     | _ -> expression
                     end
                 end

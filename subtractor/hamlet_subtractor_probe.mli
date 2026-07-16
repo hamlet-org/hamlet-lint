@@ -2,6 +2,7 @@ type propagation_kind = Error_propagation | Requirement_propagation
 
 val generic_output_link_attribute : string
 val layer_forwarding_attribute : string
+val layer_type_attribute : string
 val contributor_attribute : string
 
 type marker = {

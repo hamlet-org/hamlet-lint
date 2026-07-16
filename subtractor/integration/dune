@@ -28,6 +28,21 @@
   (staged_pps hamlet-subtractor.ppx)))
 
 (library
+ (name hamlet_subtractor_layer_fixture)
+ (wrapped false)
+ (modules hamlet_subtractor_layer_fixture)
+ (libraries hamlet hamlet_subtractor_cross_cu_fixture)
+ (preprocessor_deps
+  (package hamlet-subtractor))
+ (preprocess
+  (staged_pps hamlet-subtractor.ppx)))
+
+(test
+ (name hamlet_subtractor_layer_runtime_test)
+ (modules hamlet_subtractor_layer_runtime_test)
+ (libraries hamlet hamlet_subtractor_layer_fixture))
+
+(library
  (name hamlet_subtractor_nested_inner_fixture)
  (wrapped false)
  (modules hamlet_subtractor_nested_inner_fixture)
@@ -71,6 +86,7 @@
  (name runtest)
  (deps
   hamlet_subtractor_generic_definition_fixture.cma
+  hamlet_subtractor_layer_fixture.cma
   hamlet_subtractor_generic_helper_consumer.cma
   hamlet_subtractor_nested_outer_fixture.cma
   hamlet_subtractor_integration_fixture.cma))

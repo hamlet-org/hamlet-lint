@@ -304,7 +304,11 @@ let cases ~loc ~catalogues ?(forwarding = Default) residual =
   match residual_leaves with
   | [] -> Ok [ refutation_case ~loc; exhausted_case ~loc ]
   | _ -> (
-      match full_case_catalogues ~catalogues residual with
+      match
+        match forwarding with
+        | Default -> full_case_catalogues ~catalogues residual
+        | Layer_fail_like _ -> Ok []
+      with
       | Error _ as error -> error
       | Ok full_catalogues ->
           let generated_cases =

@@ -160,7 +160,7 @@ let test_layer_fail_like_generation () =
     "two catalogue fail_like callbacks" 2
     (count_occurrences catalogue_cases "Hamlet.Layer.fail_like primary_once");
   Alcotest.(check int)
-    "one catalogue dispatch" 1
+    "Layer avoids effect-only catalogue dispatch" 0
     (count_occurrences catalogue_cases "Cases.dispatch")
 
 let test_position offset =
