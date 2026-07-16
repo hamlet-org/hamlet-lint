@@ -211,8 +211,10 @@ boundary.
 
 ## Explicit fallback
 
-When the row is intentionally abstract, annotate the **handler parameter**
-with Hamlet's closed error universe and use the ordinary Hamlet marker:
+Use this form when automatic propagation cannot prove the source row, but you
+want to state a fixed, closed error universe yourself. The computation may be
+an opaque API value or a function parameter; the annotation constrains it to
+the listed errors rather than making it generic:
 
 ```ocaml
 module Errors = struct
@@ -231,6 +233,11 @@ Hamlet.Combinators.catch computation ~handler:(fun
 error-row type. Subtractor recognizes that closed type as an explicit boundary.
 The requirement equivalent annotates the `provide` handler parameter with
 `[%hamlet.ts ...]` and uses `[%hamlet.propagate_s]`.
+
+This is different from `let[@hamlet.generic]`: a generic helper leaves its
+input row to the caller and receives generated evidence for that row. An
+explicit `[%hamlet.te ...]` annotation fixes the row to the errors named in the
+annotation.
 
 ## Cross-module generated errors
 
