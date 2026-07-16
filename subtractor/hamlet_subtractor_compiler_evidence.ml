@@ -2787,33 +2787,36 @@ let rec source_plan_for_expression
                           | Some rhs ->
                               if List.exists (Shape.Uid.equal uid) seen then
                                 refuse Higher_order_flow;
-                              begin try
+                              let recognized_layer_rhs =
+                                match rhs.exp_desc with
+                                | Texp_apply (callee, _) ->
+                                    let callee =
+                                      match
+                                        Hamlet_subtractor_upstream.unstage_apply
+                                          rhs
+                                      with
+                                      | Some (callee, _) -> callee
+                                      | None -> callee
+                                    in
+                                    Option.is_some (canonical_layer_name callee)
+                                | _ -> false
+                              in
+                              let follows_rhs =
+                                dependencies <> []
+                                || Option.is_some generic_input
+                                || Option.is_some (generic_call_output rhs)
+                                || recognized_layer_rhs
+                              in
+                              if not follows_rhs then known_source ()
+                              else begin
+                                (try ignore (known_source ()) with
+                                | Refuse (Abstract_or_hidden_alias _ as reason)
+                                  ->
+                                    refuse reason
+                                | Refuse _ -> ());
                                 source_plan_for_expression ~context_digest
                                   ~nodes ~marker_id ~kind ~generic_input
                                   ~seen:(uid :: seen) rhs
-                              with Refuse _ as refusal ->
-                                let recognized_layer_rhs =
-                                  match rhs.exp_desc with
-                                  | Texp_apply (callee, _) ->
-                                      let callee =
-                                        match
-                                          Hamlet_subtractor_upstream
-                                          .unstage_apply rhs
-                                        with
-                                        | Some (callee, _) -> callee
-                                        | None -> callee
-                                      in
-                                      Option.is_some
-                                        (canonical_layer_name callee)
-                                  | _ -> false
-                                in
-                                if
-                                  dependencies <> []
-                                  || Option.is_some generic_input
-                                  || Option.is_some (generic_call_output rhs)
-                                  || recognized_layer_rhs
-                                then raise refusal
-                                else known_source ()
                               end
                           | None -> known_source ()
                           end
