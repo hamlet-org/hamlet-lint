@@ -191,9 +191,7 @@ Hamlet.Combinators.catch source ~handler:(function
 Any exact requirements of `audit_recovery ()` are added to the output
 requirement channel.
 
-## Two catches in sequence
-
-Two markers are sufficient; there is no “three or more” rule.
+## Catches in sequence
 
 ```ocaml
 source
@@ -205,7 +203,7 @@ source
      | [%hamlet.propagate_e.auto] -> .)
 ```
 
-The second marker receives the first marker's exact output.
+Each later marker receives the exact output of its direct predecessor.
 
 ## Catch and provide in either order
 
@@ -225,7 +223,7 @@ Reversing those two calls is also supported when the resulting types are valid.
 Each marker changes only its own channel and incorporates effects introduced by
 its handler.
 
-## `chain`, `let*`, `and*`, `both`, and `map`
+## `chain`, `let*`, `let+`, `and*`, `both`, and `map`
 
 Composition can occur between markers:
 
@@ -236,8 +234,10 @@ let* second = next first in
 return (first, second)
 ```
 
-The same flow may be written with `chain`. `and*` and `both` combine the effects
-of both inputs. `map` preserves the effect rows of its input.
+The same flow may be written with `chain`. `let+` is Hamlet's mapping syntax:
+`ppx_hamlet` rewrites it to `map` before Subtractor analyses the expression.
+`and*` and `both` combine the effects of both inputs. `map` preserves the
+effect rows of its input.
 
 ## Catch filters
 

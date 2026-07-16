@@ -302,8 +302,8 @@ let combined = choose left right
 ```
 
 Fix: use a supported direct composition such as `both`, or introduce one exact
-boundary for `combined`. Linear sequences with one, two, or many dependent
-markers are supported; the refusal is about ambiguity, not length.
+boundary for `combined`. A direct linear marker flow is supported; this refusal
+is about ambiguity, not its length.
 
 ## Invalid generic-helper definition
 

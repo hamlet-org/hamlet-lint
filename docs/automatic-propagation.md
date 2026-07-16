@@ -63,9 +63,8 @@ explicitly forwards a matched requirement.
 
 ## Several markers and intervening operations
 
-There is no minimum chain length. One marker works; two markers work; longer
-linear sequences work. `catch` and `provide` may alternate, and supported
-Hamlet combinators may appear between them.
+Markers may occur in one direct linear flow. `catch` and `provide` may
+alternate, and supported Hamlet combinators may appear between them.
 
 ```ocaml
 source
@@ -86,7 +85,7 @@ For each marker it starts from the proven output of its predecessors and also
 accounts for effects introduced by intervening operations. Supported families
 include:
 
-- `chain`, `let*`, `and*`, `both`, `map`, and `suspend`;
+- `chain`, `let*`, `let+`, `and*`, `both`, `map`, and `suspend`;
 - `catch`, `catch_cause`, `catch_filter`, and `catch_cause_filter`;
 - `map_fail`, `catch_defect`, `tap`, `tap_fail`, `tap_defect`, and `tap_cause`;
 - `provide`, `scoped_with`, `scoped`, `or_die`, `thaw`, and `sandbox`;
